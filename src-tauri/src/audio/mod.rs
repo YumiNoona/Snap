@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -92,7 +92,8 @@ pub async fn start_audio_capture(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let is_rec_clone = is_recording.clone();
 
-    tokio::task::spawn_blocking(move || {
+    // Use std::thread::spawn for a fresh thread with no prior COM initialization.
+    thread::spawn(move || {
         let result = run_audio_threads(&mic_device_id, &output_dir, is_rec_clone);
         let _ = done_tx.send(result);
     });
@@ -197,45 +198,62 @@ fn run_audio_threads(
     Ok(())
 }
 
-// ── WAV writer ───────────────────────────────────────────────────────────────
+// ── WAV helpers ──────────────────────────────────────────────────────────────
 
 const SAMPLE_RATE: usize = 44100;
 const SYS_CHANNELS: u16 = 2;
 const MIC_CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
 
-fn write_wav(
-    path: &std::path::Path,
-    samples: &[u8],
+/// Write a WAV header with the given data_size. If data_size is 0 (used as a
+/// placeholder during streaming), the header will be updated later via
+/// `finalize_wav_header`.
+fn write_wav_header(
+    writer: &mut impl Write,
     channels: u16,
+    data_size: u32,
 ) -> std::result::Result<(), std::io::Error> {
-    let data_size = samples.len() as u32;
     let sample_rate = SAMPLE_RATE as u32;
     let byte_rate = sample_rate * channels as u32 * (BITS_PER_SAMPLE / 8) as u32;
     let block_align = channels * (BITS_PER_SAMPLE / 8);
 
-    let mut f = std::fs::File::create(path)?;
+    // RIFF header
+    writer.write_all(b"RIFF")?;
+    writer.write_all(&(36u32 + data_size).to_le_bytes())?;
+    writer.write_all(b"WAVE")?;
 
-    // RIFF header: 4 bytes "RIFF" + 4 bytes file size (36 + data_size) + 4 bytes "WAVE"
-    f.write_all(b"RIFF")?;
-    f.write_all(&(36u32 + data_size).to_le_bytes())?;
-    f.write_all(b"WAVE")?;
+    // fmt chunk
+    writer.write_all(b"fmt ")?;
+    writer.write_all(&16u32.to_le_bytes())?;       // chunk size
+    writer.write_all(&1u16.to_le_bytes())?;         // PCM = 1
+    writer.write_all(&channels.to_le_bytes())?;
+    writer.write_all(&sample_rate.to_le_bytes())?;
+    writer.write_all(&byte_rate.to_le_bytes())?;
+    writer.write_all(&block_align.to_le_bytes())?;
+    writer.write_all(&BITS_PER_SAMPLE.to_le_bytes())?;
 
-    // fmt  chunk: 4 bytes "fmt " + 4 bytes chunk size (16) + 16 bytes format data
-    f.write_all(b"fmt ")?;
-    f.write_all(&16u32.to_le_bytes())?;       // chunk size
-    f.write_all(&1u16.to_le_bytes())?;         // PCM = 1
-    f.write_all(&channels.to_le_bytes())?;      // channels (u16 LE)
-    f.write_all(&sample_rate.to_le_bytes())?;   // sample rate (u32 LE)
-    f.write_all(&byte_rate.to_le_bytes())?;     // byte rate (u32 LE)
-    f.write_all(&block_align.to_le_bytes())?;   // block align (u16 LE)
-    f.write_all(&BITS_PER_SAMPLE.to_le_bytes())?; // bits per sample (u16 LE)
+    // data chunk header (actual samples follow)
+    writer.write_all(b"data")?;
+    writer.write_all(&data_size.to_le_bytes())?;
 
-    // data chunk: 4 bytes "data" + 4 bytes data size + PCM samples
-    f.write_all(b"data")?;
-    f.write_all(&data_size.to_le_bytes())?;
-    f.write_all(samples)?;
+    Ok(())
+}
 
+/// Seek back to the WAV header and update the file-size and data-size fields
+/// with the actual number of bytes written.
+fn finalize_wav_header(
+    file: &mut std::fs::File,
+    data_size: u32,
+) -> std::result::Result<(), std::io::Error> {
+    // Byte 4: RIFF chunk size = 36 + data_size
+    file.seek(SeekFrom::Start(4))?;
+    file.write_all(&(36u32 + data_size).to_le_bytes())?;
+
+    // Byte 40: data chunk size
+    file.seek(SeekFrom::Start(40))?;
+    file.write_all(&data_size.to_le_bytes())?;
+
+    file.flush()?;
     Ok(())
 }
 
@@ -314,7 +332,16 @@ fn capture_loopback(
     let mut sample_queue: VecDeque<u8> = VecDeque::with_capacity(
         100 * blockalign as usize * (1024 + 2 * buffer_frame_count as usize),
     );
-    let mut all_samples: Vec<u8> = Vec::new();
+
+    // Stream audio directly to disk instead of accumulating in memory.
+    // Write a WAV header with placeholder size, then stream samples, then
+    // seek back and finalize the header with the actual data size.
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Create loopback WAV: {e}"))?;
+    write_wav_header(&mut file, SYS_CHANNELS, 0)
+        .map_err(|e| format!("Write loopback WAV header: {e}"))?;
+
+    let mut total_data_bytes: u64 = 0;
     let mut batch_count: u64 = 0;
 
     eprintln!("[Snap Audio] Loopback stream started, capturing...");
@@ -324,18 +351,18 @@ fn capture_loopback(
             .read_from_device_to_deque(&mut sample_queue)
             .map_err(|e| format!("Loopback read: {e}"))?;
 
-        // Drain queue into buffer
+        // Drain queue directly to disk
         while sample_queue.len() > blockalign as usize * 512 {
-            for _ in 0..(blockalign as usize * 512) {
-                if let Some(b) = sample_queue.pop_front() {
-                    all_samples.push(b);
-                }
-            }
+            let chunk_size = blockalign as usize * 512;
+            let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
+            file.write_all(&chunk)
+                .map_err(|e| format!("Write loopback chunk: {e}"))?;
+            total_data_bytes += chunk_size as u64;
             batch_count += 1;
             if batch_count % 50 == 0 {
                 eprintln!(
                     "[Snap Audio] loopback frame batch {batch_count} captured ({:.1} KB)",
-                    all_samples.len() as f64 / 1024.0
+                    total_data_bytes as f64 / 1024.0
                 );
             }
         }
@@ -350,13 +377,28 @@ fn capture_loopback(
         .stop_stream()
         .map_err(|e| format!("Stop loopback: {e}"))?;
 
-    eprintln!(
-        "[Snap Audio] Loopback stopped — writing {} bytes to WAV",
-        all_samples.len()
-    );
-    write_wav(&output_path, &all_samples, SYS_CHANNELS)
-        .map_err(|e| format!("Write loopback WAV: {e}"))?;
+    // Flush any remaining samples in the queue
+    if !sample_queue.is_empty() {
+        let remaining: Vec<u8> = sample_queue.drain(..).collect();
+        total_data_bytes += remaining.len() as u64;
+        file.write_all(&remaining)
+            .map_err(|e| format!("Write loopback remaining: {e}"))?;
+    }
 
+    // Cap at u32::MAX for WAV format (handles recordings up to ~49 hours stereo 16-bit 44.1kHz)
+    let data_size_u32 = if total_data_bytes > u32::MAX as u64 {
+        eprintln!("[Snap Audio] WARNING: loopback data exceeds WAV 4GB limit, truncating header");
+        u32::MAX
+    } else {
+        total_data_bytes as u32
+    };
+
+    finalize_wav_header(&mut file, data_size_u32)
+        .map_err(|e| format!("Finalize loopback WAV header: {e}"))?;
+
+    eprintln!(
+        "[Snap Audio] Loopback stopped — {total_data_bytes} bytes streamed to WAV"
+    );
     eprintln!("[Snap Audio] Loopback WAV written OK");
     Ok(())
 }
@@ -364,13 +406,10 @@ fn capture_loopback(
 // ── Microphone capture ───────────────────────────────────────────────────────
 
 fn capture_microphone(
-    _mic_device_id: &str,
+    mic_device_id: &str,
     output_path: std::path::PathBuf,
     is_recording: Arc<AtomicBool>,
 ) -> std::result::Result<(), String> {
-    // A dedicated microphone device. Using Role::Communications (e.g. headset mic)
-    // avoids accidentally picking up "Stereo Mix" or other virtual loopback devices
-    // that sometimes masquerade as the default Capture endpoint.
     initialize_mta()
         .ok()
         .map_err(|e| format!("COM init: {e:?}"))?;
@@ -378,15 +417,35 @@ fn capture_microphone(
     let enumerator =
         DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
 
-    let device = enumerator
-        .get_default_device_for_role(&Direction::Capture, &Role::Communications)
-        .map_err(|e| format!("Get default capture device (Communications): {e}"))?;
+    // Select the mic device based on the provided ID.
+    // "default" or "" → default Communications capture device
+    // "mic:{index}"   → specific capture device by enumeration index
+    let device = if mic_device_id == "default" || mic_device_id.is_empty() {
+        enumerator
+            .get_default_device_for_role(&Direction::Capture, &Role::Communications)
+            .map_err(|e| format!("Get default capture device (Communications): {e}"))?
+    } else if let Some(idx_str) = mic_device_id.strip_prefix("mic:") {
+        let idx: usize = idx_str
+            .parse()
+            .map_err(|_| format!("Invalid mic device index: {idx_str}"))?;
+        let coll = enumerator
+            .get_device_collection(&Direction::Capture)
+            .map_err(|e| format!("Get capture device collection: {e}"))?;
+        (&coll)
+            .into_iter()
+            .enumerate()
+            .find(|(i, _)| *i == idx)
+            .and_then(|(_, d)| d.ok())
+            .ok_or_else(|| format!("Mic device at index {idx} not found"))?
+    } else {
+        return Err(format!("Unknown mic device ID format: {mic_device_id}"));
+    };
 
     let dev_name = device
         .get_friendlyname()
         .unwrap_or_else(|_| "unknown".to_string());
     eprintln!(
-        "[Snap Audio] Mic device: \"{dev_name}\" (Direction::Capture, Role::Communications)"
+        "[Snap Audio] Mic device: \"{dev_name}\" (id={mic_device_id})"
     );
 
     let mut audio_client = device
@@ -437,7 +496,14 @@ fn capture_microphone(
     let mut sample_queue: VecDeque<u8> = VecDeque::with_capacity(
         100 * blockalign as usize * (1024 + 2 * buffer_frame_count as usize),
     );
-    let mut all_samples: Vec<u8> = Vec::new();
+
+    // Stream mic audio directly to disk (same pattern as loopback).
+    let mut file = std::fs::File::create(&output_path)
+        .map_err(|e| format!("Create mic WAV: {e}"))?;
+    write_wav_header(&mut file, MIC_CHANNELS, 0)
+        .map_err(|e| format!("Write mic WAV header: {e}"))?;
+
+    let mut total_data_bytes: u64 = 0;
     let mut batch_count: u64 = 0;
 
     eprintln!("[Snap Audio] Mic stream started, capturing...");
@@ -448,16 +514,16 @@ fn capture_microphone(
             .map_err(|e| format!("Mic read: {e}"))?;
 
         while sample_queue.len() > blockalign as usize * 512 {
-            for _ in 0..(blockalign as usize * 512) {
-                if let Some(b) = sample_queue.pop_front() {
-                    all_samples.push(b);
-                }
-            }
+            let chunk_size = blockalign as usize * 512;
+            let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
+            file.write_all(&chunk)
+                .map_err(|e| format!("Write mic chunk: {e}"))?;
+            total_data_bytes += chunk_size as u64;
             batch_count += 1;
             if batch_count % 50 == 0 {
                 eprintln!(
                     "[Snap Audio] mic frame batch {batch_count} captured ({:.1} KB)",
-                    all_samples.len() as f64 / 1024.0
+                    total_data_bytes as f64 / 1024.0
                 );
             }
         }
@@ -471,13 +537,27 @@ fn capture_microphone(
         .stop_stream()
         .map_err(|e| format!("Stop mic: {e}"))?;
 
-    eprintln!(
-        "[Snap Audio] Mic stopped — writing {} bytes to WAV",
-        all_samples.len()
-    );
-    write_wav(&output_path, &all_samples, MIC_CHANNELS)
-        .map_err(|e| format!("Write mic WAV: {e}"))?;
+    // Flush remaining samples
+    if !sample_queue.is_empty() {
+        let remaining: Vec<u8> = sample_queue.drain(..).collect();
+        total_data_bytes += remaining.len() as u64;
+        file.write_all(&remaining)
+            .map_err(|e| format!("Write mic remaining: {e}"))?;
+    }
 
+    let data_size_u32 = if total_data_bytes > u32::MAX as u64 {
+        eprintln!("[Snap Audio] WARNING: mic data exceeds WAV 4GB limit, truncating header");
+        u32::MAX
+    } else {
+        total_data_bytes as u32
+    };
+
+    finalize_wav_header(&mut file, data_size_u32)
+        .map_err(|e| format!("Finalize mic WAV header: {e}"))?;
+
+    eprintln!(
+        "[Snap Audio] Mic stopped — {total_data_bytes} bytes streamed to WAV"
+    );
     eprintln!("[Snap Audio] Mic WAV written OK");
     Ok(())
 }

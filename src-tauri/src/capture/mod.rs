@@ -165,7 +165,9 @@ pub async fn start_recording(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let is_rec_clone = is_recording.clone();
 
-    tokio::task::spawn_blocking(move || {
+    // Use std::thread::spawn instead of tokio::task::spawn_blocking to guarantee
+    // a fresh thread with no prior COM initialization (avoids RPC_E_CHANGED_MODE).
+    thread::spawn(move || {
         let result = run_capture_thread(&target_id, &output_path, is_rec_clone);
         let _ = done_tx.send(result);
     });
@@ -197,7 +199,7 @@ pub async fn stop_recording() -> std::result::Result<(), String> {
     }
 }
 
-// ── Capture thread (runs on a dedicated OS thread via spawn_blocking) ────────
+// ── Capture thread (runs on a dedicated OS thread via thread::spawn) ─────────
 
 fn run_capture_thread(
     target_id: &str,
@@ -284,6 +286,9 @@ fn run_capture_thread(
         let mut log_interval = Instant::now();
         let frame_interval = Duration::from_micros(33_333);
         let mut next_target = Instant::now();
+        // Reusable staging texture — created once on first frame, reused for all
+        // subsequent frames to avoid per-frame GPU allocation overhead.
+        let mut staging_cache: Option<(ID3D11Texture2D, u32, u32)> = None;
 
         while is_recording.load(Ordering::Relaxed) {
             let now = Instant::now();
@@ -295,11 +300,22 @@ fn run_capture_thread(
                         if frame_count == 1 {
                             eprintln!("[Snap] Step 7/7: first frame received via poll OK");
                         }
-                        if let Err(e) = write_frame_to_ffmpeg(&frame, &device, &context, &stdin) {
+                        if let Err(e) = write_frame_to_ffmpeg(
+                            &frame,
+                            &device,
+                            &context,
+                            &stdin,
+                            &mut staging_cache,
+                        ) {
                             eprintln!("[Snap] frame write error: {e}");
                         }
                         frames_sent += 1;
                         next_target += frame_interval;
+                        // Clamp next_target so we don't try to "catch up" if a frame
+                        // took longer than one interval to process.
+                        if next_target < now {
+                            next_target = now + frame_interval;
+                        }
                     }
 
                     if log_interval.elapsed() >= Duration::from_secs(2) {
@@ -421,9 +437,28 @@ fn spawn_ffmpeg(
             .spawn()
     }
 
+    // Try NVENC first. Spawn succeeded doesn't mean the encoder works —
+    // FFmpeg may exit immediately if h264_nvenc isn't available. Wait briefly
+    // and check whether the process is still alive before committing to it.
     if let Ok(mut child) = try_ffmpeg(&nvenc_args) {
-        let stdin = child.stdin.take().unwrap();
-        return Ok((child, stdin, true));
+        thread::sleep(Duration::from_millis(500));
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // FFmpeg exited within 500ms — NVENC likely unavailable
+                eprintln!(
+                    "[Snap] NVENC probe: FFmpeg exited immediately (status={status}), \
+                     falling back to libx264"
+                );
+            }
+            Ok(None) => {
+                // Still running — NVENC is working
+                let stdin = child.stdin.take().unwrap();
+                return Ok((child, stdin, true));
+            }
+            Err(e) => {
+                eprintln!("[Snap] NVENC probe: try_wait error ({e}), falling back to libx264");
+            }
+        }
     }
 
     match try_ffmpeg(&x264_args) {
@@ -535,6 +570,7 @@ fn write_frame_to_ffmpeg(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     stdin: &Arc<Mutex<ChildStdin>>,
+    staging_cache: &mut Option<(ID3D11Texture2D, u32, u32)>,
 ) -> Result<()> {
     let surface = frame.Surface()?;
 
@@ -544,15 +580,23 @@ fn write_frame_to_ffmpeg(
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
 
-    let mut staging_desc = desc;
-    staging_desc.Usage = D3D11_USAGE_STAGING;
-    staging_desc.BindFlags = 0;
-    staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-    staging_desc.MiscFlags = 0;
+    // Reuse the staging texture if dimensions match, otherwise create a new one.
+    let staging = match staging_cache {
+        Some((ref cached, w, h)) if *w == desc.Width && *h == desc.Height => cached.clone(),
+        _ => {
+            let mut staging_desc = desc;
+            staging_desc.Usage = D3D11_USAGE_STAGING;
+            staging_desc.BindFlags = 0;
+            staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            staging_desc.MiscFlags = 0;
 
-    let mut staging: Option<ID3D11Texture2D> = None;
-    unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging))? };
-    let staging = staging.unwrap();
+            let mut new_staging: Option<ID3D11Texture2D> = None;
+            unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut new_staging))? };
+            let new_staging = new_staging.unwrap();
+            *staging_cache = Some((new_staging.clone(), desc.Width, desc.Height));
+            new_staging
+        }
+    };
 
     unsafe { context.CopyResource(&staging, &texture) };
 

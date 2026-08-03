@@ -27,6 +27,9 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
   const [loadError, setLoadError] = useState("");
   const rafRef = useRef<number>(0);
 
+  // Pre-filtered mousemove events sorted by timestamp for binary search
+  const mouseMoveEvents = useRef<InputEvent[]>([]);
+
   // Load input log JSONL
   useEffect(() => {
     (async () => {
@@ -39,41 +42,53 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
           .filter((line) => line.trim())
           .map((line) => JSON.parse(line));
         setEvents(parsed);
-        console.log(`[Editor] Loaded ${parsed.length} input events`);
+
+        // Pre-filter and sort mousemove events for efficient binary search
+        mouseMoveEvents.current = parsed
+          .filter((e) => e.type === "mousemove" && e.x != null && e.y != null)
+          .sort((a, b) => a.ts - b.ts);
+
+        console.log(
+          `[Editor] Loaded ${parsed.length} input events (${mouseMoveEvents.current.length} mousemove)`
+        );
       } catch (e) {
         setLoadError(`Failed to load input log: ${e}`);
       }
     })();
   }, [inputLogPath]);
 
-  // Find cursor position at a given timestamp (ms).
-  // Returns the nearest mousemove event or interpolated position.
+  // Binary search for the last mousemove event at or before the given timestamp.
   const getCursorAt = useCallback(
     (timestampMs: number): { x: number; y: number } | null => {
-      if (events.length === 0) return null;
+      const moves = mouseMoveEvents.current;
+      if (moves.length === 0) return null;
 
-      // Binary search for the nearest mousemove event
-      let best: InputEvent | null = null;
-      for (let i = events.length - 1; i >= 0; i--) {
-        const e = events[i];
-        if (e.type === "mousemove" && e.ts <= timestampMs) {
-          if (!best || e.ts > best.ts) {
-            best = e;
-          }
-          if (e.ts <= timestampMs) break;
+      // Binary search: find the rightmost event with ts <= timestampMs
+      let lo = 0;
+      let hi = moves.length - 1;
+      let best = -1;
+
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        if (moves[mid].ts <= timestampMs) {
+          best = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
       }
 
-      if (best && best.x != null && best.y != null) {
-        return { x: best.x, y: best.y };
+      if (best >= 0) {
+        const e = moves[best];
+        return { x: e.x!, y: e.y! };
       }
       return null;
     },
-    [events]
+    [] // mouseMoveEvents is a ref, no dependency needed
   );
 
-  // Render loop — draws video frame + cursor to canvas
-  const render = useCallback(() => {
+  // Render one frame — draws video frame + cursor to canvas
+  const renderFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -103,18 +118,23 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
     }
 
     setCurrentTime(video.currentTime);
-    rafRef.current = requestAnimationFrame(render);
   }, [getCursorAt]);
+
+  // Render loop — calls renderFrame on each animation frame while playing
+  const renderLoop = useCallback(() => {
+    renderFrame();
+    rafRef.current = requestAnimationFrame(renderLoop);
+  }, [renderFrame]);
 
   // Start/stop render loop
   useEffect(() => {
     if (playing) {
-      rafRef.current = requestAnimationFrame(render);
+      rafRef.current = requestAnimationFrame(renderLoop);
     } else {
       cancelAnimationFrame(rafRef.current);
     }
     return () => cancelAnimationFrame(rafRef.current);
-  }, [playing, render]);
+  }, [playing, renderLoop]);
 
   // Video metadata loaded
   const onMetadata = () => {
@@ -137,6 +157,8 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
     } else {
       video.pause();
       setPlaying(false);
+      // Render one more frame so canvas shows the paused frame
+      renderFrame();
     }
   };
 
@@ -146,6 +168,8 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
     const t = parseFloat(e.target.value);
     video.currentTime = t;
     setCurrentTime(t);
+    // Render immediately so canvas updates even when paused
+    requestAnimationFrame(renderFrame);
   };
 
   const videoUrl = convertFileSrc(videoPath);
@@ -181,7 +205,10 @@ export default function Preview({ videoPath, inputLogPath, onClose }: Props) {
         src={videoUrl}
         style={{ display: "none" }}
         onLoadedMetadata={onMetadata}
-        onEnded={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          renderFrame();
+        }}
       />
 
       {/* Controls */}

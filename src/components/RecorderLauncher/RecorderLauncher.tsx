@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./RecorderLauncher.css";
@@ -101,6 +101,20 @@ function ModeCard({ icon, label, onClick }: ModeCardProps) {
   );
 }
 
+// ── Types for backend data ──────────────────────────────────────────────────
+
+interface DisplayTarget {
+  id: string;
+  name: string;
+  target_type: string;
+}
+
+interface AudioDevice {
+  id: string;
+  name: string;
+  device_type: string;
+}
+
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
 }
@@ -113,18 +127,54 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
   const [lastVideo, setLastVideo] = useState("");
   const [lastLog, setLastLog] = useState("");
   const appWindow = getCurrentWindow();
-  console.log("[Snap UI] getCurrentWindow() returned:", appWindow);
+
+  // ── Live device lists from backend ──────────────────────────────────────
+  const [targets, setTargets] = useState<DisplayTarget[]>([]);
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [selectedTarget, setSelectedTarget] = useState("");
+  const [selectedMic, setSelectedMic] = useState("default");
+  const [selectedSpeaker, setSelectedSpeaker] = useState("default");
+
+  // Fetch available targets and audio devices on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const t = await invoke<DisplayTarget[]>("enumerate_targets");
+        setTargets(t);
+        // Auto-select first monitor
+        const firstMonitor = t.find((x) => x.target_type === "monitor");
+        if (firstMonitor) setSelectedTarget(firstMonitor.id);
+      } catch (e) {
+        console.error("Failed to enumerate targets:", e);
+      }
+
+      try {
+        const d = await invoke<AudioDevice[]>("enumerate_audio_devices");
+        setAudioDevices(d);
+      } catch (e) {
+        console.error("Failed to enumerate audio devices:", e);
+      }
+    })();
+  }, []);
+
+  const microphones = audioDevices.filter((d) => d.device_type === "microphone");
+  const speakers = audioDevices.filter((d) => d.device_type === "speaker");
 
   const handleModeClick = (mode: string) => {
     console.log(`Selected mode: ${mode}`);
+    // TODO: Wire up to actual recording flows:
+    //   "fullscreen" → pick primary monitor, start recording
+    //   "window" → show window picker overlay
+    //   "custom" → show region selection overlay
+    //   "device" → show device/webcam settings
   };
 
   const handleTestRecord = async () => {
     setTestStatus("Enumerating targets...");
     try {
-      const targets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
+      const allTargets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
 
-      const primaryMonitor = targets.find((t) => t.target_type === "monitor");
+      const primaryMonitor = allTargets.find((t) => t.target_type === "monitor");
       if (!primaryMonitor) {
         setTestStatus("ERROR: No monitor found");
         return;
@@ -157,7 +207,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       const outputDir = `${videosDir}\\snap_audio_test_${Date.now()}`;
 
       setAudioTestStatus(`Capturing to ${outputDir}...`);
-      await invoke("start_audio_capture", { micDeviceId: "default", outputDir });
+      await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir });
 
       setAudioTestStatus("Recording audio... waiting 5s");
       await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -166,7 +216,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       await invoke("stop_audio_capture");
 
       setAudioTestStatus(
-        `SUCCESS: system_audio.pcm + mic_audio.pcm saved to ${outputDir}`
+        `SUCCESS: system_audio.wav + mic_audio.wav saved to ${outputDir}`
       );
     } catch (e) {
       setAudioTestStatus(`ERROR: ${e}`);
@@ -204,8 +254,8 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
   const handleTestCombined = async () => {
     setCombinedStatus("Starting video + input recording...");
     try {
-      const targets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
-      const primaryMonitor = targets.find((t) => t.target_type === "monitor");
+      const allTargets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
+      const primaryMonitor = allTargets.find((t) => t.target_type === "monitor");
       if (!primaryMonitor) { setCombinedStatus("ERROR: No monitor found"); return; }
 
       const videosDir = await invoke<string>("get_videos_dir");
@@ -259,7 +309,6 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             className="window-btn"
             title="Minimize"
             onClick={() => {
-              console.log("minimize clicked");
               appWindow.minimize();
             }}
           >
@@ -269,7 +318,6 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             className="window-btn"
             title="Maximize"
             onClick={() => {
-              console.log("maximize clicked");
               appWindow.toggleMaximize();
             }}
           >
@@ -279,7 +327,6 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             className="window-btn close-btn"
             title="Close"
             onClick={() => {
-              console.log("close clicked");
               appWindow.close();
             }}
           >
@@ -515,31 +562,51 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
 
           <div className="device-field">
             <label htmlFor="video-device">Video Device</label>
-            <select id="video-device" defaultValue="">
+            <select
+              id="video-device"
+              value={selectedTarget}
+              onChange={(e) => setSelectedTarget(e.target.value)}
+            >
               <option value="" disabled>
                 Select a video device
               </option>
-              <option value="screen">Screen Capture</option>
+              {targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.target_type})
+                </option>
+              ))}
             </select>
           </div>
 
           <div className="device-field">
             <label htmlFor="microphone">Microphone</label>
-            <select id="microphone" defaultValue="">
-              <option value="" disabled>
-                Select a microphone
-              </option>
+            <select
+              id="microphone"
+              value={selectedMic}
+              onChange={(e) => setSelectedMic(e.target.value)}
+            >
               <option value="default">Default Microphone</option>
+              {microphones.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
             </select>
           </div>
 
           <div className="device-field">
             <label htmlFor="speaker">Speaker Output</label>
-            <select id="speaker" defaultValue="">
-              <option value="" disabled>
-                Select speaker output
-              </option>
+            <select
+              id="speaker"
+              value={selectedSpeaker}
+              onChange={(e) => setSelectedSpeaker(e.target.value)}
+            >
               <option value="default">Default Speaker</option>
+              {speakers.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
             </select>
           </div>
 
