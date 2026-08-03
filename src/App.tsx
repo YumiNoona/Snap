@@ -1,5 +1,5 @@
 import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
-import Preview from "./components/Editor/Preview/index";
+import Editor from "./components/Editor/Editor";
 import { useState } from "react";
 import "./App.css";
 
@@ -9,7 +9,7 @@ function App() {
 
   if (editorVideo && editorLog) {
     return (
-      <Preview
+      <Editor
         videoPath={editorVideo}
         inputLogPath={editorLog}
         onClose={() => {

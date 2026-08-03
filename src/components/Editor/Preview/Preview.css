@@ -1,0 +1,61 @@
+.preview-container {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0a;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.preview-canvas {
+  border-radius: 4px;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.preview-error {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #f87171;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 6px 14px;
+  border-radius: 6px;
+  z-index: 10;
+}
+
+.preview-controls {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.play-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  opacity: 1;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.play-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.play-overlay:hover {
+  transform: scale(1.1);
+}

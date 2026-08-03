@@ -284,7 +284,7 @@ fn run_capture_thread(
         let mut frames_sent: u64 = 0;
         let first_frame_deadline = Instant::now() + Duration::from_secs(3);
         let mut log_interval = Instant::now();
-        let frame_interval = Duration::from_micros(33_333);
+        let frame_interval = Duration::from_micros(16_667);
         let mut next_target = Instant::now();
         // Reusable staging texture — created once on first frame, reused for all
         // subsequent frames to avoid per-frame GPU allocation overhead.
@@ -416,15 +416,15 @@ fn spawn_ffmpeg(
 
     let nvenc_args = [
         "-y", "-f", "rawvideo", "-pixel_format", "bgra",
-        "-video_size", &size, "-framerate", "30", "-i", "pipe:0",
-        "-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "8M",
+        "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
+        "-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M",
         "-pix_fmt", "yuv420p", output_path,
     ];
 
     let x264_args = [
         "-y", "-f", "rawvideo", "-pixel_format", "bgra",
-        "-video_size", &size, "-framerate", "30", "-i", "pipe:0",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-pix_fmt", "yuv420p", output_path,
     ];
 

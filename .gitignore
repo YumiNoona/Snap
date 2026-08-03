@@ -6,6 +6,9 @@ dist/
 dist-ssr/
 *.local
 
+# Rust / Cargo build output
+src-tauri/target/
+
 # Editor / IDE
 .vscode/*
 !.vscode/extensions.json
@@ -33,6 +36,7 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Recordings (user content — if any are ever placed in the repo)
-recordings/
-*.sidecar.json
+# Test recordings (accidental commits)
+*.mp4
+*.wav
+*.jsonl

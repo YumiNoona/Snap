@@ -1,0 +1,87 @@
+.editor-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
+/* ── Top bar ─────────────────────────────────────────── */
+
+.editor-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.editor-drag-area {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.editor-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 1;
+}
+
+.editor-back-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.editor-back-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.editor-filename {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.editor-topbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+.editor-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 1;
+}
+
+.editor-export-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+
+/* ── Body ─────────────────────────────────────────────── */
+
+.editor-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  flex-direction: row;
+}

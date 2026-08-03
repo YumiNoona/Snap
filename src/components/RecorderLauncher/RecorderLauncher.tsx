@@ -1,7 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import RegionSelector from "./RegionSelector";
 import "./RecorderLauncher.css";
+
+// ── SVG Icons ───────────────────────────────────────────────────────────────
 
 function SettingsIcon() {
   return (
@@ -86,6 +89,32 @@ function DeviceIcon() {
   );
 }
 
+function DebugIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+    </svg>
+  );
+}
+
+function ChevronDown() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+    </svg>
+  );
+}
+
+// ── Mode card ───────────────────────────────────────────────────────────────
+
 interface ModeCardProps {
   icon: React.ReactNode;
   label: string;
@@ -101,7 +130,7 @@ function ModeCard({ icon, label, onClick }: ModeCardProps) {
   );
 }
 
-// ── Types for backend data ──────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────────────────────
 
 interface DisplayTarget {
   id: string;
@@ -119,175 +148,203 @@ interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
 }
 
-export default function RecorderLauncher({ onOpenEditor }: Props) {
-  const [testStatus, setTestStatus] = useState("");
-  const [audioTestStatus, setAudioTestStatus] = useState("");
-  const [inputTestStatus, setInputTestStatus] = useState("");
-  const [combinedStatus, setCombinedStatus] = useState("");
-  const [lastVideo, setLastVideo] = useState("");
-  const [lastLog, setLastLog] = useState("");
-  const appWindow = getCurrentWindow();
+// ── Main component ──────────────────────────────────────────────────────────
 
-  // ── Live device lists from backend ──────────────────────────────────────
+export default function RecorderLauncher({ onOpenEditor }: Props) {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [selectedTarget, setSelectedTarget] = useState("");
   const [selectedMic, setSelectedMic] = useState("default");
   const [selectedSpeaker, setSelectedSpeaker] = useState("default");
 
-  // Fetch available targets and audio devices on mount
+  // UI state
+  const [showFileMenu, setShowFileMenu] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
+  const [showWindowPicker, setShowWindowPicker] = useState(false);
+  const [showRegionSelector, setShowRegionSelector] = useState(false);
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [fileList, setFileList] = useState<{ name: string; path: string }[]>([]);
+  const [browseDir, setBrowseDir] = useState("");
+  const [settingsOutputDir, setSettingsOutputDir] = useState("");
+
+  // Recording state
+  const [recording, setRecording] = useState(false);
+  const [recordStatus, setRecordStatus] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const [lastVideo, setLastVideo] = useState("");
+  const [lastLog, setLastLog] = useState("");
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const appWindow = getCurrentWindow();
+
+  // ── Load devices ───────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
         const t = await invoke<DisplayTarget[]>("enumerate_targets");
         setTargets(t);
-        // Auto-select first monitor
         const firstMonitor = t.find((x) => x.target_type === "monitor");
         if (firstMonitor) setSelectedTarget(firstMonitor.id);
       } catch (e) {
         console.error("Failed to enumerate targets:", e);
       }
-
       try {
         const d = await invoke<AudioDevice[]>("enumerate_audio_devices");
         setAudioDevices(d);
       } catch (e) {
         console.error("Failed to enumerate audio devices:", e);
       }
+      try {
+        const dir = await invoke<string>("get_videos_dir");
+        setSettingsOutputDir(dir);
+      } catch { /* ignore */ }
     })();
   }, []);
+
+  // ── Start recording ────────────────────────────────────────────────────
+  const startRecording = async (targetId: string) => {
+    try {
+      const videosDir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const stamp = Date.now();
+      const videoPath = `${videosDir}\\snap_${stamp}.mp4`;
+      const logPath = `${videosDir}\\snap_${stamp}.jsonl`;
+      const audioDir = `${videosDir}\\snap_${stamp}`;
+
+      setRecordStatus("Starting...");
+      await invoke("start_recording", { targetId, outputPath: videoPath });
+      await invoke("start_input_logging", { outputPath: logPath, sessionStartTime: "0" });
+      try {
+        await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir: audioDir });
+      } catch (e) {
+        console.error("Audio capture start failed:", e);
+      }
+
+      setRecording(true);
+      setElapsed(0);
+      setLastVideo(videoPath);
+      setLastLog(logPath);
+
+      elapsedRef.current = setInterval(() => setElapsed((p) => p + 1), 1000);
+      setRecordStatus("Recording");
+    } catch (e) {
+      setRecordStatus(`Error: ${e}`);
+    }
+  };
+
+  const stopRecording = async () => {
+    try {
+      if (elapsedRef.current) clearInterval(elapsedRef.current);
+      setRecordStatus("Stopping...");
+      await invoke("stop_recording");
+      const count = await invoke<number>("stop_input_logging");
+      try { await invoke("stop_audio_capture"); } catch { /* audio may not have started */ }
+      setRecording(false);
+      setRecordStatus(`Done — ${count} events captured`);
+    } catch (e) {
+      setRecording(false);
+      setRecordStatus(`Stop error: ${e}`);
+    }
+  };
+
+  // ── Mode handlers ──────────────────────────────────────────────────────
+  const handleFullScreen = async () => {
+    const monitor = targets.find((t) => t.target_type === "monitor");
+    if (!monitor) { setRecordStatus("No monitor found"); return; }
+    await startRecording(monitor.id);
+  };
+
+  const handleWindow = () => {
+    const windows = targets.filter((t) => t.target_type === "window");
+    if (windows.length === 0) { setRecordStatus("No windows found"); return; }
+    setShowWindowPicker(true);
+  };
+
+  const handlePickWindow = async (id: string) => {
+    setShowWindowPicker(false);
+    setSelectedTarget(id);
+    await startRecording(id);
+  };
+
+  const handleCustom = () => {
+    setShowRegionSelector(true);
+  };
+
+  const handleRegionSelect = async (region: { x: number; y: number; w: number; h: number }) => {
+    setShowRegionSelector(false);
+    const monitor = targets.find((t) => t.target_type === "monitor");
+    if (!monitor) { setRecordStatus("No monitor found"); return; }
+    // Store region info for future export cropping; record full monitor for now
+    setRecordStatus(`Recording region ${region.w}x${region.h}`);
+    await startRecording(monitor.id);
+  };
+
+  const handleDevice = () => {
+    document.getElementById("video-device")?.focus();
+  };
+
+  // File menu handlers
+  const handleOpenRecording = async () => {
+    setShowFileMenu(false);
+    try {
+      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: dir });
+      const recordings = files
+        .filter((f) => !f.is_dir && (f.name.endsWith(".mp4") || f.name.endsWith(".jsonl")))
+        .map((f) => ({ name: f.name, path: f.path }));
+      setFileList(recordings);
+      setBrowseDir(dir);
+      setShowFileBrowser(true);
+    } catch (e) {
+      setRecordStatus(`Cannot browse: ${e}`);
+    }
+  };
+
+  const handleOpenOutputFolder = () => {
+    setShowFileMenu(false);
+    (async () => {
+      try {
+        const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+        await invoke("open_explorer", { path: dir });
+      } catch (e) {
+        setRecordStatus(`Cannot open folder: ${e}`);
+      }
+    })();
+  };
+
+  const handleOpenFile = (videoPath: string) => {
+    const logPath = videoPath.replace(/\.mp4$/i, ".jsonl");
+    setShowFileBrowser(false);
+    setShowFileMenu(false);
+    onOpenEditor(videoPath, logPath);
+  };
+
+  // ── Keyboard: Space to stop ────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === " " && recording && !(e.target as HTMLElement)?.closest("input,select,textarea")) {
+        e.preventDefault();
+        stopRecording();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recording]);
+
+  // ── Close menus on click outside ───────────────────────────────────────
+  useEffect(() => {
+    if (!showFileMenu) return;
+    const onClick = () => setShowFileMenu(false);
+    setTimeout(() => document.addEventListener("click", onClick), 50);
+    return () => document.removeEventListener("click", onClick);
+  }, [showFileMenu]);
 
   const microphones = audioDevices.filter((d) => d.device_type === "microphone");
   const speakers = audioDevices.filter((d) => d.device_type === "speaker");
 
-  const handleModeClick = (mode: string) => {
-    console.log(`Selected mode: ${mode}`);
-    // TODO: Wire up to actual recording flows:
-    //   "fullscreen" → pick primary monitor, start recording
-    //   "window" → show window picker overlay
-    //   "custom" → show region selection overlay
-    //   "device" → show device/webcam settings
-  };
-
-  const handleTestRecord = async () => {
-    setTestStatus("Enumerating targets...");
-    try {
-      const allTargets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
-
-      const primaryMonitor = allTargets.find((t) => t.target_type === "monitor");
-      if (!primaryMonitor) {
-        setTestStatus("ERROR: No monitor found");
-        return;
-      }
-
-      const videosDir = await invoke<string>("get_videos_dir");
-      const outputPath = `${videosDir}\\snap_test_${Date.now()}.mp4`;
-
-      setTestStatus(`Recording to ${outputPath}...`);
-      await invoke("start_recording", { targetId: primaryMonitor.id, outputPath });
-
-      setTestStatus("Recording... waiting 5s");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      setTestStatus("Stopping...");
-      await invoke("stop_recording");
-
-      setTestStatus(`SUCCESS: Saved to ${outputPath}`);
-      console.log(`Recording saved to ${outputPath}`);
-    } catch (e) {
-      setTestStatus(`ERROR: ${e}`);
-      console.error("Test record failed:", e);
-    }
-  };
-
-  const handleTestAudio = async () => {
-    setAudioTestStatus("Starting audio capture...");
-    try {
-      const videosDir = await invoke<string>("get_videos_dir");
-      const outputDir = `${videosDir}\\snap_audio_test_${Date.now()}`;
-
-      setAudioTestStatus(`Capturing to ${outputDir}...`);
-      await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir });
-
-      setAudioTestStatus("Recording audio... waiting 5s");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      setAudioTestStatus("Stopping...");
-      await invoke("stop_audio_capture");
-
-      setAudioTestStatus(
-        `SUCCESS: system_audio.wav + mic_audio.wav saved to ${outputDir}`
-      );
-    } catch (e) {
-      setAudioTestStatus(`ERROR: ${e}`);
-      console.error("Test audio failed:", e);
-    }
-  };
-
-  const handleTestInput = async () => {
-    setInputTestStatus("Starting input logging...");
-    try {
-      const videosDir = await invoke<string>("get_videos_dir");
-      const outputPath = `${videosDir}\\input_log_${Date.now()}.jsonl`;
-
-      setInputTestStatus(`Logging to ${outputPath}...`);
-      await invoke("start_input_logging", {
-        outputPath,
-        sessionStartTime: String(Date.now()),
-      });
-
-      setInputTestStatus("Logging input... move mouse, type, click (5s)");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      setInputTestStatus("Stopping...");
-      const count = await invoke<number>("stop_input_logging");
-
-      setInputTestStatus(
-        `SUCCESS: ${count} events logged to ${outputPath}`
-      );
-    } catch (e) {
-      setInputTestStatus(`ERROR: ${e}`);
-      console.error("Test input failed:", e);
-    }
-  };
-
-  const handleTestCombined = async () => {
-    setCombinedStatus("Starting video + input recording...");
-    try {
-      const allTargets = await invoke<Array<{ id: string; name: string; target_type: string }>>("enumerate_targets");
-      const primaryMonitor = allTargets.find((t) => t.target_type === "monitor");
-      if (!primaryMonitor) { setCombinedStatus("ERROR: No monitor found"); return; }
-
-      const videosDir = await invoke<string>("get_videos_dir");
-      const stamp = Date.now();
-      const videoPath = `${videosDir}\\snap_combined_${stamp}.mp4`;
-      const logPath = `${videosDir}\\snap_combined_${stamp}.jsonl`;
-
-      setCombinedStatus("Starting video capture...");
-      await invoke("start_recording", { targetId: primaryMonitor.id, outputPath: videoPath });
-
-      setCombinedStatus("Starting input logging (aligned timestamp)...");
-      // session_start_time = 0 means log timestamps are relative to logging start.
-      // Video also starts at ~0, so both timelines align.
-      await invoke("start_input_logging", { outputPath: logPath, sessionStartTime: "0" });
-
-      setCombinedStatus("Recording video + input... waiting 5s");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      setCombinedStatus("Stopping...");
-      await invoke("stop_recording");
-      const eventCount = await invoke<number>("stop_input_logging");
-
-      setLastVideo(videoPath);
-      setLastLog(logPath);
-      setCombinedStatus(`SUCCESS: video + ${eventCount} events`);
-    } catch (e) {
-      setCombinedStatus(`ERROR: ${e}`);
-    }
-  };
-
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="app-layout">
+      {/* ── Titlebar ───────────────────────────────────────────────── */}
       <header className="titlebar">
         <div
           className="titlebar-drag-area"
@@ -298,265 +355,132 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         />
         <div className="titlebar-left">
           <span className="app-name">Snap</span>
-          <span className="menu-item">File</span>
+          <div className="menu-wrap">
+            <span
+              className="menu-item"
+              onClick={(e) => { e.stopPropagation(); setShowFileMenu(!showFileMenu); }}
+            >
+              File <ChevronDown />
+            </span>
+            {showFileMenu && (
+              <div className="dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                <button className="dropdown-item" onClick={handleOpenRecording}>
+                  Open Recording...
+                </button>
+                <button className="dropdown-item" onClick={handleOpenOutputFolder}>
+                  Output Folder
+                </button>
+                <div className="dropdown-divider" />
+                <button className="dropdown-item danger" onClick={() => { setShowFileMenu(false); appWindow.close(); }}>
+                  Exit
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="titlebar-right">
-          <button className="titlebar-icon" title="Settings">
+          <button
+            className={`titlebar-icon ${showDebug ? "active" : ""}`}
+            title="Debug"
+            onClick={() => setShowDebug(!showDebug)}
+          >
+            <DebugIcon />
+          </button>
+          <button
+            className={`titlebar-icon ${showSettings ? "active" : ""}`}
+            title="Settings"
+            onClick={() => setShowSettings(!showSettings)}
+          >
             <SettingsIcon />
           </button>
-          <button
-            className="window-btn"
-            title="Minimize"
-            onClick={() => {
-              appWindow.minimize();
-            }}
-          >
+          <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
             <MinimizeIcon />
           </button>
-          <button
-            className="window-btn"
-            title="Maximize"
-            onClick={() => {
-              appWindow.toggleMaximize();
-            }}
-          >
+          <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
             <MaximizeIcon />
           </button>
-          <button
-            className="window-btn close-btn"
-            title="Close"
-            onClick={() => {
-              appWindow.close();
-            }}
-          >
+          <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
             <CloseIcon />
           </button>
         </div>
       </header>
 
+      {/* ── Settings panel ─────────────────────────────────────────── */}
+      {showSettings && (
+        <div className="settings-panel">
+          <div className="settings-row">
+            <label>Output Directory</label>
+            <input
+              type="text"
+              className="field-input"
+              value={settingsOutputDir}
+              onChange={(e) => setSettingsOutputDir(e.target.value)}
+            />
+          </div>
+          <p className="settings-hint">Recordings are saved to this folder.</p>
+        </div>
+      )}
+
+      {/* ── Main content ───────────────────────────────────────────── */}
       <div className="main-content">
         <div className="recording-modes">
-          <h2>Please select the recording mode</h2>
-          <div className="mode-cards">
-            <ModeCard
-              icon={<FullScreenIcon />}
-              label="Full Screen"
-              onClick={() => handleModeClick("fullscreen")}
-            />
-            <ModeCard
-              icon={<CustomIcon />}
-              label="Custom"
-              onClick={() => handleModeClick("custom")}
-            />
-            <ModeCard
-              icon={<WindowIcon />}
-              label="Window"
-              onClick={() => handleModeClick("window")}
-            />
-            <ModeCard
-              icon={<DeviceIcon />}
-              label="Device"
-              onClick={() => handleModeClick("device")}
-            />
-          </div>
+          {!recording ? (
+            <>
+              <h2>Please select the recording mode</h2>
+              <div className="mode-cards">
+                <ModeCard icon={<FullScreenIcon />} label="Full Screen" onClick={handleFullScreen} />
+                <ModeCard icon={<CustomIcon />} label="Custom" onClick={handleCustom} />
+                <ModeCard icon={<WindowIcon />} label="Window" onClick={handleWindow} />
+                <ModeCard icon={<DeviceIcon />} label="Device" onClick={handleDevice} />
+              </div>
+              {recordStatus && (
+                <p className="record-status-msg">{recordStatus}</p>
+              )}
+            </>
+          ) : (
+            <div className="recording-active">
+              <div className="recording-indicator">
+                <span className="rec-dot" />
+                <span className="rec-text">REC</span>
+                <span className="rec-time">{formatTime(elapsed)}</span>
+              </div>
+              <p className="rec-target">
+                {targets.find((t) => t.id === selectedTarget)?.name ?? selectedTarget}
+              </p>
+              <button className="stop-btn" onClick={stopRecording}>
+                <StopIcon />
+                Stop Recording
+              </button>
+              <p className="rec-hint">Press Space to stop</p>
+            </div>
+          )}
 
-          <div style={{ marginTop: 24, textAlign: "center", display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-            <div>
-              <button
-                onClick={handleTestRecord}
-                disabled={testStatus.includes("...")}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: testStatus.startsWith("SUCCESS")
-                    ? "#1a3a2a"
-                    : testStatus.startsWith("ERROR")
-                      ? "#3a1a1a"
-                      : "var(--bg-tertiary)",
-                  color: testStatus.startsWith("SUCCESS")
-                    ? "#4ade80"
-                    : testStatus.startsWith("ERROR")
-                      ? "#f87171"
-                      : "var(--accent)",
-                  cursor: testStatus.includes("...") ? "not-allowed" : "pointer",
-                }}
-              >
-                TEST RECORD 5s
+          {/* Recorded: open editor */}
+          {!recording && lastVideo && lastLog && (
+            <div className="open-editor-wrap">
+              <p className="record-status-msg">{recordStatus}</p>
+              <button className="open-editor-btn" onClick={() => onOpenEditor(lastVideo, lastLog)}>
+                Open in Editor
               </button>
-              {testStatus && (
-                <p
-                  style={{
-                    marginTop: 12,
-                    fontSize: 12,
-                    color: testStatus.startsWith("SUCCESS")
-                      ? "#4ade80"
-                      : testStatus.startsWith("ERROR")
-                        ? "#f87171"
-                        : "var(--text-secondary)",
-                    wordBreak: "break-all",
-                    maxWidth: 400,
-                  }}
-                >
-                  {testStatus}
-                </p>
-              )}
             </div>
-            <div>
-              <button
-                onClick={handleTestAudio}
-                disabled={audioTestStatus.includes("...")}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: audioTestStatus.startsWith("SUCCESS")
-                    ? "#1a3a2a"
-                    : audioTestStatus.startsWith("ERROR")
-                      ? "#3a1a1a"
-                      : "var(--bg-tertiary)",
-                  color: audioTestStatus.startsWith("SUCCESS")
-                    ? "#4ade80"
-                    : audioTestStatus.startsWith("ERROR")
-                      ? "#f87171"
-                      : "var(--accent)",
-                  cursor: audioTestStatus.includes("...") ? "not-allowed" : "pointer",
-                }}
-              >
-                TEST AUDIO 5s
-              </button>
-              {audioTestStatus && (
-                <p
-                  style={{
-                    marginTop: 12,
-                    fontSize: 12,
-                    color: audioTestStatus.startsWith("SUCCESS")
-                      ? "#4ade80"
-                      : audioTestStatus.startsWith("ERROR")
-                        ? "#f87171"
-                        : "var(--text-secondary)",
-                    wordBreak: "break-all",
-                    maxWidth: 400,
-                  }}
-                >
-                  {audioTestStatus}
-                </p>
-              )}
-            </div>
-            <div>
-              <button
-                onClick={handleTestInput}
-                disabled={inputTestStatus.includes("...")}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: inputTestStatus.startsWith("SUCCESS")
-                    ? "#1a3a2a"
-                    : inputTestStatus.startsWith("ERROR")
-                      ? "#3a1a1a"
-                      : "var(--bg-tertiary)",
-                  color: inputTestStatus.startsWith("SUCCESS")
-                    ? "#4ade80"
-                    : inputTestStatus.startsWith("ERROR")
-                      ? "#f87171"
-                      : "var(--accent)",
-                  cursor: inputTestStatus.includes("...") ? "not-allowed" : "pointer",
-                }}
-              >
-                TEST INPUT 5s
-              </button>
-              {inputTestStatus && (
-                <p
-                  style={{
-                    marginTop: 12,
-                    fontSize: 12,
-                    color: inputTestStatus.startsWith("SUCCESS")
-                      ? "#4ade80"
-                      : inputTestStatus.startsWith("ERROR")
-                        ? "#f87171"
-                        : "var(--text-secondary)",
-                    wordBreak: "break-all",
-                    maxWidth: 400,
-                  }}
-                >
-                  {inputTestStatus}
-                </p>
-              )}
-            </div>
-            <div>
-              <button
-                onClick={handleTestCombined}
-                disabled={combinedStatus.includes("...")}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: combinedStatus.startsWith("SUCCESS")
-                    ? "#1a3a2a"
-                    : combinedStatus.startsWith("ERROR")
-                      ? "#3a1a1a"
-                      : "var(--bg-tertiary)",
-                  color: combinedStatus.startsWith("SUCCESS")
-                    ? "#4ade80"
-                    : combinedStatus.startsWith("ERROR")
-                      ? "#f87171"
-                      : "var(--accent)",
-                  cursor: combinedStatus.includes("...") ? "not-allowed" : "pointer",
-                }}
-              >
-                TEST COMBINED 5s
-              </button>
-              {combinedStatus && (
-                <p
-                  style={{
-                    marginTop: 12,
-                    fontSize: 12,
-                    color: combinedStatus.startsWith("SUCCESS")
-                      ? "#4ade80"
-                      : combinedStatus.startsWith("ERROR")
-                        ? "#f87171"
-                        : "var(--text-secondary)",
-                    wordBreak: "break-all",
-                    maxWidth: 400,
-                  }}
-                >
-                  {combinedStatus}
-                </p>
-              )}
-            </div>
-          </div>
+          )}
 
-          {lastVideo && lastLog && (
-            <div style={{ marginTop: 16, textAlign: "center" }}>
-              <button
-                onClick={() => onOpenEditor(lastVideo, lastLog)}
-                style={{
-                  padding: "10px 24px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  borderRadius: 8,
-                  border: "1px solid var(--border-default)",
-                  background: "var(--bg-tertiary)",
-                  color: "#facc15",
-                  cursor: "pointer",
-                }}
-              >
-                Open Editor (last recording)
-              </button>
+          {/* ── Debug test buttons ─────────────────────────────────── */}
+          {showDebug && !recording && (
+            <div className="debug-panel">
+              <h4>Debug Tools</h4>
+              <div className="debug-buttons">
+                <DebugBtn label="Test Record 5s" onClick={handleTestRecord} />
+                <DebugBtn label="Test Audio 5s" onClick={handleTestAudio} />
+                <DebugBtn label="Test Input 5s" onClick={handleTestInput} />
+                <DebugBtn label="Test Combined 5s" onClick={handleTestCombined} />
+              </div>
             </div>
           )}
         </div>
 
+        {/* ── Device panel ────────────────────────────────────────── */}
         <aside className="device-panel">
           <h3>Device &amp; Tool</h3>
 
@@ -567,13 +491,9 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
               value={selectedTarget}
               onChange={(e) => setSelectedTarget(e.target.value)}
             >
-              <option value="" disabled>
-                Select a video device
-              </option>
+              <option value="" disabled>Select a video device</option>
               {targets.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.target_type})
-                </option>
+                <option key={t.id} value={t.id}>{t.name} ({t.target_type})</option>
               ))}
             </select>
           </div>
@@ -587,9 +507,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             >
               <option value="default">Default Microphone</option>
               {microphones.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
+                <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
           </div>
@@ -603,9 +521,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             >
               <option value="default">Default Speaker</option>
               {speakers.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
+                <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
           </div>
@@ -618,6 +534,126 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
           </button>
         </aside>
       </div>
+
+      {/* ── Window picker modal ───────────────────────────────────── */}
+      {showWindowPicker && (
+        <div className="modal-overlay" onClick={() => setShowWindowPicker(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3>Select a Window</h3>
+            <div className="modal-list">
+              {targets
+                .filter((t) => t.target_type === "window")
+                .map((t) => (
+                  <button key={t.id} className="modal-item" onClick={() => handlePickWindow(t.id)}>
+                    {t.name}
+                  </button>
+                ))}
+            </div>
+            <button className="modal-cancel" onClick={() => setShowWindowPicker(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Region selector ────────────────────────────────────────── */}
+      {showRegionSelector && (
+        <RegionSelector
+          onSelect={handleRegionSelect}
+          onCancel={() => setShowRegionSelector(false)}
+        />
+      )}
+
+      {/* ── File browser modal ─────────────────────────────────────── */}
+      {showFileBrowser && (
+        <div className="modal-overlay" onClick={() => setShowFileBrowser(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3>Open Recording</h3>
+            <p className="modal-subtitle">{browseDir}</p>
+            <div className="modal-list">
+              {fileList.length === 0 && (
+                <p className="modal-empty">No recordings found</p>
+              )}
+              {fileList
+                .filter((f) => f.name.endsWith(".mp4"))
+                .map((f) => (
+                  <button
+                    key={f.path}
+                    className="modal-item"
+                    onClick={() => handleOpenFile(f.path)}
+                  >
+                    {f.name}
+                  </button>
+                ))}
+            </div>
+            <button className="modal-cancel" onClick={() => setShowFileBrowser(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
+
+  // ── Debug test handlers ──────────────────────────────────────────────────
+  async function handleTestRecord() {
+    setRecordStatus("Test recording...");
+    await startRecording(
+      targets.find((t) => t.target_type === "monitor")?.id ?? ""
+    );
+    await new Promise((r) => setTimeout(r, 5000));
+    await stopRecording();
+  }
+
+  async function handleTestAudio() {
+    setRecordStatus("Test audio...");
+    try {
+      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const out = `${dir}\\snap_audio_test_${Date.now()}`;
+      await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir: out });
+      await new Promise((r) => setTimeout(r, 5000));
+      await invoke("stop_audio_capture");
+      setRecordStatus(`Audio saved to ${out}`);
+    } catch (e) {
+      setRecordStatus(`Audio error: ${e}`);
+    }
+  }
+
+  async function handleTestInput() {
+    setRecordStatus("Test input...");
+    try {
+      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const path = `${dir}\\input_log_${Date.now()}.jsonl`;
+      await invoke("start_input_logging", { outputPath: path, sessionStartTime: "0" });
+      await new Promise((r) => setTimeout(r, 5000));
+      const count = await invoke<number>("stop_input_logging");
+      setRecordStatus(`${count} events → ${path}`);
+    } catch (e) {
+      setRecordStatus(`Input error: ${e}`);
+    }
+  }
+
+  async function handleTestCombined() {
+    setRecordStatus("Test combined...");
+    await startRecording(
+      targets.find((t) => t.target_type === "monitor")?.id ?? ""
+    );
+    await new Promise((r) => setTimeout(r, 5000));
+    await stopRecording();
+  }
+}
+
+// ── Debug button helper ────────────────────────────────────────────────────
+function DebugBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button className="debug-btn" onClick={onClick}>
+      {label}
+    </button>
+  );
+}
+
+function formatTime(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, "0")}`;
 }
