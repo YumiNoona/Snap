@@ -3,7 +3,8 @@ mod audio;
 mod input_hook;
 mod export;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
@@ -11,8 +12,31 @@ use tauri::Manager;
 /// Pending video/log paths handed to the dedicated editor window.
 struct EditorPaths(Mutex<Option<(String, String)>>);
 
-/// Open the editor in its own dedicated window. Reuses the window if it
-/// already exists; otherwise creates it centered with the custom titlebar.
+/// Live state mirrored to the floating recording dock window.
+struct DockState(Mutex<DockStateSnapshot>);
+
+#[derive(Clone, Serialize, Deserialize)]
+struct DockStateSnapshot {
+    recording: bool,
+    elapsed: u64,
+    paused: bool,
+    mic_muted: bool,
+}
+
+impl Default for DockStateSnapshot {
+    fn default() -> Self {
+        Self {
+            recording: false,
+            elapsed: 0,
+            paused: false,
+            mic_muted: false,
+        }
+    }
+}
+
+/// Open the editor window, hand it the recording, and focus it.
+/// The window is created on demand (runtime) rather than predeclared hidden —
+/// predeclared invisible windows can fail to display on some Windows setups.
 #[tauri::command]
 fn open_editor_window(
     app: tauri::AppHandle,
@@ -23,21 +47,36 @@ fn open_editor_window(
     *state.0.lock().map_err(|e| e.to_string())? = Some((video.clone(), log.clone()));
 
     if let Some(win) = app.get_webview_window("editor") {
+        eprintln!("[Snap] open_editor_window: reusing existing editor window");
+        let _ = win.emit("editor-open", (video, log));
         let _ = win.show();
         let _ = win.set_focus();
-        let _ = win.emit("editor-open", (video, log));
         return Ok(());
     }
 
-    tauri::WebviewWindowBuilder::new(&app, "editor", tauri::WebviewUrl::App("index.html".into()))
-        .title("Snap Editor")
-        .inner_size(1360.0, 860.0)
-        .min_inner_size(980.0, 640.0)
-        .center()
-        .decorations(false)
-        .build()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    eprintln!("[Snap] open_editor_window: creating editor window at runtime");
+    let win = tauri::WebviewWindowBuilder::new(
+        &app,
+        "editor",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Snap Editor")
+    .inner_size(1360.0, 860.0)
+    .min_inner_size(980.0, 640.0)
+    .center()
+    .decorations(false)
+    .on_page_load(|_webview, payload| {
+        eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
+    })
+    .build()
+    .map_err(|e| format!("Failed to create editor window: {e}"))?;
+
+    eprintln!("[Snap] editor window created, emitting editor-open");
+    win.emit("editor-open", (video.clone(), log.clone()))
+        .map_err(|e| format!("Failed to notify editor window: {e}"))?;
+    let _ = win.show();
+    win.set_focus().map_err(|e| format!("Failed to focus editor window: {e}"))?;
+    eprintln!("[Snap] editor window shown + focused");
 }
 
 #[tauri::command]
@@ -48,6 +87,168 @@ fn get_pending_editor_paths(state: tauri::State<EditorPaths>) -> Result<(String,
         .map_err(|e| e.to_string())?
         .clone()
         .ok_or_else(|| "No editor paths pending".to_string())
+}
+
+/// Show/hide the floating dock window, centered near the bottom of the
+/// primary monitor so it floats above the desktop — independent of the
+/// small launcher window.
+#[tauri::command]
+fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("dock")
+        .ok_or_else(|| "Dock window not found".to_string())?;
+
+    if visible {
+        // Center above the bottom edge of the main window's monitor.
+        if let Some(mon) = app
+            .get_webview_window("main")
+            .and_then(|m| m.current_monitor().ok())
+            .flatten()
+        {
+            let scale = mon.scale_factor();
+            let logical_w = (mon.size().width as f64 / scale) as i32;
+            let logical_h = (mon.size().height as f64 / scale) as i32;
+            let logical_x = (mon.position().x as f64 / scale) as i32;
+            let logical_y = (mon.position().y as f64 / scale) as i32;
+            let x0 = logical_x + (logical_w - 460) / 2;
+            let y0 = logical_y + logical_h - 74 - 48;
+            let _ = win.set_position(tauri::LogicalPosition::new(x0 as f64, y0 as f64));
+        }
+        let _ = win.show();
+    } else {
+        let _ = win.hide();
+    }
+
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("dock-visibility", visible);
+    }
+    Ok(())
+}
+
+/// Mirror the latest recording state to the dock window.
+#[tauri::command]
+fn update_dock_state(
+    app: tauri::AppHandle,
+    state: tauri::State<DockState>,
+    snapshot: DockStateSnapshot,
+) -> Result<(), String> {
+    *state.0.lock().map_err(|e| e.to_string())? = snapshot.clone();
+    if let Some(dock) = app.get_webview_window("dock") {
+        let _ = dock.emit("dock-state", snapshot);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_dock_state(state: tauri::State<DockState>) -> Result<DockStateSnapshot, String> {
+    Ok(state.0.lock().map_err(|e| e.to_string())?.clone())
+}
+
+/// Relay a dock button action (stop / pause / mic) to the launcher window.
+#[tauri::command]
+fn dock_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.emit("dock-action", action);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct OverlayRegion {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+/// Last shown overlay appearance (style + region) so a pause toggle can
+/// re-emit the state without the frontend re-sending coordinates.
+static OVERLAY_APPEARANCE: Mutex<Option<(String, Option<OverlayRegion>)>> = Mutex::new(None);
+
+/// True while the recording is paused — the border renders green.
+static OVERLAY_PAUSED: AtomicBool = AtomicBool::new(false);
+
+/// Show a transparent always-on-top border overlay over the recorded area
+/// while recording. Styles: "off" | "red" | "dashed". Region is in physical
+/// px (from get_target_bounds) and converted to logical px for the overlay.
+#[tauri::command]
+fn set_recording_overlay(
+    app: tauri::AppHandle,
+    enabled: bool,
+    style: String,
+    region: Option<OverlayRegion>,
+) -> Result<(), String> {
+    let win = app
+        .get_webview_window("recorder-overlay")
+        .ok_or_else(|| "Overlay window not found".to_string())?;
+
+    if !enabled {
+        OVERLAY_PAUSED.store(false, Ordering::SeqCst);
+        if let Ok(mut guard) = OVERLAY_APPEARANCE.lock() {
+            *guard = None;
+        }
+        let _ = win.set_ignore_cursor_events(false);
+        let _ = win.hide();
+        return Ok(());
+    }
+
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|m| m.current_monitor().ok())
+        .flatten()
+        .ok_or_else(|| "No monitor available".to_string())?;
+
+    let scale = monitor.scale_factor();
+    let logical_w = monitor.size().width as f64 / scale;
+    let logical_h = monitor.size().height as f64 / scale;
+    let logical_x = monitor.position().x as f64 / scale;
+    let logical_y = monitor.position().y as f64 / scale;
+
+    let _ = win.set_size(tauri::LogicalSize::new(logical_w, logical_h));
+    let _ = win.set_position(tauri::LogicalPosition::new(logical_x, logical_y));
+
+    let logical_region = region.map(|r| OverlayRegion {
+        x: (r.x as f64 / scale).round() as i32,
+        y: (r.y as f64 / scale).round() as i32,
+        w: (r.w as f64 / scale).round() as i32,
+        h: (r.h as f64 / scale).round() as i32,
+    });
+
+    if let Ok(mut guard) = OVERLAY_APPEARANCE.lock() {
+        *guard = Some((style.clone(), logical_region.clone()));
+    }
+
+    let paused = OVERLAY_PAUSED.load(Ordering::SeqCst);
+    let payload = serde_json::json!({
+        "style": style,
+        "region": logical_region,
+        "paused": paused,
+    });
+    let _ = win.emit("overlay-state", payload);
+    // Make the whole monitor overlay click-through — CSS pointer-events can't
+    // do this at the OS level, so without this the overlay blocks every click.
+    let _ = win.set_ignore_cursor_events(true);
+    let _ = win.show();
+    Ok(())
+}
+
+/// Flip the overlay between "recording" and "paused" appearance — the border
+/// turns green while paused. Re-emits the current overlay state.
+#[tauri::command]
+fn set_overlay_paused(app: tauri::AppHandle, paused: bool) -> Result<(), String> {
+    OVERLAY_PAUSED.store(paused, Ordering::SeqCst);
+    let appearance = OVERLAY_APPEARANCE.lock().map_err(|e| e.to_string())?;
+    if let Some((style, region)) = appearance.as_ref() {
+        if let Some(win) = app.get_webview_window("recorder-overlay") {
+            let payload = serde_json::json!({
+                "style": style,
+                "region": region,
+                "paused": paused,
+            });
+            let _ = win.emit("overlay-state", payload);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -266,20 +467,47 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(EditorPaths(Mutex::new(None)))
+        .manage(DockState(Mutex::new(DockStateSnapshot::default())))
+        .setup(|app| {
+            // TEMP DIAGNOSTIC: auto-open the editor window 2.5s after startup
+            // to reproduce the white-screen issue without manual interaction.
+            let handle = app.handle().clone();
+            let state = app.state::<EditorPaths>();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+                eprintln!("[Snap] TEMP DIAGNOSTIC: auto-opening editor window");
+                let _ = open_editor_window(
+                    handle,
+                    state,
+                    "C:\\Users\\ringale\\Videos\\snap_diag.mp4".into(),
+                    "C:\\Users\\ringale\\Videos\\snap_diag.json".into(),
+                );
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,
             capture::start_recording,
             capture::stop_recording,
+            capture::set_paused,
             capture::get_videos_dir,
             audio::enumerate_audio_devices,
             audio::start_audio_capture,
             audio::stop_audio_capture,
+            audio::set_audio_paused,
             input_hook::start_input_logging,
             input_hook::stop_input_logging,
+            input_hook::set_input_paused,
             export::export_video,
             open_editor_window,
             get_pending_editor_paths,
+            set_dock_visible,
+            update_dock_state,
+            get_dock_state,
+            dock_action,
+            set_recording_overlay,
+            set_overlay_paused,
             read_text_file,
             list_directory,
             list_cursor_packs,

@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
+import RecordingDock from "./components/RecorderLauncher/RecordingDock";
+import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
 import Editor from "./components/Editor/Editor";
 import "./App.css";
 
@@ -65,9 +67,13 @@ class ErrorBoundary extends React.Component<
 function App() {
   const appWindow = getCurrentWindow();
   const isEditorWindow = appWindow.label === "editor";
+  const isDockWindow = appWindow.label === "dock";
+  const isOverlayWindow = appWindow.label === "recorder-overlay";
+
   const [editorVideo, setEditorVideo] = useState("");
   const [editorLog, setEditorLog] = useState("");
   const [editorReady, setEditorReady] = useState(!isEditorWindow);
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   // Load the pending recording handed over by the launcher window.
   useEffect(() => {
@@ -95,7 +101,11 @@ function App() {
 
   const openInEditorWindow = useCallback(
     (video: string, log: string) => {
-      invoke("open_editor_window", { video, log }).catch((e) => console.error(e));
+      setEditorError(null);
+      invoke("open_editor_window", { video, log }).catch((e) => {
+        console.error("open_editor_window failed:", e);
+        setEditorError(String(e));
+      });
     },
     []
   );
@@ -103,6 +113,14 @@ function App() {
   const closeEditorWindow = useCallback(() => {
     appWindow.close();
   }, [appWindow]);
+
+  if (isDockWindow) {
+    return <RecordingDock />;
+  }
+
+  if (isOverlayWindow) {
+    return <RecordingOverlay />;
+  }
 
   if (isEditorWindow) {
     if (!editorReady) {
@@ -126,7 +144,7 @@ function App() {
     );
   }
 
-  return <RecorderLauncher onOpenEditor={openInEditorWindow} />;
+  return <RecorderLauncher onOpenEditor={openInEditorWindow} editorError={editorError} />;
 }
 
 export default App;

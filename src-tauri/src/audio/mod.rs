@@ -21,6 +21,7 @@ pub struct AudioDevice {
 
 struct AudioCaptureHandle {
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
     done_rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
 }
 
@@ -89,20 +90,36 @@ pub async fn start_audio_capture(
     }
 
     let is_recording = Arc::new(AtomicBool::new(true));
+    let is_paused = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let is_rec_clone = is_recording.clone();
+    let is_paused_clone = is_paused.clone();
 
     // Use std::thread::spawn for a fresh thread with no prior COM initialization.
     thread::spawn(move || {
-        let result = run_audio_threads(&mic_device_id, &output_dir, is_rec_clone);
+        let result = run_audio_threads(&mic_device_id, &output_dir, is_rec_clone, is_paused_clone);
         let _ = done_tx.send(result);
     });
 
     *guard = Some(AudioCaptureHandle {
         is_recording,
+        is_paused,
         done_rx,
     });
 
+    Ok(())
+}
+
+/// Pause (true) or resume (false) audio capture. While paused, incoming
+/// samples are dropped so the WAV timelines match the video timeline (which
+/// omits the paused segment).
+#[tauri::command]
+pub fn set_audio_paused(paused: bool) -> std::result::Result<(), String> {
+    let guard = AUDIO_STATE.lock().map_err(|e| e.to_string())?;
+    if let Some(handle) = guard.as_ref() {
+        handle.is_paused.store(paused, Ordering::SeqCst);
+        eprintln!("[Snap Audio] Capture {}", if paused { "paused" } else { "resumed" });
+    }
     Ok(())
 }
 
@@ -133,6 +150,7 @@ fn run_audio_threads(
     mic_device_id: &str,
     output_dir: &str,
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
 ) -> std::result::Result<(), String> {
     let out_dir = std::path::PathBuf::from(output_dir);
     let mic_id = mic_device_id.to_string();
@@ -144,6 +162,8 @@ fn run_audio_threads(
 
     let sys_rec = is_recording.clone();
     let mic_rec = is_recording.clone();
+    let sys_paused = is_paused.clone();
+    let mic_paused = is_paused.clone();
 
     let sys_file = sys_path.clone();
     let mic_file = mic_path.clone();
@@ -153,7 +173,7 @@ fn run_audio_threads(
         sys_file.display()
     );
     let sys_handle = thread::spawn(move || {
-        if let Err(e) = capture_loopback(sys_file, sys_rec) {
+        if let Err(e) = capture_loopback(sys_file, sys_rec, sys_paused) {
             eprintln!("[Snap Audio] System loopback error: {e}");
         }
     });
@@ -163,7 +183,7 @@ fn run_audio_threads(
         mic_file.display()
     );
     let mic_handle = thread::spawn(move || {
-        if let Err(e) = capture_microphone(&mic_id, mic_file, mic_rec) {
+        if let Err(e) = capture_microphone(&mic_id, mic_file, mic_rec, mic_paused) {
             eprintln!("[Snap Audio] Mic capture error: {e}");
         }
     });
@@ -262,6 +282,7 @@ fn finalize_wav_header(
 fn capture_loopback(
     output_path: std::path::PathBuf,
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
 ) -> std::result::Result<(), String> {
     initialize_mta()
         .ok()
@@ -351,20 +372,26 @@ fn capture_loopback(
             .read_from_device_to_deque(&mut sample_queue)
             .map_err(|e| format!("Loopback read: {e}"))?;
 
-        // Drain queue directly to disk
-        while sample_queue.len() > blockalign as usize * 512 {
-            let chunk_size = blockalign as usize * 512;
-            let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
-            file.write_all(&chunk)
-                .map_err(|e| format!("Write loopback chunk: {e}"))?;
-            total_data_bytes += chunk_size as u64;
-            batch_count += 1;
-            if batch_count % 50 == 0 {
-                eprintln!(
-                    "[Snap Audio] loopback frame batch {batch_count} captured ({:.1} KB)",
-                    total_data_bytes as f64 / 1024.0
-                );
+        // While paused, drop incoming samples so the WAV timeline matches the
+        // video timeline (which omits the paused segment).
+        if !is_paused.load(Ordering::Relaxed) {
+            // Drain queue directly to disk
+            while sample_queue.len() > blockalign as usize * 512 {
+                let chunk_size = blockalign as usize * 512;
+                let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
+                file.write_all(&chunk)
+                    .map_err(|e| format!("Write loopback chunk: {e}"))?;
+                total_data_bytes += chunk_size as u64;
+                batch_count += 1;
+                if batch_count % 50 == 0 {
+                    eprintln!(
+                        "[Snap Audio] loopback frame batch {batch_count} captured ({:.1} KB)",
+                        total_data_bytes as f64 / 1024.0
+                    );
+                }
             }
+        } else {
+            sample_queue.clear();
         }
 
         // Wait for more data with a short timeout so we can check is_recording
@@ -409,6 +436,7 @@ fn capture_microphone(
     mic_device_id: &str,
     output_path: std::path::PathBuf,
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
 ) -> std::result::Result<(), String> {
     initialize_mta()
         .ok()
@@ -513,19 +541,23 @@ fn capture_microphone(
             .read_from_device_to_deque(&mut sample_queue)
             .map_err(|e| format!("Mic read: {e}"))?;
 
-        while sample_queue.len() > blockalign as usize * 512 {
-            let chunk_size = blockalign as usize * 512;
-            let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
-            file.write_all(&chunk)
-                .map_err(|e| format!("Write mic chunk: {e}"))?;
-            total_data_bytes += chunk_size as u64;
-            batch_count += 1;
-            if batch_count % 50 == 0 {
-                eprintln!(
-                    "[Snap Audio] mic frame batch {batch_count} captured ({:.1} KB)",
-                    total_data_bytes as f64 / 1024.0
-                );
+        if !is_paused.load(Ordering::Relaxed) {
+            while sample_queue.len() > blockalign as usize * 512 {
+                let chunk_size = blockalign as usize * 512;
+                let chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
+                file.write_all(&chunk)
+                    .map_err(|e| format!("Write mic chunk: {e}"))?;
+                total_data_bytes += chunk_size as u64;
+                batch_count += 1;
+                if batch_count % 50 == 0 {
+                    eprintln!(
+                        "[Snap Audio] mic frame batch {batch_count} captured ({:.1} KB)",
+                        total_data_bytes as f64 / 1024.0
+                    );
+                }
             }
+        } else {
+            sample_queue.clear();
         }
 
         if h_event.wait_for_event(100).is_err() {

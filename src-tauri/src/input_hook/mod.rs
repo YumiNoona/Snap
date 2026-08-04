@@ -13,6 +13,10 @@ use rdev::EventType;
 /// Set to true while we want events logged. Toggled by start/stop commands.
 static IS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Set to true while the recording is paused — events are dropped so the log
+/// timeline matches the video timeline (which omits the paused segment).
+static IS_PAUSED: AtomicBool = AtomicBool::new(false);
+
 /// The single shared writer. None when not logging, Some when logging.
 static ACTIVE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
@@ -68,6 +72,9 @@ fn ensure_hook_started() {
 
             let callback = move |event: rdev::Event| {
                 if !IS_ACTIVE.load(Ordering::Relaxed) {
+                    return;
+                }
+                if IS_PAUSED.load(Ordering::Relaxed) {
                     return;
                 }
 
@@ -251,6 +258,15 @@ pub fn mark_capture_start() {
             let _ = writeln!(w, "{{\"type\":\"meta\",\"captureStartMs\":{ts}}}");
         }
     }
+}
+
+/// Pause (true) or resume (false) event logging — mirrors the recording pause
+/// so no events are written during the omitted segment.
+#[tauri::command]
+pub fn set_input_paused(paused: bool) -> std::result::Result<(), String> {
+    IS_PAUSED.store(paused, Ordering::SeqCst);
+    eprintln!("[Snap Input] Logging {}", if paused { "paused" } else { "resumed" });
+    Ok(())
 }
 
 // ── Stop input logging (async) ───────────────────────────────────────────────

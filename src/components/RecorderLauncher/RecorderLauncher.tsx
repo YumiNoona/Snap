@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import {
   Settings,
   Minus,
@@ -17,7 +18,6 @@ import {
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import TeleprompterWindow from "../Teleprompter/TeleprompterWindow";
-import FloatingToolbar from "./FloatingToolbar";
 import "./RecorderLauncher.css";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -36,17 +36,38 @@ interface AudioDevice {
 
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
+  editorError?: string | null;
 }
+
+type BorderStyle = "off" | "red" | "dashed";
+
+interface AppSettings {
+  borderStyle: BorderStyle;
+  countdown: boolean;
+}
+
+const SETTINGS_KEY = "snap.settings";
+const DEFAULT_SETTINGS: AppSettings = { borderStyle: "off", countdown: true };
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export default function RecorderLauncher({ onOpenEditor }: Props) {
+export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [_selectedTarget, setSelectedTarget] = useState("");
   const [selectedMic, setSelectedMic] = useState("default");
   const [selectedSpeaker, setSelectedSpeaker] = useState("default");
   const [selectedCamera, setSelectedCamera] = useState("OBS Virtual Camera");
+
+  // Settings (persisted)
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
+  const [showSettings, setShowSettings] = useState(false);
 
   // Navigation / Views
   const [activeView, setActiveView] = useState<"launcher" | "device">("launcher");
@@ -68,10 +89,31 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const pausedRef = useRef(false);
   const appWindow = getCurrentWindow();
 
-  // Countdown-then-record: shows 3→2→1 then starts actual recording
+  // Keep the ref in sync so the elapsed interval can pause without re-creating.
+  useEffect(() => {
+    pausedRef.current = isPaused;
+  }, [isPaused]);
+
+  // Persist settings
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      // ignore storage errors
+    }
+  }, [settings]);
+
+  // Countdown-then-record: shows 3→2→1 then starts actual recording.
+  // Respects the "countdown" setting — off starts immediately.
   const startWithCountdown = (targetId: string) => {
+    if (!settings.countdown) {
+      startRecording(targetId);
+      return;
+    }
     setCountdownValue(3);
     let count = 3;
     const tick = () => {
@@ -126,6 +168,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       } catch {
         // region unknown — editor falls back to full-desktop mapping
       }
+      regionRef.current = region;
       await invoke("start_input_logging", {
         outputPath: logPath,
         sessionStartTime: "0",
@@ -150,8 +193,26 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       setLastVideo(videoPath);
       setLastLog(logPath);
 
-      elapsedRef.current = setInterval(() => setElapsed((p) => p + 1), 1000);
+      elapsedRef.current = setInterval(
+        () => setElapsed((p) => (pausedRef.current ? p : p + 1)),
+        1000
+      );
       setRecordStatus("Recording");
+
+      // Show the floating dock on the desktop (its own small window).
+      invoke("set_dock_visible", { visible: true }).catch(() => {});
+      invoke("update_dock_state", {
+        snapshot: { recording: true, elapsed: 0, paused: false, mic_muted: false },
+      }).catch(() => {});
+
+      // Draw the recording-area border overlay (red / dashed / off).
+      if (settings.borderStyle !== "off") {
+        invoke("set_recording_overlay", {
+          enabled: true,
+          style: settings.borderStyle,
+          region: regionRef.current,
+        }).catch(() => {});
+      }
     } catch (e) {
       setRecordStatus(`Error: ${e}`);
     }
@@ -166,6 +227,13 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       try { await invoke("stop_audio_capture"); } catch { /* ignore */ }
       setRecording(false);
       setRecordStatus(`Done — ${count} events captured`);
+
+      // Hide the floating dock window + recording border overlay.
+      invoke("set_dock_visible", { visible: false }).catch(() => {});
+      invoke("set_recording_overlay", { enabled: false, style: "off", region: null }).catch(() => {});
+      invoke("set_overlay_paused", { paused: false }).catch(() => {});
+      setIsPaused(false);
+      pausedRef.current = false;
 
       // Open the recording in its own editor window
       if (lastVideo && lastLog) {
@@ -234,6 +302,56 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
   const microphones = audioDevices.filter((d) => d.device_type === "microphone");
   const speakers = audioDevices.filter((d) => d.device_type === "speaker");
 
+  // Pause (true) / resume (false) the recording on all capture backends, and
+  // keep the dock + overlay UI in sync. The paused segment is omitted from the
+  // video, input log, and audio tracks entirely.
+  const togglePause = () => {
+    const next = !isPaused;
+    setIsPaused(next);
+    pausedRef.current = next;
+    invoke("set_paused", { paused: next }).catch(() => {});
+    invoke("set_input_paused", { paused: next }).catch(() => {});
+    invoke("set_audio_paused", { paused: next }).catch(() => {});
+    setRecordStatus(next ? "Paused" : "Recording");
+  };
+
+  // Keep the floating dock window in sync with recording state.
+  useEffect(() => {
+    if (!recording) return;
+    invoke("update_dock_state", {
+      snapshot: { recording: true, elapsed, paused: isPaused, mic_muted: micMuted },
+    }).catch(() => {});
+    invoke("set_overlay_paused", { paused: isPaused }).catch(() => {});
+  }, [recording, elapsed, isPaused, micMuted]);
+
+  // Relay dock button presses (stop / pause / mic) back to this window.
+  const actionHandlersRef = useRef<{ stop: () => void }>({ stop: () => {} });
+  useEffect(() => {
+    actionHandlersRef.current = { stop: stopRecording };
+  });
+
+  useEffect(() => {
+    const un = listen<string>("dock-action", (e) => {
+      if (e.payload === "stop") {
+        actionHandlersRef.current.stop();
+      } else if (e.payload === "pause") {
+        togglePause();
+      } else if (e.payload === "mic") {
+        setMicMuted((m) => !m);
+      }
+    });
+    return () => {
+      un.then((fn) => fn());
+    };
+  });
+
+  // Safety: never leave the dock floating if this window goes away.
+  useEffect(() => {
+    return () => {
+      invoke("set_dock_visible", { visible: false }).catch(() => {});
+    };
+  }, []);
+
   // Sub-view: Device Connection (image_1.png / image_2.png)
   if (activeView === "device") {
     return <DeviceView onBack={() => setActiveView("launcher")} />;
@@ -286,7 +404,7 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         </div>
 
         <div className="titlebar-right">
-          <button className="titlebar-icon-btn" title="Settings">
+          <button className="titlebar-icon-btn" title="Settings" onClick={() => setShowSettings(true)}>
             <Settings size={15} />
           </button>
 
@@ -309,7 +427,6 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         {/* Left: Recording Modes Grid */}
         <div className="recording-modes-area">
           <h2 className="section-heading">Pick a mode to start recording</h2>
-          <p className="section-sub">Selecting a mode starts recording after a 3, 2, 1 countdown</p>
 
           <div className="focusee-mode-cards-grid">
             {/* Card 1: Full Screen */}
@@ -359,6 +476,12 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
 
           {recordStatus && (
             <p className="launcher-status-text">{recordStatus}</p>
+          )}
+
+          {editorError && (
+            <p className="launcher-status-text" style={{ color: "var(--danger)" }}>
+              Editor error: {editorError}
+            </p>
           )}
 
           {lastVideo && lastLog && !recording && (
@@ -430,11 +553,6 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
             <FileText size={15} />
             Teleprompter
           </button>
-
-          <p className="sidebar-hint">
-            Modes start recording immediately after a countdown. Use the floating
-            dock at the bottom to pause, mute, or stop.
-          </p>
         </aside>
       </div>
 
@@ -485,16 +603,44 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         </div>
       )}
 
-      {/* ── Floating Recording Dock (separate, center-bottom) ─────── */}
-      {recording && (
-        <FloatingToolbar
-          elapsed={elapsed}
-          onStop={stopRecording}
-          onPauseToggle={() => setIsPaused(!isPaused)}
-          isPaused={isPaused}
-          onMicToggle={() => setMicMuted(!micMuted)}
-          micMuted={micMuted}
-        />
+      {/* ── Settings Modal ──────────────────────────────────────── */}
+      {showSettings && (
+        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+          <div className="focusee-modal-card settings-card" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-modal-header">
+              <h3>Settings</h3>
+              <button className="settings-close-btn" title="Close" onClick={() => setShowSettings(false)}>
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="settings-section">
+              <span className="settings-label">Recording Border</span>
+              <div className="segmented-control">
+                {(["off", "red", "dashed"] as BorderStyle[]).map((s) => (
+                  <button
+                    key={s}
+                    className={`segment ${settings.borderStyle === s ? "active" : ""}`}
+                    onClick={() => setSettings({ ...settings, borderStyle: s })}
+                  >
+                    {s === "off" ? "Off" : s === "red" ? "Red" : "Dashed White"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-section toggle-row">
+              <span className="settings-label">3-2-1 Countdown</span>
+              <div
+                className={`toggle-switch ${settings.countdown ? "on" : ""}`}
+                onClick={() => setSettings({ ...settings, countdown: !settings.countdown })}
+                title={settings.countdown ? "Countdown on — disable to start instantly" : "Countdown off — starts immediately"}
+              >
+                <div className="toggle-knob" />
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── File Browser Modal ─────────────────────────────────────── */}

@@ -87,6 +87,7 @@ pub fn get_videos_dir() -> std::result::Result<String, String> {
 
 struct CaptureHandle {
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
     done_rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
 }
 
@@ -205,21 +206,37 @@ pub async fn start_recording(
     }
 
     let is_recording = Arc::new(AtomicBool::new(true));
+    let is_paused = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let is_rec_clone = is_recording.clone();
+    let is_paused_clone = is_paused.clone();
 
     // Use std::thread::spawn instead of tokio::task::spawn_blocking to guarantee
     // a fresh thread with no prior COM initialization (avoids RPC_E_CHANGED_MODE).
     thread::spawn(move || {
-        let result = run_capture_thread(&target_id, &output_path, is_rec_clone);
+        let result = run_capture_thread(&target_id, &output_path, is_rec_clone, is_paused_clone);
         let _ = done_tx.send(result);
     });
 
     *guard = Some(CaptureHandle {
         is_recording,
+        is_paused,
         done_rx,
     });
 
+    Ok(())
+}
+
+/// Pause (true) or resume (false) the current recording. While paused, no
+/// video frames are written to FFmpeg — the paused segment is omitted from
+/// the output file entirely.
+#[tauri::command]
+pub fn set_paused(paused: bool) -> std::result::Result<(), String> {
+    let guard = STATE.lock().map_err(|e| e.to_string())?;
+    if let Some(handle) = guard.as_ref() {
+        handle.is_paused.store(paused, Ordering::SeqCst);
+        eprintln!("[Snap] Recording {}paused", if paused { "" } else { "un" });
+    }
     Ok(())
 }
 
@@ -248,6 +265,7 @@ fn run_capture_thread(
     target_id: &str,
     output_path: &str,
     is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
 ) -> std::result::Result<(), String> {
     // Resolve the absolute output path now, before we hand it to FFmpeg
     let abs_path = match std::path::absolute(output_path) {
@@ -338,6 +356,21 @@ fn run_capture_thread(
         let mut staging_cache: Option<(ID3D11Texture2D, u32, u32)> = None;
 
         while is_recording.load(Ordering::Relaxed) {
+            // Pause gate: while paused, drain and drop frames so the paused
+            // segment is omitted from the video entirely. On resume, reset the
+            // pacing target to avoid a burst of catch-up frames.
+            if is_paused.load(Ordering::Relaxed) {
+                while is_paused.load(Ordering::Relaxed) && is_recording.load(Ordering::Relaxed) {
+                    let _ = frame_pool.TryGetNextFrame();
+                    thread::sleep(Duration::from_millis(10));
+                }
+                if !is_recording.load(Ordering::Relaxed) {
+                    break;
+                }
+                next_target = Instant::now() + frame_interval;
+                continue;
+            }
+
             let now = Instant::now();
             match frame_pool.TryGetNextFrame() {
                 Ok(frame) => {

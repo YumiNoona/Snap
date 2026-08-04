@@ -17,6 +17,38 @@
         "width": 920,
         "height": 320,
         "decorations": false
+      },
+      {
+        "label": "dock",
+        "title": "Snap Recorder",
+        "width": 460,
+        "height": 74,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "shadow": false,
+        "focus": false,
+        "visible": false
+      },
+      {
+        "label": "recorder-overlay",
+        "title": "Snap Overlay",
+        "width": 1920,
+        "height": 1080,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "shadow": false,
+        "focus": false,
+        "visible": false
       }
     ],
     "security": {
