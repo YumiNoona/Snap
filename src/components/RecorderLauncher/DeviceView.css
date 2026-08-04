@@ -1,0 +1,378 @@
+.device-view-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  background: #0f0f13;
+  color: #e4e4e4;
+  padding: 24px 36px;
+  overflow-y: auto;
+}
+
+.device-view-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.device-view-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 12px;
+}
+
+.device-dropdown-wrap {
+  width: 440px;
+}
+
+.device-select-input {
+  width: 100%;
+  background: #18181f;
+  border: 1px solid #2a2a36;
+  border-radius: 8px;
+  padding: 10px 16px;
+  color: #cccccc;
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.device-select-input:hover {
+  border-color: #3b82f6;
+}
+
+/* ── OS Selection Content (image_1.png) ─────────────────────────── */
+
+.os-selection-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.os-cards-container {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 28px;
+}
+
+.os-card {
+  width: 220px;
+  height: 310px;
+  background: #16161e;
+  border: 1px solid #282836;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+
+.os-card:hover {
+  border-color: #3b82f6;
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(59, 130, 246, 0.15);
+}
+
+.os-card-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #a0a0b8;
+  margin-bottom: 16px;
+  align-self: flex-start;
+}
+
+.phone-frame {
+  width: 130px;
+  height: 230px;
+  background: #e2e2e8;
+  border-radius: 26px;
+  border: 3px solid #b0b0be;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 8px rgba(0,0,0,0.1);
+}
+
+.dynamic-island {
+  position: absolute;
+  top: 10px;
+  width: 32px;
+  height: 10px;
+  background: #111;
+  border-radius: 6px;
+}
+
+.punch-hole {
+  position: absolute;
+  top: 12px;
+  width: 8px;
+  height: 8px;
+  background: #111;
+  border-radius: 50%;
+}
+
+.phone-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.apple-logo, .android-logo {
+  width: 44px;
+  height: 44px;
+  color: #1a1a24;
+}
+
+.os-prompt-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  margin-bottom: 12px;
+}
+
+.os-compatible-links {
+  font-size: 13px;
+  color: #8888a0;
+  margin-bottom: 24px;
+}
+
+.os-compatible-links a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.os-compatible-links a:hover {
+  text-decoration: underline;
+}
+
+.device-back-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  color: #8888a0;
+  background: #181822;
+  border: 1px solid #2a2a38;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.device-back-btn:hover {
+  color: #ffffff;
+  border-color: #44445c;
+}
+
+/* ── Guide Content (image_2.png) ─────────────────────────────────── */
+
+.device-guide-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+
+.guide-back-link {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: 14px;
+  color: #a0a0b8;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.guide-back-link:hover {
+  color: #ffffff;
+}
+
+.guide-steps-container {
+  display: flex;
+  gap: 24px;
+  margin-top: 16px;
+  margin-bottom: 32px;
+}
+
+.guide-step-card {
+  width: 210px;
+  height: 280px;
+  background: #15151e;
+  border: 1px solid #242434;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.step-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #777790;
+  margin-bottom: 12px;
+  align-self: flex-start;
+}
+
+.step-phone-illustration {
+  width: 150px;
+  height: 220px;
+  background: #0d0d14;
+  border-radius: 16px;
+  border: 2px solid #2e2e42;
+  padding: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.phone-mockup-inner {
+  width: 100%;
+  height: 100%;
+  background: #1a1a26;
+  border-radius: 10px;
+  position: relative;
+  padding: 8px;
+  font-size: 10px;
+  color: #aaa;
+}
+
+.mockup-header {
+  font-weight: 600;
+  font-size: 9px;
+  color: #777;
+  margin-bottom: 8px;
+}
+
+.mockup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px;
+  background: #222232;
+  border-radius: 4px;
+}
+
+.mockup-item.highlighted {
+  border: 1px solid #3b82f6;
+  box-shadow: 0 0 12px rgba(59,130,246,0.3);
+}
+
+.mockup-switch {
+  width: 20px;
+  height: 10px;
+  background: #3b82f6;
+  border-radius: 6px;
+}
+
+.mockup-dialog {
+  background: #ffffff;
+  color: #111118;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 24px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+}
+
+.dialog-title {
+  font-size: 10px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.dialog-body {
+  font-size: 8px;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #666;
+}
+
+.dialog-ok {
+  color: #3b82f6;
+}
+
+.dialog-radio {
+  font-size: 9px;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+}
+
+.radio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+
+}
+
+.radio-dot-off {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid #ccc;
+}
+
+.mockup-touch-pointer {
+  position: absolute;
+  bottom: 20px;
+  right: 15px;
+  width: 18px;
+  height: 18px;
+  background: radial-gradient(circle, #f97316 40%, transparent 70%);
+  border-radius: 50%;
+  box-shadow: 0 0 10px #f97316;
+}
+
+.guide-instructions-footer {
+  text-align: center;
+  max-width: 680px;
+}
+
+.guide-instructions-footer h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 16px;
+}
+
+.guide-instructions-footer ol {
+  text-align: left;
+  font-size: 13px;
+  color: #a0a0b8;
+  line-height: 1.8;
+  margin-bottom: 20px;
+  padding-left: 20px;
+}
+
+.guide-instructions-footer a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.guide-instructions-footer a:hover {
+  text-decoration: underline;
+}
+
+.not-recognized-link {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #3b82f6;
+}

@@ -1,0 +1,291 @@
+import { useState, useEffect, useRef } from "react";
+import "./TeleprompterWindow.css";
+
+interface Props {
+  onClose: () => void;
+}
+
+const DEFAULT_SCRIPT = `Welcome to Snap Screen Recorder!
+
+This is your dedicated Teleprompter window. You can drag it anywhere on screen while recording your presentation, gaming, or tutorial.
+
+Features built for seamless recording:
+1. Auto-scroll with word-by-word karaoke highlighting so you never lose your place.
+2. Customizable Reading Speed (WPM), Font Size, and Window Opacity.
+3. Mirror Text Mode for hardware teleprompter glass setups.
+4. Floating overlay that stays accessible over any app or browser window.
+
+Type your script in Edit mode, then press Start Prompt to begin reading!`;
+
+export default function TeleprompterWindow({ onClose }: Props) {
+  const [mode, setMode] = useState<"edit" | "prompt">("prompt");
+  const [script, setScript] = useState(DEFAULT_SCRIPT);
+  
+  // Prompter controls
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [wpm, setWpm] = useState(150); // Words per minute
+  const [fontSize, setFontSize] = useState(28);
+  const [opacity, setOpacity] = useState(0.92);
+  const [isFlipped, setIsFlipped] = useState(false);
+  
+  // Position & Drag state for floating window
+  const [pos, setPos] = useState({ x: Math.max(20, (window.innerWidth - 620) / 2), y: 40 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+
+  // Scroll & Word reveal tracking
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const words = script.split(/(\s+)/);
+  const [currentWordIdx, setCurrentWordIdx] = useState(0);
+
+  // Calculate total non-whitespace words
+  const actualWordCount = words.filter((w) => w.trim().length > 0).length;
+
+  // Handle Dragging window around screen
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest(".teleprompter-controls, button, input, textarea")) return;
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e: MouseEvent) => {
+      setPos({
+        x: Math.max(0, Math.min(window.innerWidth - 300, e.clientX - dragStart.current.x)),
+        y: Math.max(0, Math.min(window.innerHeight - 200, e.clientY - dragStart.current.y)),
+      });
+    };
+    const onUp = () => setIsDragging(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isDragging]);
+
+  // Word-by-word reveal & auto scroll timer
+  useEffect(() => {
+    if (!isPlaying || mode !== "prompt") return;
+
+    // Time per word in ms based on WPM
+    const msPerWord = (60 / Math.max(30, wpm)) * 1000;
+
+    const interval = setInterval(() => {
+      setCurrentWordIdx((prev) => {
+        const next = prev + 1;
+        if (next >= words.length) {
+          setIsPlaying(false);
+          return prev;
+        }
+
+        // Auto-scroll active word into center view smoothly
+        const wordEl = document.getElementById(`tp-word-${next}`);
+        if (wordEl && scrollRef.current) {
+          const container = scrollRef.current;
+          const wordTop = wordEl.offsetTop - container.offsetTop;
+          const targetScroll = wordTop - container.clientHeight / 2 + 40;
+          container.scrollTo({ top: targetScroll, behavior: "smooth" });
+        }
+
+        return next;
+      });
+    }, msPerWord);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, mode, wpm, words.length]);
+
+  const resetPrompt = () => {
+    setIsPlaying(false);
+    setCurrentWordIdx(0);
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
+  return (
+    <div
+      className="teleprompter-standalone-window"
+      style={{
+        left: `${pos.x}px`,
+        top: `${pos.y}px`,
+        opacity: opacity,
+      }}
+      onMouseDown={handleMouseDown}
+    >
+      {/* Drag Titlebar */}
+      <div className="tp-titlebar">
+        <div className="tp-drag-handle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+            <circle cx="9" cy="5" r="1" />
+            <circle cx="9" cy="12" r="1" />
+            <circle cx="9" cy="19" r="1" />
+            <circle cx="15" cy="5" r="1" />
+            <circle cx="15" cy="12" r="1" />
+            <circle cx="15" cy="19" r="1" />
+          </svg>
+          <span className="tp-window-title">Teleprompter</span>
+        </div>
+
+        <div className="tp-mode-tabs">
+          <button
+            className={`tp-tab-btn ${mode === "prompt" ? "active" : ""}`}
+            onClick={() => { setMode("prompt"); resetPrompt(); }}
+          >
+            Prompter
+          </button>
+          <button
+            className={`tp-tab-btn ${mode === "edit" ? "active" : ""}`}
+            onClick={() => { setMode("edit"); setIsPlaying(false); }}
+          >
+            Edit Script
+          </button>
+        </div>
+
+        <button className="tp-close-btn" onClick={onClose} title="Close Teleprompter">
+          ✕
+        </button>
+      </div>
+
+      {/* Main Body */}
+      {mode === "edit" ? (
+        <div className="tp-edit-body">
+          <textarea
+            className="tp-script-textarea"
+            value={script}
+            onChange={(e) => setScript(e.target.value)}
+            placeholder="Type or paste your script here..."
+          />
+          <div className="tp-edit-footer">
+            <span className="tp-word-count">{actualWordCount} words</span>
+            <button className="tp-start-btn" onClick={() => { setMode("prompt"); resetPrompt(); }}>
+              Start Prompting
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="tp-prompt-body">
+          {/* Active Reading Center Line Marker */}
+          <div className="tp-reading-marker" />
+
+          <div
+            className={`tp-scroll-container ${isFlipped ? "flipped" : ""}`}
+            ref={scrollRef}
+            style={{ fontSize: `${fontSize}px` }}
+          >
+            <div className="tp-text-wrapper">
+              {words.map((word, idx) => {
+                const isWhitespace = /^\s+$/.test(word);
+                if (isWhitespace) {
+                  return <span key={idx}>{word}</span>;
+                }
+
+                const isCurrent = idx === currentWordIdx;
+                const isPast = idx < currentWordIdx;
+
+                return (
+                  <span
+                    id={`tp-word-${idx}`}
+                    key={idx}
+                    className={`tp-word ${isCurrent ? "current" : ""} ${isPast ? "past" : ""}`}
+                    onClick={() => {
+                      setCurrentWordIdx(idx);
+                      const wordEl = document.getElementById(`tp-word-${idx}`);
+                      if (wordEl && scrollRef.current) {
+                        scrollRef.current.scrollTo({
+                          top: wordEl.offsetTop - scrollRef.current.clientHeight / 2,
+                          behavior: "smooth",
+                        });
+                      }
+                    }}
+                  >
+                    {word}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Floating Control Toolbar */}
+          <div className="teleprompter-controls">
+            <button
+              className={`tp-play-btn ${isPlaying ? "playing" : ""}`}
+              onClick={() => setIsPlaying(!isPlaying)}
+            >
+              {isPlaying ? (
+                <>
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                    <rect x="6" y="4" width="4" height="16" rx="1" />
+                    <rect x="14" y="4" width="4" height="16" rx="1" />
+                  </svg>
+                  Pause
+                </>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                  Start
+                </>
+              )}
+            </button>
+
+            <button className="tp-icon-btn" onClick={resetPrompt} title="Reset to Top">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+            </button>
+
+            <div className="tp-control-item">
+              <label>Speed</label>
+              <input
+                type="range"
+                min={60}
+                max={320}
+                step={5}
+                value={wpm}
+                onChange={(e) => setWpm(Number(e.target.value))}
+              />
+              <span className="tp-val">{wpm} WPM</span>
+            </div>
+
+            <div className="tp-control-item">
+              <label>Font</label>
+              <input
+                type="range"
+                min={18}
+                max={48}
+                step={2}
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+              />
+              <span className="tp-val">{fontSize}px</span>
+            </div>
+
+            <div className="tp-control-item">
+              <label>Opacity</label>
+              <input
+                type="range"
+                min={0.3}
+                max={1.0}
+                step={0.05}
+                value={opacity}
+                onChange={(e) => setOpacity(Number(e.target.value))}
+              />
+            </div>
+
+            <button
+              className={`tp-icon-btn ${isFlipped ? "active" : ""}`}
+              onClick={() => setIsFlipped(!isFlipped)}
+              title="Flip / Mirror Text for Glass Teleprompter"
+            >
+              Flip
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

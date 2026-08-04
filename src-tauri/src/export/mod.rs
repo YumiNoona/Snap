@@ -56,7 +56,6 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
     let bg = cfg.background_color.trim_start_matches('#');
     let bg_ffmpeg = format!("0x{bg}");
 
-    let size = format!("{}x{}", settings.width, settings.height);
     let pad = cfg.padding;
     let inner_w = settings.width.saturating_sub(pad * 2);
     let inner_h = settings.height.saturating_sub(pad * 2);
@@ -74,18 +73,21 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
         "-r".into(), settings.fps.to_string(),
     ];
 
+    let w = settings.width;
+    let h = settings.height;
+
     // Build complex filtergraph for pan/zoom + background
     if cfg.zoom_enabled && !cfg.keyframes.is_empty() {
         let zoom_expr = build_zoompan_expr(&cfg.keyframes, settings.fps, inner_w, inner_h);
         args.push("-vf".into());
         args.push(format!(
-            "pad={size}:{pad}:{pad}:{bg_ffmpeg},{}",
+            "pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg},{}",
             zoom_expr
         ));
     } else {
         args.push("-vf".into());
         args.push(format!(
-            "scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,pad={size}:{pad}:{pad}:{bg_ffmpeg}"
+            "scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg}"
         ));
     }
 

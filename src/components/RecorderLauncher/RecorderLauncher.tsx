@@ -2,9 +2,29 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import RegionSelector from "./RegionSelector";
+import DeviceView from "./DeviceView";
+import TeleprompterWindow from "../Teleprompter/TeleprompterWindow";
+import FloatingToolbar from "./FloatingToolbar";
 import "./RecorderLauncher.css";
 
 // ── SVG Icons ───────────────────────────────────────────────────────────────
+
+function SnapLogo() {
+  return (
+    <svg viewBox="0 0 32 32" fill="none" width="24" height="24">
+      <circle cx="16" cy="16" r="14" fill="url(#snap_logo_grad)" />
+      <circle cx="16" cy="16" r="6" fill="#0d0d12" />
+      <path d="M16 6 A 10 10 0 0 1 26 16" stroke="#ffffff" strokeWidth="2.5" strokeLinecap="round" />
+      <defs>
+        <linearGradient id="snap_logo_grad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#3b82f6" />
+          <stop offset="0.5" stopColor="#a855f7" />
+          <stop offset="1" stopColor="#ec4899" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
 
 function SettingsIcon() {
   return (
@@ -40,93 +60,41 @@ function MaximizeIcon() {
   );
 }
 
-function FullScreenIcon() {
+function CameraIcon() {
   return (
-    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="6" width="40" height="28" rx="3" />
-      <line x1="8" y1="38" x2="40" y2="38" />
-      <line x1="24" y1="38" x2="24" y2="42" />
-      <line x1="14" y1="42" x2="34" y2="42" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18">
+      <rect x="2" y="5" width="15" height="14" rx="3" />
+      <path d="M17 9l5-3v12l-5-3" />
     </svg>
   );
 }
 
-function CustomIcon() {
+function MicIcon() {
   return (
-    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="10" y="8" width="28" height="32" rx="2" />
-      <line x1="10" y1="16" x2="20" y2="8" />
-      <line x1="18" y1="38" x2="28" y2="14" />
-      <line x1="38" y1="16" x2="38" y2="40" />
-      <circle cx="30" cy="26" r="2" fill="currentColor" />
-      <circle cx="16" cy="30" r="2" fill="currentColor" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3M8 22h8" />
     </svg>
   );
 }
 
-function WindowIcon() {
+function SpeakerIcon() {
   return (
-    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="8" width="38" height="32" rx="3" />
-      <line x1="5" y1="18" x2="43" y2="18" />
-      <circle cx="13" cy="13" r="1.5" fill="currentColor" />
-      <circle cx="18.5" cy="13" r="1.5" fill="currentColor" />
-      <circle cx="24" cy="13" r="1.5" fill="currentColor" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
     </svg>
   );
 }
 
-function DeviceIcon() {
+function TeleprompterIcon() {
   return (
-    <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="4" y="10" width="32" height="24" rx="3" />
-      <circle cx="20" cy="22" r="3" />
-      <path d="M20 22 L20 10" />
-      <rect x="16" y="36" width="8" height="2" rx="1" />
-      <rect x="38" y="14" width="6" height="16" rx="1" />
-      <line x1="41" y1="18" x2="41" y2="26" strokeWidth="3" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="18" height="18">
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <line x1="7" y1="9" x2="17" y2="9" />
+      <line x1="7" y1="13" x2="17" y2="13" />
     </svg>
-  );
-}
-
-function DebugIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-    </svg>
-  );
-}
-
-function ChevronDown() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  );
-}
-
-function StopIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-      <rect x="5" y="5" width="14" height="14" rx="2" />
-    </svg>
-  );
-}
-
-// ── Mode card ───────────────────────────────────────────────────────────────
-
-interface ModeCardProps {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}
-
-function ModeCard({ icon, label, onClick }: ModeCardProps) {
-  return (
-    <button className="mode-card" onClick={onClick}>
-      <div className="mode-card-icon">{icon}</div>
-      <span className="mode-card-label">{label}</span>
-    </button>
   );
 }
 
@@ -148,34 +116,54 @@ interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
 }
 
-// ── Main component ──────────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────────────
 
 export default function RecorderLauncher({ onOpenEditor }: Props) {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
-  const [selectedTarget, setSelectedTarget] = useState("");
+  const [_selectedTarget, setSelectedTarget] = useState("");
   const [selectedMic, setSelectedMic] = useState("default");
   const [selectedSpeaker, setSelectedSpeaker] = useState("default");
+  const [selectedCamera, setSelectedCamera] = useState("OBS Virtual Camera");
 
-  // UI state
+  // Navigation / Views
+  const [activeView, setActiveView] = useState<"launcher" | "device">("launcher");
+  const [showTeleprompter, setShowTeleprompter] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showDebug, setShowDebug] = useState(false);
   const [showWindowPicker, setShowWindowPicker] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [fileList, setFileList] = useState<{ name: string; path: string }[]>([]);
-  const [browseDir, setBrowseDir] = useState("");
-  const [settingsOutputDir, setSettingsOutputDir] = useState("");
 
-  // Recording state
+  // Recording
   const [recording, setRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [micMuted, setMicMuted] = useState(false);
   const [recordStatus, setRecordStatus] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [lastVideo, setLastVideo] = useState("");
   const [lastLog, setLastLog] = useState("");
+  const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appWindow = getCurrentWindow();
+
+  // Countdown-then-record: shows 3→2→1 then starts actual recording
+  const startWithCountdown = (targetId: string) => {
+    setCountdownValue(3);
+    let count = 3;
+    const tick = () => {
+      count -= 1;
+      if (count > 0) {
+        setCountdownValue(count);
+        countdownRef.current = setTimeout(tick, 1000);
+      } else {
+        setCountdownValue(null);
+        startRecording(targetId);
+      }
+    };
+    countdownRef.current = setTimeout(tick, 1000);
+  };
 
   // ── Load devices ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -194,17 +182,13 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       } catch (e) {
         console.error("Failed to enumerate audio devices:", e);
       }
-      try {
-        const dir = await invoke<string>("get_videos_dir");
-        setSettingsOutputDir(dir);
-      } catch { /* ignore */ }
     })();
   }, []);
 
-  // ── Start recording ────────────────────────────────────────────────────
+  // ── Recording Actions ──────────────────────────────────────────────────
   const startRecording = async (targetId: string) => {
     try {
-      const videosDir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const videosDir = await invoke<string>("get_videos_dir");
       const stamp = Date.now();
       const videoPath = `${videosDir}\\snap_${stamp}.mp4`;
       const logPath = `${videosDir}\\snap_${stamp}.jsonl`;
@@ -216,10 +200,11 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       try {
         await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir: audioDir });
       } catch (e) {
-        console.error("Audio capture start failed:", e);
+        console.error("Audio capture failed:", e);
       }
 
       setRecording(true);
+      setIsPaused(false);
       setElapsed(0);
       setLastVideo(videoPath);
       setLastLog(logPath);
@@ -237,32 +222,35 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       setRecordStatus("Stopping...");
       await invoke("stop_recording");
       const count = await invoke<number>("stop_input_logging");
-      try { await invoke("stop_audio_capture"); } catch { /* audio may not have started */ }
+      try { await invoke("stop_audio_capture"); } catch { /* ignore */ }
       setRecording(false);
       setRecordStatus(`Done — ${count} events captured`);
+
+      // Open directly in Editor
+      if (lastVideo && lastLog) {
+        onOpenEditor(lastVideo, lastLog);
+      }
     } catch (e) {
       setRecording(false);
       setRecordStatus(`Stop error: ${e}`);
     }
   };
 
-  // ── Mode handlers ──────────────────────────────────────────────────────
   const handleFullScreen = async () => {
     const monitor = targets.find((t) => t.target_type === "monitor");
     if (!monitor) { setRecordStatus("No monitor found"); return; }
-    await startRecording(monitor.id);
+    setSelectedTarget(monitor.id);
+    startWithCountdown(monitor.id);
   };
 
   const handleWindow = () => {
-    const windows = targets.filter((t) => t.target_type === "window");
-    if (windows.length === 0) { setRecordStatus("No windows found"); return; }
     setShowWindowPicker(true);
   };
 
   const handlePickWindow = async (id: string) => {
     setShowWindowPicker(false);
     setSelectedTarget(id);
-    await startRecording(id);
+    startWithCountdown(id);
   };
 
   const handleCustom = () => {
@@ -272,79 +260,42 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
   const handleRegionSelect = async (region: { x: number; y: number; w: number; h: number }) => {
     setShowRegionSelector(false);
     const monitor = targets.find((t) => t.target_type === "monitor");
-    if (!monitor) { setRecordStatus("No monitor found"); return; }
-    // Store region info for future export cropping; record full monitor for now
+    if (!monitor) return;
+    setSelectedTarget(monitor.id);
     setRecordStatus(`Recording region ${region.w}x${region.h}`);
-    await startRecording(monitor.id);
+    startWithCountdown(monitor.id);
   };
 
   const handleDevice = () => {
-    document.getElementById("video-device")?.focus();
+    setActiveView("device");
   };
 
-  // File menu handlers
   const handleOpenRecording = async () => {
     setShowFileMenu(false);
     try {
-      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
+      const dir = await invoke<string>("get_videos_dir");
       const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: dir });
       const recordings = files
-        .filter((f) => !f.is_dir && (f.name.endsWith(".mp4") || f.name.endsWith(".jsonl")))
+        .filter((f) => !f.is_dir && f.name.endsWith(".mp4"))
         .map((f) => ({ name: f.name, path: f.path }));
       setFileList(recordings);
-      setBrowseDir(dir);
       setShowFileBrowser(true);
     } catch (e) {
       setRecordStatus(`Cannot browse: ${e}`);
     }
   };
 
-  const handleOpenOutputFolder = () => {
-    setShowFileMenu(false);
-    (async () => {
-      try {
-        const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
-        await invoke("open_explorer", { path: dir });
-      } catch (e) {
-        setRecordStatus(`Cannot open folder: ${e}`);
-      }
-    })();
-  };
-
-  const handleOpenFile = (videoPath: string) => {
-    const logPath = videoPath.replace(/\.mp4$/i, ".jsonl");
-    setShowFileBrowser(false);
-    setShowFileMenu(false);
-    onOpenEditor(videoPath, logPath);
-  };
-
-  // ── Keyboard: Space to stop ────────────────────────────────────────────
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === " " && recording && !(e.target as HTMLElement)?.closest("input,select,textarea")) {
-        e.preventDefault();
-        stopRecording();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [recording]);
-
-  // ── Close menus on click outside ───────────────────────────────────────
-  useEffect(() => {
-    if (!showFileMenu) return;
-    const onClick = () => setShowFileMenu(false);
-    setTimeout(() => document.addEventListener("click", onClick), 50);
-    return () => document.removeEventListener("click", onClick);
-  }, [showFileMenu]);
-
   const microphones = audioDevices.filter((d) => d.device_type === "microphone");
   const speakers = audioDevices.filter((d) => d.device_type === "speaker");
 
-  // ── Render ─────────────────────────────────────────────────────────────
+  // Sub-view: Device Connection (image_1.png / image_2.png)
+  if (activeView === "device") {
+    return <DeviceView onBack={() => setActiveView("launcher")} />;
+  }
+
   return (
     <div className="app-layout">
-      {/* ── Titlebar ───────────────────────────────────────────────── */}
+      {/* ── Topbar (FocuSee Header Style) ────────────────────────── */}
       <header className="titlebar">
         <div
           className="titlebar-drag-area"
@@ -354,24 +305,34 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
           }}
         />
         <div className="titlebar-left">
-          <span className="app-name">Snap</span>
+          <div className="brand-logo-area">
+            <SnapLogo />
+            <span className="app-name">Snap</span>
+          </div>
+
           <div className="menu-wrap">
             <span
               className="menu-item"
               onClick={(e) => { e.stopPropagation(); setShowFileMenu(!showFileMenu); }}
             >
-              File <ChevronDown />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" width="14" height="14">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              File
             </span>
             {showFileMenu && (
               <div className="dropdown-menu" onClick={(e) => e.stopPropagation()}>
                 <button className="dropdown-item" onClick={handleOpenRecording}>
                   Open Recording...
                 </button>
-                <button className="dropdown-item" onClick={handleOpenOutputFolder}>
+                <button className="dropdown-item" onClick={async () => {
+                  const dir = await invoke<string>("get_videos_dir");
+                  await invoke("open_explorer", { path: dir });
+                }}>
                   Output Folder
                 </button>
                 <div className="dropdown-divider" />
-                <button className="dropdown-item danger" onClick={() => { setShowFileMenu(false); appWindow.close(); }}>
+                <button className="dropdown-item danger" onClick={() => appWindow.close()}>
                   Exit
                 </button>
               </div>
@@ -380,183 +341,184 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         </div>
 
         <div className="titlebar-right">
-          <button
-            className={`titlebar-icon ${showDebug ? "active" : ""}`}
-            title="Debug"
-            onClick={() => setShowDebug(!showDebug)}
-          >
-            <DebugIcon />
-          </button>
-          <button
-            className={`titlebar-icon ${showSettings ? "active" : ""}`}
-            title="Settings"
-            onClick={() => setShowSettings(!showSettings)}
-          >
+          <button className="titlebar-icon-btn" title="Settings">
             <SettingsIcon />
           </button>
-          <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
-            <MinimizeIcon />
-          </button>
-          <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
-            <MaximizeIcon />
-          </button>
-          <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
-            <CloseIcon />
-          </button>
+
+          <div className="window-controls">
+            <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
+              <MinimizeIcon />
+            </button>
+            <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
+              <MaximizeIcon />
+            </button>
+            <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
+              <CloseIcon />
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* ── Settings panel ─────────────────────────────────────────── */}
-      {showSettings && (
-        <div className="settings-panel">
-          <div className="settings-row">
-            <label>Output Directory</label>
-            <input
-              type="text"
-              className="field-input"
-              value={settingsOutputDir}
-              onChange={(e) => setSettingsOutputDir(e.target.value)}
-            />
-          </div>
-          <p className="settings-hint">Recordings are saved to this folder.</p>
-        </div>
-      )}
-
-      {/* ── Main content ───────────────────────────────────────────── */}
+      {/* ── Main Workspace ─────────────────────────────────────── */}
       <div className="main-content">
-        <div className="recording-modes">
-          {!recording ? (
-            <>
-              <h2>Please select the recording mode</h2>
-              <div className="mode-cards">
-                <ModeCard icon={<FullScreenIcon />} label="Full Screen" onClick={handleFullScreen} />
-                <ModeCard icon={<CustomIcon />} label="Custom" onClick={handleCustom} />
-                <ModeCard icon={<WindowIcon />} label="Window" onClick={handleWindow} />
-                <ModeCard icon={<DeviceIcon />} label="Device" onClick={handleDevice} />
+        {/* Left: Recording Modes Grid (image_0.png) */}
+        <div className="recording-modes-area">
+          <h2 className="section-heading">Please select the recording mode</h2>
+
+          <div className="focusee-mode-cards-grid">
+            {/* Card 1: Full Screen */}
+            <div className="focusee-card" onClick={handleFullScreen}>
+              <div className="card-thumb-frame">
+                <div className="wallpaper-preview full-screen-preview" />
               </div>
-              {recordStatus && (
-                <p className="record-status-msg">{recordStatus}</p>
-              )}
-            </>
-          ) : (
-            <div className="recording-active">
-              <div className="recording-indicator">
-                <span className="rec-dot" />
-                <span className="rec-text">REC</span>
-                <span className="rec-time">{formatTime(elapsed)}</span>
-              </div>
-              <p className="rec-target">
-                {targets.find((t) => t.id === selectedTarget)?.name ?? selectedTarget}
-              </p>
-              <button className="stop-btn" onClick={stopRecording}>
-                <StopIcon />
-                Stop Recording
-              </button>
-              <p className="rec-hint">Press Space to stop</p>
+              <span className="card-title-text">Full Screen</span>
             </div>
+
+            {/* Card 2: Custom Region */}
+            <div className="focusee-card" onClick={handleCustom}>
+              <div className="card-thumb-frame">
+                <div className="wallpaper-preview custom-region-preview">
+                  <div className="cyan-crop-box" />
+                </div>
+              </div>
+              <span className="card-title-text">Custom</span>
+            </div>
+
+            {/* Card 3: Window */}
+            <div className="focusee-card" onClick={handleWindow}>
+              <div className="card-thumb-frame">
+                <div className="wallpaper-preview window-preview">
+                  <div className="window-mockup-overlay">
+                    <div className="mockup-bar">
+                      <span className="dot" /><span className="dot" /><span className="dot" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <span className="card-title-text">Window</span>
+            </div>
+
+            {/* Card 4: Device */}
+            <div className="focusee-card" onClick={handleDevice}>
+              <div className="card-thumb-frame">
+                <div className="wallpaper-preview device-preview">
+                  <div className="phone-illustration-icon" />
+                </div>
+              </div>
+              <span className="card-title-text">Device</span>
+            </div>
+          </div>
+
+          {recordStatus && (
+            <p className="launcher-status-text">{recordStatus}</p>
           )}
 
-          {/* Recorded: open editor */}
-          {!recording && lastVideo && lastLog && (
-            <div className="open-editor-wrap">
-              <p className="record-status-msg">{recordStatus}</p>
-              <button className="open-editor-btn" onClick={() => onOpenEditor(lastVideo, lastLog)}>
-                Open in Editor
-              </button>
-            </div>
-          )}
-
-          {/* ── Debug test buttons ─────────────────────────────────── */}
-          {showDebug && !recording && (
-            <div className="debug-panel">
-              <h4>Debug Tools</h4>
-              <div className="debug-buttons">
-                <DebugBtn label="Test Record 5s" onClick={handleTestRecord} />
-                <DebugBtn label="Test Audio 5s" onClick={handleTestAudio} />
-                <DebugBtn label="Test Input 5s" onClick={handleTestInput} />
-                <DebugBtn label="Test Combined 5s" onClick={handleTestCombined} />
-              </div>
-            </div>
+          {lastVideo && lastLog && !recording && (
+            <button className="open-last-btn" onClick={() => onOpenEditor(lastVideo, lastLog)}>
+              Open Last Recording in Editor
+            </button>
           )}
         </div>
 
-        {/* ── Device panel ────────────────────────────────────────── */}
-        <aside className="device-panel">
-          <h3>Device &amp; Tool</h3>
+        {/* Right Sidebar: Device & Tool Panel (image_0.png) */}
+        <aside className="focusee-sidebar">
+          <h3 className="sidebar-heading">Device &amp; Tool</h3>
 
-          <div className="device-field">
-            <label htmlFor="video-device">Video Device</label>
+          {/* Camera Dropdown */}
+          <div className="focusee-device-select-row">
+            <div className="device-icon-box">
+              <CameraIcon />
+            </div>
             <select
-              id="video-device"
-              value={selectedTarget}
-              onChange={(e) => setSelectedTarget(e.target.value)}
+              value={selectedCamera}
+              onChange={(e) => setSelectedCamera(e.target.value)}
+              className="sidebar-select"
             >
-              <option value="" disabled>Select a video device</option>
-              {targets.map((t) => (
-                <option key={t.id} value={t.id}>{t.name} ({t.target_type})</option>
-              ))}
+              <option value="OBS Virtual Cam">OBS Virtual Cam...</option>
+              <option value="Integrated Webcam">Integrated Webcam</option>
+              <option value="Disabled">No Camera</option>
             </select>
+            <div className="active-accent-bar blue" />
           </div>
 
-          <div className="device-field">
-            <label htmlFor="microphone">Microphone</label>
+          {/* Microphone Dropdown */}
+          <div className="focusee-device-select-row">
+            <div className="device-icon-box">
+              <MicIcon />
+            </div>
             <select
-              id="microphone"
               value={selectedMic}
               onChange={(e) => setSelectedMic(e.target.value)}
+              className="sidebar-select"
             >
-              <option value="default">Default Microphone</option>
-              {microphones.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
+              <option value="default">Microphone (System...)</option>
+              {microphones.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
               ))}
             </select>
+            <div className="active-accent-bar purple" />
           </div>
 
-          <div className="device-field">
-            <label htmlFor="speaker">Speaker Output</label>
+          {/* Speaker Dropdown */}
+          <div className="focusee-device-select-row">
+            <div className="device-icon-box">
+              <SpeakerIcon />
+            </div>
             <select
-              id="speaker"
               value={selectedSpeaker}
               onChange={(e) => setSelectedSpeaker(e.target.value)}
+              className="sidebar-select"
             >
-              <option value="default">Default Speaker</option>
-              {speakers.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
+              <option value="default">Headphones (System...)</option>
+              {speakers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
+            <div className="active-accent-bar purple" />
           </div>
 
+          {/* Teleprompter Button */}
           <button
-            className="teleprompter-btn"
-            onClick={() => console.log("Teleprompter clicked")}
+            className="teleprompter-sidebar-btn"
+            onClick={() => setShowTeleprompter(true)}
           >
+            <TeleprompterIcon />
             Teleprompter
           </button>
         </aside>
       </div>
 
-      {/* ── Window picker modal ───────────────────────────────────── */}
+      {/* ── Window Picker Modal ────────────────────────────────────── */}
       {showWindowPicker && (
         <div className="modal-overlay" onClick={() => setShowWindowPicker(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3>Select a Window</h3>
-            <div className="modal-list">
+          <div className="focusee-modal-card" onClick={(e) => e.stopPropagation()}>
+            <h3>Select Window to Record</h3>
+            <p className="modal-sub">Pick an open application, game, or browser window</p>
+            <div className="modal-window-list">
               {targets
                 .filter((t) => t.target_type === "window")
                 .map((t) => (
-                  <button key={t.id} className="modal-item" onClick={() => handlePickWindow(t.id)}>
-                    {t.name}
+                  <button
+                    key={t.id}
+                    className="window-option-btn"
+                    onClick={() => handlePickWindow(t.id)}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+                      <rect x="3" y="3" width="18" height="18" rx="2" />
+                      <line x1="3" y1="9" x2="21" y2="9" />
+                    </svg>
+                    <span>{t.name}</span>
                   </button>
                 ))}
             </div>
-            <button className="modal-cancel" onClick={() => setShowWindowPicker(false)}>
+            <button className="modal-close-btn" onClick={() => setShowWindowPicker(false)}>
               Cancel
             </button>
           </div>
         </div>
       )}
 
-      {/* ── Region selector ────────────────────────────────────────── */}
+      {/* ── Region Selector Overlay ────────────────────────────────── */}
       {showRegionSelector && (
         <RegionSelector
           onSelect={handleRegionSelect}
@@ -564,29 +526,50 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
         />
       )}
 
-      {/* ── File browser modal ─────────────────────────────────────── */}
+      {/* ── Teleprompter Window Module ───────────────────────────── */}
+      {showTeleprompter && (
+        <TeleprompterWindow onClose={() => setShowTeleprompter(false)} />
+      )}
+
+      {/* ── 3-2-1 Countdown Overlay (before recording starts) ────── */}
+      {countdownValue !== null && (
+        <div className="countdown-fullscreen-overlay">
+          <div className="countdown-number">{countdownValue}</div>
+        </div>
+      )}
+
+      {/* ── Floating Recording Bar ─────────────────────────────────── */}
+      {recording && (
+        <FloatingToolbar
+          elapsed={elapsed}
+          onStop={stopRecording}
+          onPauseToggle={() => setIsPaused(!isPaused)}
+          isPaused={isPaused}
+          onMicToggle={() => setMicMuted(!micMuted)}
+          micMuted={micMuted}
+        />
+      )}
+
+      {/* ── File Browser Modal ─────────────────────────────────────── */}
       {showFileBrowser && (
         <div className="modal-overlay" onClick={() => setShowFileBrowser(false)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+          <div className="focusee-modal-card" onClick={(e) => e.stopPropagation()}>
             <h3>Open Recording</h3>
-            <p className="modal-subtitle">{browseDir}</p>
-            <div className="modal-list">
-              {fileList.length === 0 && (
-                <p className="modal-empty">No recordings found</p>
-              )}
-              {fileList
-                .filter((f) => f.name.endsWith(".mp4"))
-                .map((f) => (
-                  <button
-                    key={f.path}
-                    className="modal-item"
-                    onClick={() => handleOpenFile(f.path)}
-                  >
-                    {f.name}
-                  </button>
-                ))}
+            <div className="modal-window-list">
+              {fileList.map((f) => (
+                <button
+                  key={f.path}
+                  className="window-option-btn"
+                  onClick={() => {
+                    setShowFileBrowser(false);
+                    onOpenEditor(f.path, f.path.replace(/\.mp4$/i, ".jsonl"));
+                  }}
+                >
+                  <span>{f.name}</span>
+                </button>
+              ))}
             </div>
-            <button className="modal-cancel" onClick={() => setShowFileBrowser(false)}>
+            <button className="modal-close-btn" onClick={() => setShowFileBrowser(false)}>
               Cancel
             </button>
           </div>
@@ -594,66 +577,4 @@ export default function RecorderLauncher({ onOpenEditor }: Props) {
       )}
     </div>
   );
-
-  // ── Debug test handlers ──────────────────────────────────────────────────
-  async function handleTestRecord() {
-    setRecordStatus("Test recording...");
-    await startRecording(
-      targets.find((t) => t.target_type === "monitor")?.id ?? ""
-    );
-    await new Promise((r) => setTimeout(r, 5000));
-    await stopRecording();
-  }
-
-  async function handleTestAudio() {
-    setRecordStatus("Test audio...");
-    try {
-      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
-      const out = `${dir}\\snap_audio_test_${Date.now()}`;
-      await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir: out });
-      await new Promise((r) => setTimeout(r, 5000));
-      await invoke("stop_audio_capture");
-      setRecordStatus(`Audio saved to ${out}`);
-    } catch (e) {
-      setRecordStatus(`Audio error: ${e}`);
-    }
-  }
-
-  async function handleTestInput() {
-    setRecordStatus("Test input...");
-    try {
-      const dir = settingsOutputDir || (await invoke<string>("get_videos_dir"));
-      const path = `${dir}\\input_log_${Date.now()}.jsonl`;
-      await invoke("start_input_logging", { outputPath: path, sessionStartTime: "0" });
-      await new Promise((r) => setTimeout(r, 5000));
-      const count = await invoke<number>("stop_input_logging");
-      setRecordStatus(`${count} events → ${path}`);
-    } catch (e) {
-      setRecordStatus(`Input error: ${e}`);
-    }
-  }
-
-  async function handleTestCombined() {
-    setRecordStatus("Test combined...");
-    await startRecording(
-      targets.find((t) => t.target_type === "monitor")?.id ?? ""
-    );
-    await new Promise((r) => setTimeout(r, 5000));
-    await stopRecording();
-  }
-}
-
-// ── Debug button helper ────────────────────────────────────────────────────
-function DebugBtn({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button className="debug-btn" onClick={onClick}>
-      {label}
-    </button>
-  );
-}
-
-function formatTime(s: number): string {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${sec.toString().padStart(2, "0")}`;
 }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { InputEvent, Keyframe, EditorConfig, CursorStyle } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
+import { WALLPAPER_PRESETS } from "../../../lib/wallpapers";
 import "./Preview.css";
 
 interface Props {
@@ -44,7 +45,6 @@ export default function Preview({
   const videoMetaRef = useRef<{ w: number; h: number; d: number } | null>(null);
   const kfGenerated = useRef(false);
 
-  // Reset event state when input log path changes
   useEffect(() => {
     setEventsReady(false);
     kfGenerated.current = false;
@@ -52,7 +52,7 @@ export default function Preview({
     allEvents.current = [];
   }, [inputLogPath]);
 
-  // ── Load input log ──────────────────────────────────────────────────────
+  // Load input log
   useEffect(() => {
     (async () => {
       try {
@@ -68,20 +68,20 @@ export default function Preview({
         clickRipples.current = [];
         setEventsReady(true);
       } catch (e) {
-        setLoadError(`Failed to load: ${e}`);
+        setLoadError(`Failed to load log: ${e}`);
       }
     })();
   }, [inputLogPath]);
 
-  // ── Generate keyframes when both video + events are ready ──────────────
+  // Generate keyframes when ready
   useEffect(() => {
     if (!videoReady || !eventsReady || kfGenerated.current) return;
     const meta = videoMetaRef.current;
     if (!meta) return;
     kfGenerated.current = true;
-    if (mouseMoveEvents.current.length > 0) {
+    if (allEvents.current.length > 0) {
       const kf = generateKeyframes(
-        mouseMoveEvents.current,
+        allEvents.current,
         meta.w,
         meta.h,
         meta.d * 1000
@@ -90,7 +90,6 @@ export default function Preview({
     }
   }, [videoReady, eventsReady, onKeyframesChange]);
 
-  // ── Video metadata callback ────────────────────────────────────────────
   const onMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -139,12 +138,11 @@ export default function Preview({
     }
   }, [config.aspectRatio, config.padding, videoReady, computeCanvasSize]);
 
-  // ── Interpolated cursor position (smooth, no jumping) ──────────────────
+  // Cursor interpolation
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {
     const moves = mouseMoveEvents.current;
     if (moves.length === 0) return null;
 
-    // Binary search for the last event at or before timestampMs
     let lo = 0, hi = moves.length - 1, idx = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >>> 1;
@@ -153,7 +151,6 @@ export default function Preview({
     }
     if (idx < 0) return null;
 
-    // If there's a next event, interpolate between them for smooth motion
     const a = moves[idx];
     const b = idx + 1 < moves.length ? moves[idx + 1] : null;
     if (b && b.ts > a.ts) {
@@ -166,7 +163,6 @@ export default function Preview({
     return { x: a.x!, y: a.y! };
   }, []);
 
-  // ── Track click ripples ─────────────────────────────────────────────────
   const trackClicks = useCallback((ts: number) => {
     if (!config.cursorStyle.showClickRipples) return;
     const events = allEvents.current;
@@ -200,12 +196,12 @@ export default function Preview({
     const vw = video.videoWidth;
     const vh = video.videoHeight;
 
-    // Compute video area within padded canvas
+    // Uniform 4-Side Padding Calculation
     let videoW: number, videoH: number, offsetX: number, offsetY: number;
     if (config.aspectRatio && config.aspectRatio.width > 0) {
       const ar = config.aspectRatio.width / config.aspectRatio.height;
-      const innerW = cw - pad * 2;
-      const innerH = ch - pad * 2;
+      const innerW = Math.max(20, cw - pad * 2);
+      const innerH = Math.max(20, ch - pad * 2);
       if (innerW / innerH > ar) {
         videoH = innerH;
         videoW = videoH * ar;
@@ -216,13 +212,13 @@ export default function Preview({
       offsetX = pad + (innerW - videoW) / 2;
       offsetY = pad + (innerH - videoH) / 2;
     } else {
-      videoW = cw - pad * 2;
-      videoH = ch - pad * 2;
+      videoW = Math.max(20, cw - pad * 2);
+      videoH = Math.max(20, ch - pad * 2);
       offsetX = pad;
       offsetY = pad;
     }
 
-    // ── Interpolate zoom ──────────────────────────────────────────────────
+    // ── Interpolate Zoom ──────────────────────────────────────────────────
     let zoomX = 0.5, zoomY = 0.5, zoomScale = 1.0;
     if (config.zoomEnabled && keyframes.length > 0) {
       let idx = 0;
@@ -244,16 +240,32 @@ export default function Preview({
       if (Math.abs(currentZoom - z) > 0.01) setCurrentZoom(z);
     }
 
-    // ── Draw ──────────────────────────────────────────────────────────────
+    // ── Draw Background ────────────────────────────────────────────────────
     ctx.clearRect(0, 0, cw, ch);
-    canvas.width = cw;
-    canvas.height = ch;
 
-    // Background
-    ctx.fillStyle = config.backgroundColor;
+    // Apply Background Blur if enabled
+    ctx.save();
+    if (config.bgBlur > 0) {
+      ctx.filter = `blur(${config.bgBlur}px)`;
+    }
+
+    const preset = WALLPAPER_PRESETS.find((p) => p.id === config.wallpaperUrl);
+    const fillStyle = preset ? preset.gradient : config.backgroundColor;
+
+    if (fillStyle.startsWith("linear-gradient")) {
+      const grad = ctx.createLinearGradient(0, 0, cw, ch);
+      grad.addColorStop(0, "#f97316");
+      grad.addColorStop(0.5, "#ec4899");
+      grad.addColorStop(1, "#8b5cf6");
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = fillStyle;
+    }
+
     ctx.beginPath();
     roundRect(ctx, 0, 0, cw, ch, br);
     ctx.fill();
+    ctx.restore();
 
     // Shadow
     if (config.shadow.enabled) {
@@ -262,9 +274,9 @@ export default function Preview({
       ctx.shadowBlur = config.shadow.blur;
       ctx.shadowOffsetX = config.shadow.offsetX;
       ctx.shadowOffsetY = config.shadow.offsetY;
-      ctx.fillStyle = config.backgroundColor;
+      ctx.fillStyle = "#0f172a";
       ctx.beginPath();
-      roundRect(ctx, 0, 0, cw, ch, br);
+      roundRect(ctx, offsetX, offsetY, videoW, videoH, Math.max(0, br - pad));
       ctx.fill();
       ctx.restore();
     }
@@ -275,7 +287,7 @@ export default function Preview({
     roundRect(ctx, offsetX, offsetY, videoW, videoH, Math.max(0, br - pad));
     ctx.clip();
 
-    // Video with zoom
+    // Draw Video Frame with Zoom
     const srcX = vw * zoomX - (vw / zoomScale) / 2;
     const srcY = vh * zoomY - (vh / zoomScale) / 2;
     const srcW = vw / zoomScale;
@@ -287,19 +299,20 @@ export default function Preview({
       offsetX, offsetY, videoW, videoH
     );
 
-    // Cursor overlay
+    // Cursor Overlay
     if (config.showCursor) {
       const cursor = getCursorAt(ts);
       if (cursor) {
-        const csx = videoW / vw;
-        const csy = videoH / vh;
-        let cx = cursor.x * csx + offsetX;
-        let cy = cursor.y * csy + offsetY;
-        drawCursor(ctx, cx, cy, config.cursorStyle);
+        const zoomedCursorX = (cursor.x - Math.max(0, srcX)) / Math.max(1, Math.min(vw, srcW)) * videoW + offsetX;
+        const zoomedCursorY = (cursor.y - Math.max(0, srcY)) / Math.max(1, Math.min(vh, srcH)) * videoH + offsetY;
+        if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
+            zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
+          drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+        }
       }
     }
 
-    // Click ripples
+    // Click Ripples
     const now = performance.now();
     clickRipples.current = clickRipples.current.filter((r) => {
       const age = (now - r.t) / 1000;
@@ -323,19 +336,19 @@ export default function Preview({
 
     ctx.restore();
 
-    // Track clicks
     if (playing) {
       trackClicks(ts);
     }
 
-    onTimeUpdate(video.currentTime);
-    prevTimeRef.current = ts;
+    if (Math.abs(video.currentTime - prevTimeRef.current / 1000) >= 0.05) {
+      onTimeUpdate(video.currentTime);
+      prevTimeRef.current = ts;
+    }
   }, [
     canvasSize, config, keyframes, playing,
-    getCursorAt, onTimeUpdate, trackClicks,
+    getCursorAt, onTimeUpdate, trackClicks, currentZoom
   ]);
 
-  // ── Render loop ─────────────────────────────────────────────────────────
   useEffect(() => {
     const loop = () => {
       render();
@@ -345,7 +358,6 @@ export default function Preview({
     return () => cancelAnimationFrame(rafRef.current);
   }, [render]);
 
-  // ── Handle window resize ────────────────────────────────────────────────
   useEffect(() => {
     const onResize = () => {
       const video = videoRef.current;
@@ -356,7 +368,6 @@ export default function Preview({
   }, [videoReady, computeCanvasSize]);
 
   const togglePlay = () => onClick?.();
-
   const videoUrl = convertFileSrc(videoPath);
 
   return (
@@ -389,8 +400,7 @@ export default function Preview({
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
+// Helpers
 function drawCursor(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -399,21 +409,17 @@ function drawCursor(
 ) {
   const r = style.size;
   ctx.save();
-
   if (style.shape === "circle") {
-    // Outer ring
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fillStyle = style.color;
     ctx.globalAlpha = 0.35;
     ctx.fill();
-    // Solid center
     ctx.globalAlpha = 0.9;
     ctx.beginPath();
     ctx.arc(x, y, r * 0.4, 0, Math.PI * 2);
     ctx.fillStyle = style.color;
     ctx.fill();
-    // White stroke
     ctx.globalAlpha = 0.8;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -421,7 +427,6 @@ function drawCursor(
     ctx.lineWidth = 2;
     ctx.stroke();
   } else {
-    // Arrow cursor
     ctx.translate(x, y);
     ctx.beginPath();
     ctx.moveTo(0, 0);
@@ -437,7 +442,6 @@ function drawCursor(
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
-
   ctx.restore();
 }
 

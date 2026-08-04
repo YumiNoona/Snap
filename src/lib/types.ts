@@ -34,15 +34,22 @@ export interface ShadowConfig {
 
 export interface EditorConfig {
   backgroundColor: string;
+  bgType: "wallpaper" | "gradient" | "color" | "image";
+  wallpaperUrl: string;
+  bgBlur: number;
   padding: number;
   borderRadius: number;
   shadow: ShadowConfig;
   cursorStyle: CursorStyle;
   showCursor: boolean;
   zoomEnabled: boolean;
+  zoomMode: "auto" | "manual";
+  zoomLevel: number;
   aspectRatio: { width: number; height: number } | null;
+  crop: { x: number; y: number; w: number; h: number } | null;
   trimStart: number;
   trimEnd: number;
+  cuts: number[];
 }
 
 export interface ClipSegment {
@@ -60,28 +67,35 @@ export interface ExportSettings {
 }
 
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
-  backgroundColor: "#1a1a2e",
+  backgroundColor: "#0f172a",
+  bgType: "wallpaper",
+  wallpaperUrl: "gradient-sunset",
+  bgBlur: 0,
   padding: 48,
-  borderRadius: 12,
+  borderRadius: 14,
   shadow: {
     enabled: true,
     blur: 40,
     spread: 8,
-    color: "rgba(0,0,0,0.5)",
+    color: "rgba(0,0,0,0.6)",
     offsetX: 0,
-    offsetY: 8,
+    offsetY: 12,
   },
   cursorStyle: {
-    color: "#ff5050",
-    size: 14,
-    shape: "circle",
+    color: "#3b82f6",
+    size: 16,
+    shape: "arrow",
     showClickRipples: true,
   },
   showCursor: true,
   zoomEnabled: true,
+  zoomMode: "auto",
+  zoomLevel: 2.0,
   aspectRatio: null,
+  crop: null,
   trimStart: 0,
   trimEnd: 0,
+  cuts: [],
 };
 
 export const ASPECT_RATIOS = [

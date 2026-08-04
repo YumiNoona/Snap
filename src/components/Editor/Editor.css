@@ -1,87 +1,217 @@
-.editor-layout {
+.screenstudio-editor-layout {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--bg-primary);
+  background: #09090d;
+  color: #e4e4e4;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  user-select: none;
+  overflow: hidden;
 }
 
-/* ── Top bar ─────────────────────────────────────────── */
+/* ── Top Bar ────────────────────────────────────────────── */
 
-.editor-topbar {
+.ss-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 44px;
+  height: 42px;
   padding: 0 12px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  background: #111118;
+  border-bottom: 1px solid #1a1a26;
   flex-shrink: 0;
   position: relative;
+  z-index: 10;
 }
 
-.editor-drag-area {
+.ss-drag-area {
   position: absolute;
   inset: 0;
   z-index: 0;
 }
 
-.editor-topbar-left {
+.ss-topbar-left {
   display: flex;
   align-items: center;
   gap: 12px;
   z-index: 1;
 }
 
-.editor-back-btn {
+.ss-icon-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
+  color: #8888a0;
+  background: none;
+  border: none;
+  cursor: pointer;
   transition: color 0.15s, background 0.15s;
 }
 
-.editor-back-btn:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
+.ss-icon-btn:hover {
+  color: #ffffff;
+  background: #1c1c28;
 }
 
-.editor-filename {
-  font-size: 13px;
-  color: var(--text-muted);
+.ss-file-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cccccc;
+  letter-spacing: 0.2px;
+  font-family: monospace;
 }
 
-.editor-topbar-center {
+.ss-topbar-center {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   z-index: 1;
-}
-
-.editor-topbar-right {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+}
+
+.ss-presets-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #a0a0b8;
+  background: #161622;
+  border: 1px solid #242436;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ss-presets-pill:hover {
+  color: #ffffff;
+  border-color: #38bdf8;
+}
+
+.ss-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   z-index: 1;
 }
 
-.editor-export-status {
+/* PROMINENT TOP-RIGHT EXPORT BUTTON */
+.ss-topbar-export-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
   font-size: 12px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  padding: 4px 12px;
-  border-radius: 4px;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, #6366f1, #3b82f6);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+  transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
 }
 
-/* ── Body ─────────────────────────────────────────────── */
+.ss-topbar-export-btn:hover {
+  opacity: 0.95;
+  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.55);
+}
 
-.editor-body {
+.ss-topbar-export-btn:active {
+  transform: scale(0.97);
+}
+
+.ss-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.ss-window-controls .window-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: 4px;
+  color: #8888a0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.ss-window-controls .window-btn:hover {
+  color: #ffffff;
+  background: #1c1c28;
+}
+
+.ss-window-controls .window-btn.close-btn:hover {
+  color: #ffffff;
+  background: #e81123;
+}
+
+/* ── Main Workspace ─────────────────────────────────────── */
+
+.ss-editor-body {
   display: flex;
   flex: 1;
   overflow: hidden;
-  min-height: 0;
-  flex-direction: row;
+  position: relative;
+}
+
+/* Left Vertical Tool Palette (Screen Studio Icon Toolbar) */
+.ss-vertical-tool-palette {
+  width: 48px;
+  flex-shrink: 0;
+  background: #111118;
+  border-right: 1px solid #1a1a26;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  gap: 14px;
+  z-index: 5;
+}
+
+.ss-tool-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #777790;
+  background: none;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.ss-tool-icon-btn:hover {
+  color: #ffffff;
+  background: #1a1a28;
+}
+
+.ss-tool-icon-btn.active {
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+/* Center Preview Area */
+.ss-preview-center-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #07070b;
+  position: relative;
+  overflow: hidden;
 }

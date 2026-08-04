@@ -82,3 +82,17 @@ select:hover {
 select:focus {
   border-color: var(--accent);
 }
+
+select option {
+  background-color: #161622 !important;
+  color: #f1f1f5 !important;
+  padding: 10px 12px !important;
+}
+
+select option:hover,
+select option:focus,
+select option:active,
+select option:checked {
+  background-color: #252538 !important;
+  color: #ffffff !important;
+}
