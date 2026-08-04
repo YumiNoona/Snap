@@ -1,26 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
 :root {
-  --bg-primary: #0d0d0d;
-  --bg-secondary: #141414;
-  --bg-tertiary: #1c1c1c;
-  --bg-elevated: #232323;
-  --bg-hover: #2a2a2a;
-  --border-subtle: #2a2a2a;
-  --border-default: #333333;
-  --border-hover: #505050;
-  --text-primary: #e4e4e4;
-  --text-secondary: #999999;
-  --text-muted: #666666;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
-  --accent-subtle: rgba(59, 130, 246, 0.1);
-  --card-bg: #1a1a1a;
-  --card-border: #2c2c2c;
-  --card-hover-bg: #202020;
-  --card-hover-border: #444444;
+  /* Design Tokens — Single Source of Truth */
+  --bg-base: #131214;
+  --bg-surface: #1A191C;
+  --bg-elevated: #201F23;
+  --border-subtle: #2C2B30;
+  --border-strong: #3D3C42;
+  
+  --text-primary: #EDEDEF;
+  --text-secondary: #9A99A0;
+  --text-muted: #656469;
+  
+  --accent-primary: #F5A623; /* Flash Amber — Record button, primary CTAs, active/selected states, progress */
+  --accent-focus: #5B8DEF;   /* Viewfinder Blue — Zoom keyframe markers & timeline selection/focus rings ONLY */
+  --danger: #E5484D;         /* Stop recording, delete actions ONLY */
+  
+  /* Typography Scale */
+  --font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 14px;
+  --font-lg: 16px;
+  --font-xl: 20px;
+  --font-2xl: 28px;
+  
+  /* Radius Scale */
   --radius-sm: 6px;
   --radius-md: 10px;
-  --radius-lg: 14px;
-  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --radius-lg: 16px;
 }
 
 *,
@@ -40,10 +50,10 @@ body,
 
 body {
   font-family: var(--font-family);
-  font-size: 14px;
+  font-size: var(--font-md);
   line-height: 1.5;
   color: var(--text-primary);
-  background: var(--bg-primary);
+  background: var(--bg-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
@@ -56,43 +66,152 @@ button {
   border: none;
   background: none;
   color: inherit;
+  transition: transform 80ms ease, background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+button:active {
+  transform: scale(0.97);
 }
 
 select {
   font-family: inherit;
-  font-size: inherit;
+  font-size: var(--font-sm);
   cursor: pointer;
   color: var(--text-primary);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 6px 10px;
   outline: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23999' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%239A99A0' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 32px;
+  background-position: right 8px center;
+  padding-right: 26px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 select:hover {
-  border-color: var(--border-hover);
+  border-color: var(--border-strong);
 }
 
 select:focus {
-  border-color: var(--accent);
+  border-color: var(--accent-focus);
+  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.25);
 }
 
 select option {
-  background-color: #161622 !important;
-  color: #f1f1f5 !important;
-  padding: 10px 12px !important;
+  background-color: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  padding: 8px 10px !important;
+  font-size: var(--font-sm);
 }
 
 select option:hover,
 select option:focus,
 select option:active,
 select option:checked {
-  background-color: #252538 !important;
-  color: #ffffff !important;
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Monospaced readouts */
+.mono-text,
+.timecode {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shared micro-UX: smooth button hover/active states */
+button,
+.focusee-card,
+.menu-item,
+.dropdown-item,
+.window-option-btn {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled,
+.btn-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Keyboard focus rings for consistency across all three windows */
+button:focus-visible,
+select:focus-visible,
+.focusee-card:focus-visible,
+.aspect-item:focus-visible {
+  outline: 2px solid var(--accent-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Icon button press "bounce" for consistent click feel */
+button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+/* Modal + dropdown entrance animations */
+.modal-overlay {
+  animation: fade-in 160ms ease-out;
+}
+
+.focusee-modal-card,
+.dropdown-menu {
+  animation: pop-in 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Floating dock entrance — slides up from below with a soft settle */
+@keyframes dock-rise {
+  0% { opacity: 0; transform: translate(-50%, 16px) scale(0.95); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+/* Status text flash */
+.launcher-status-text {
+  animation: fade-in 200ms ease-out;
+}
+
+/* 120ms Shutter Flash Micro-Interaction when recording starts */
+@keyframes shutter-flash {
+  0% {
+    box-shadow: inset 0 0 0 00px rgba(245, 166, 35, 0);
+  }
+  30% {
+    box-shadow: inset 0 0 100px 30px rgba(245, 166, 35, 0.45);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0px rgba(245, 166, 35, 0);
+  }
+}
+
+.shutter-flash-active {
+  animation: shutter-flash 120ms ease-out forwards;
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

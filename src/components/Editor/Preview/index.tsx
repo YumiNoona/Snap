@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { Play } from "lucide-react";
 import type { InputEvent, Keyframe, EditorConfig, CursorStyle } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
-import { WALLPAPER_PRESETS } from "../../../lib/wallpapers";
+import { getGradientPreset } from "../../../lib/wallpapers";
 import "./Preview.css";
 
 interface Props {
@@ -16,6 +17,9 @@ interface Props {
   onTimeUpdate: (t: number) => void;
   onDuration: (d: number) => void;
   onClick?: () => void;
+  cropMode?: boolean;
+  onCropApply?: (crop: { x: number; y: number; w: number; h: number } | null) => void;
+  onCropCancel?: () => void;
 }
 
 export default function Preview({
@@ -28,16 +32,31 @@ export default function Preview({
   onTimeUpdate,
   onDuration,
   onClick,
+  cropMode = false,
+  onCropApply,
+  onCropCancel,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
   const [videoReady, setVideoReady] = useState(false);
   const rafRef = useRef<number>(0);
+  const renderRef = useRef<() => void>(() => {});
+  const cursorImages = useRef(new Map<string, HTMLImageElement>());
+  const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
+  const cropDrag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const geomRef = useRef({ offsetX: 0, offsetY: 0, videoW: 1280, videoH: 720, cw: 1280, ch: 720 });
   const mouseMoveEvents = useRef<InputEvent[]>([]);
   const allEvents = useRef<InputEvent[]>([]);
+  const clickEvents = useRef<InputEvent[]>([]);
+  const clickIdxRef = useRef(0);
+  const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const clickRipples = useRef<{ x: number; y: number; t: number; ts: number }[]>([]);
   const prevTimeRef = useRef(-1);
+  const prevPlayRef = useRef(-1);
+  const wallpaperRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
+  const fadeRef = useRef<{ start: number }>({ start: 0 });
+  const lastPackRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
   const [eventsReady, setEventsReady] = useState(false);
@@ -50,6 +69,10 @@ export default function Preview({
     kfGenerated.current = false;
     mouseMoveEvents.current = [];
     allEvents.current = [];
+    clickEvents.current = [];
+    clickIdxRef.current = 0;
+    regionRef.current = null;
+    clickRipples.current = [];
   }, [inputLogPath]);
 
   // Load input log
@@ -57,14 +80,37 @@ export default function Preview({
     (async () => {
       try {
         const text = await invoke<string>("read_text_file", { path: inputLogPath });
-        const parsed: InputEvent[] = text
+        const raw: any[] = text
           .split("\n")
           .filter((l) => l.trim())
           .map((l) => JSON.parse(l));
-        allEvents.current = parsed;
-        mouseMoveEvents.current = parsed
+
+        // Parse meta lines: recording region (screen px) + video time-0 marker.
+        let captureStartMs = 0;
+        for (const e of raw) {
+          if (e.type === "meta") {
+            if (typeof e.captureStartMs === "number" && e.captureStartMs > 0) {
+              captureStartMs = e.captureStartMs;
+            }
+            if (typeof e.w === "number" && e.w > 0) {
+              regionRef.current = { x: e.x, y: e.y, w: e.w, h: e.h };
+            }
+          }
+        }
+
+        // Align input timestamps to video time (video time 0 == first frame).
+        const aligned: InputEvent[] = raw
+          .filter((e) => e.type !== "meta")
+          .map((e) => ({ ...e, ts: Math.max(0, e.ts - captureStartMs) }));
+
+        allEvents.current = aligned;
+        mouseMoveEvents.current = aligned
           .filter((e) => e.type === "mousemove" && e.x != null && e.y != null)
           .sort((a, b) => a.ts - b.ts);
+        clickEvents.current = aligned
+          .filter((e) => e.type === "mousedown" && e.x != null && e.y != null)
+          .sort((a, b) => a.ts - b.ts);
+        clickIdxRef.current = 0;
         clickRipples.current = [];
         setEventsReady(true);
       } catch (e) {
@@ -106,18 +152,21 @@ export default function Preview({
     (vw: number, vh: number) => {
       const container = containerRef.current;
       if (!container) return;
-      const maxW = container.clientWidth - 32;
-      const maxH = container.clientHeight - 32;
+      // Canvas is sized to the video / output aspect ratio only — padding is
+      // drawn INSIDE the canvas so the padding slider scales the video frame
+      // smoothly instead of resizing the whole canvas.
+      const maxW = Math.max(64, container.clientWidth - 32);
+      const maxH = Math.max(64, container.clientHeight - 32);
 
       let outW: number, outH: number;
 
       if (config.aspectRatio && config.aspectRatio.width > 0) {
         const ar = config.aspectRatio.width / config.aspectRatio.height;
         if (maxW / maxH > ar) {
-          outH = Math.min(maxH, vh + config.padding * 2);
+          outH = maxH;
           outW = outH * ar;
         } else {
-          outW = Math.min(maxW, vw + config.padding * 2);
+          outW = maxW;
           outH = outW / ar;
         }
       } else {
@@ -128,7 +177,7 @@ export default function Preview({
 
       setCanvasSize({ w: Math.round(outW), h: Math.round(outH) });
     },
-    [config.aspectRatio, config.padding]
+    [config.aspectRatio]
   );
 
   useEffect(() => {
@@ -136,7 +185,7 @@ export default function Preview({
     if (video && videoReady) {
       computeCanvasSize(video.videoWidth, video.videoHeight);
     }
-  }, [config.aspectRatio, config.padding, videoReady, computeCanvasSize]);
+  }, [config.aspectRatio, videoReady, computeCanvasSize]);
 
   // Cursor interpolation
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {
@@ -163,21 +212,38 @@ export default function Preview({
     return { x: a.x!, y: a.y! };
   }, []);
 
-  const trackClicks = useCallback((ts: number) => {
-    if (!config.cursorStyle.showClickRipples) return;
-    const events = allEvents.current;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i];
-      if (e.type !== "mousedown") continue;
-      if (e.ts > ts || e.ts < ts - 16) break;
-      const ripple = clickRipples.current;
-      const exists = ripple.find((r) => Math.abs(r.ts - e.ts) < 5);
-      if (!exists && e.x != null && e.y != null) {
-        ripple.push({ x: e.x, y: e.y, t: performance.now(), ts: e.ts });
-        if (ripple.length > 10) ripple.shift();
-      }
+  // Map an absolute screen coordinate onto the video's source pixel space.
+  const screenToVideo = useCallback((sx: number, sy: number, vw: number, vh: number) => {
+    const reg = regionRef.current;
+    if (reg && reg.w > 0 && reg.h > 0) {
+      return {
+        x: ((sx - reg.x) / reg.w) * vw,
+        y: ((sy - reg.y) / reg.h) * vh,
+      };
     }
-  }, [config.cursorStyle.showClickRipples]);
+    return { x: sx, y: sy };
+  }, []);
+
+  // Spawn click ripples for every click the playhead crossed since the last frame.
+  const spawnClickRipples = useCallback(
+    (prevTs: number, curTs: number, vw: number, vh: number) => {
+      if (!config.cursorStyle.showClickRipples) return;
+      const clicks = clickEvents.current;
+      let i = clickIdxRef.current;
+      while (i < clicks.length && clicks[i].ts <= curTs) {
+        const c = clicks[i];
+        if (c.ts > prevTs && c.x != null && c.y != null) {
+          const p = screenToVideo(c.x, c.y, vw, vh);
+          const ripples = clickRipples.current;
+          ripples.push({ x: p.x, y: p.y, t: performance.now(), ts: c.ts });
+          if (ripples.length > 12) ripples.shift();
+        }
+        i++;
+      }
+      clickIdxRef.current = i;
+    },
+    [config.cursorStyle.showClickRipples, screenToVideo]
+  );
 
   // ── Render ──────────────────────────────────────────────────────────────
   const render = useCallback(() => {
@@ -189,14 +255,13 @@ export default function Preview({
     if (!ctx) return;
 
     const ts = video.currentTime * 1000;
-    const dur = video.duration * 1000;
     const { w: cw, h: ch } = canvasSize;
     const pad = config.padding;
     const br = config.borderRadius;
     const vw = video.videoWidth;
     const vh = video.videoHeight;
 
-    // Uniform 4-Side Padding Calculation
+    // Uniform 4-Side Padding Calculation (padding lives INSIDE the fixed canvas)
     let videoW: number, videoH: number, offsetX: number, offsetY: number;
     if (config.aspectRatio && config.aspectRatio.width > 0) {
       const ar = config.aspectRatio.width / config.aspectRatio.height;
@@ -217,8 +282,23 @@ export default function Preview({
       offsetX = pad;
       offsetY = pad;
     }
+    geomRef.current = { offsetX, offsetY, videoW, videoH, cw, ch };
+
+    // Crop base rect (normalized 0-1 -> source pixels)
+    const crop = config.crop;
+    const baseX = crop ? crop.x * vw : 0;
+    const baseY = crop ? crop.y * vh : 0;
+    const baseW = crop ? crop.w * vw : vw;
+    const baseH = crop ? crop.h * vh : vh;
+
+    // Corner radius applies to the recorded video only (not the canvas)
+    const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
     // ── Interpolate Zoom ──────────────────────────────────────────────────
+    // Semantics: each keyframe's `duration` is the length of the transition
+    // INTO it (from the previously held value), ending at its `time`. Between
+    // transitions the camera holds the previous keyframe's values — so camera
+    // moves only during their designated windows, never drifting.
     let zoomX = 0.5, zoomY = 0.5, zoomScale = 1.0;
     if (config.zoomEnabled && keyframes.length > 0) {
       let idx = 0;
@@ -227,15 +307,25 @@ export default function Preview({
       }
       const kf = keyframes[idx];
       const next = idx + 1 < keyframes.length ? keyframes[idx + 1] : null;
-      const startTime = kf.time;
-      const endTime = next ? next.time : dur;
-      const elapsed = ts - startTime;
-      const total = endTime - startTime;
-      let t = total > 0 ? Math.max(0, Math.min(1, elapsed / total)) : 1;
-      t = easeInOut(t);
-      zoomX = kf.x + ((next?.x ?? kf.x) - kf.x) * t;
-      zoomY = kf.y + ((next?.y ?? kf.y) - kf.y) * t;
-      zoomScale = kf.scale + ((next?.scale ?? kf.scale) - kf.scale) * t;
+      if (next && next.time > kf.time) {
+        const segEnd = next.time;
+        const transStart = segEnd - Math.max(0, next.duration || 0);
+        const from = Math.max(kf.time, transStart);
+        const span = Math.max(1, segEnd - from);
+        let eased: number;
+        if (ts < from) {
+          eased = 0; // hold the current keyframe's values until the move starts
+        } else {
+          eased = easeInOut(Math.min(1, Math.max(0, (ts - from) / span)));
+        }
+        zoomX = kf.x + (next.x - kf.x) * eased;
+        zoomY = kf.y + (next.y - kf.y) * eased;
+        zoomScale = kf.scale + (next.scale - kf.scale) * eased;
+      } else {
+        zoomX = kf.x;
+        zoomY = kf.y;
+        zoomScale = kf.scale;
+      }
       const z = Math.round(zoomScale * 100) / 100;
       if (Math.abs(currentZoom - z) > 0.01) setCurrentZoom(z);
     }
@@ -243,28 +333,49 @@ export default function Preview({
     // ── Draw Background ────────────────────────────────────────────────────
     ctx.clearRect(0, 0, cw, ch);
 
-    // Apply Background Blur if enabled
+    const bgIsImage = config.bgType === "image";
+    const bgGradient = getGradientPreset(config.wallpaperUrl);
+
+    // Blur applies ONLY to the wallpaper image layer (not gradients/solids)
+    const FADE_MS = 200;
     ctx.save();
-    if (config.bgBlur > 0) {
-      ctx.filter = `blur(${config.bgBlur}px)`;
+    if (bgIsImage && config.bgBlur > 0) {
+      ctx.filter = `blur(${Math.min(config.bgBlur, 100)}px)`;
     }
 
-    const preset = WALLPAPER_PRESETS.find((p) => p.id === config.wallpaperUrl);
-    const fillStyle = preset ? preset.gradient : config.backgroundColor;
+    if (bgIsImage) {
+      const img = getWallpaperImage(config.wallpaperUrl, wallpaperImages.current);
+      const imgReady = img && img.complete && img.naturalWidth > 0;
+      const last = wallpaperRef.current;
 
-    if (fillStyle.startsWith("linear-gradient")) {
-      const grad = ctx.createLinearGradient(0, 0, cw, ch);
-      grad.addColorStop(0, "#f97316");
-      grad.addColorStop(0.5, "#ec4899");
-      grad.addColorStop(1, "#8b5cf6");
-      ctx.fillStyle = grad;
+      if (imgReady) {
+        if (last && last.path !== config.wallpaperUrl && last.img.complete && last.img.naturalWidth > 0) {
+          // Crossfade from the previously-drawn wallpaper to the new one.
+          const fade = fadeRef.current;
+          const t = Math.min(1, (performance.now() - fade.start) / FADE_MS);
+          ctx.globalAlpha = 1 - t;
+          paintImageCover(ctx, last.img, cw, ch);
+          ctx.globalAlpha = t;
+          paintImageCover(ctx, img, cw, ch);
+          ctx.globalAlpha = 1;
+          if (t >= 1) wallpaperRef.current = { path: config.wallpaperUrl, img };
+        } else {
+          paintImageCover(ctx, img, cw, ch);
+          wallpaperRef.current = { path: config.wallpaperUrl, img };
+        }
+      } else if (last && last.img.complete && last.img.naturalWidth > 0) {
+        // New image still loading — keep showing the previous one (no flash).
+        paintImageCover(ctx, last.img, cw, ch);
+      } else {
+        ctx.fillStyle = config.backgroundColor;
+        ctx.fillRect(0, 0, cw, ch);
+      }
+    } else if (bgGradient) {
+      paintGradient(ctx, bgGradient, cw, ch);
     } else {
-      ctx.fillStyle = fillStyle;
+      ctx.fillStyle = config.backgroundColor;
+      ctx.fillRect(0, 0, cw, ch);
     }
-
-    ctx.beginPath();
-    roundRect(ctx, 0, 0, cw, ch, br);
-    ctx.fill();
     ctx.restore();
 
     // Shadow
@@ -276,7 +387,7 @@ export default function Preview({
       ctx.shadowOffsetY = config.shadow.offsetY;
       ctx.fillStyle = "#0f172a";
       ctx.beginPath();
-      roundRect(ctx, offsetX, offsetY, videoW, videoH, Math.max(0, br - pad));
+      roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
       ctx.fill();
       ctx.restore();
     }
@@ -284,30 +395,58 @@ export default function Preview({
     // Clip for video area
     ctx.save();
     ctx.beginPath();
-    roundRect(ctx, offsetX, offsetY, videoW, videoH, Math.max(0, br - pad));
+    roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
     ctx.clip();
 
-    // Draw Video Frame with Zoom
-    const srcX = vw * zoomX - (vw / zoomScale) / 2;
-    const srcY = vh * zoomY - (vh / zoomScale) / 2;
-    const srcW = vw / zoomScale;
-    const srcH = vh / zoomScale;
-    ctx.drawImage(
-      video,
-      Math.max(0, srcX), Math.max(0, srcY),
-      Math.min(vw, srcW), Math.min(vh, srcH),
-      offsetX, offsetY, videoW, videoH
-    );
+    // Draw Video Frame with Zoom (within the crop base rect)
+    const srcX = baseX + zoomX * baseW - (baseW / zoomScale) / 2;
+    const srcY = baseY + zoomY * baseH - (baseH / zoomScale) / 2;
+    const srcW = baseW / zoomScale;
+    const srcH = baseH / zoomScale;
+    const effX = Math.max(baseX, srcX);
+    const effY = Math.max(baseY, srcY);
+    const effW = Math.min(baseX + baseW, srcX + srcW) - effX;
+    const effH = Math.min(baseY + baseH, srcY + srcH) - effY;
+    if (effW > 0.5 && effH > 0.5) {
+      ctx.drawImage(
+        video,
+        effX, effY, effW, effH,
+        offsetX, offsetY, videoW, videoH
+      );
+    }
 
     // Cursor Overlay
     if (config.showCursor) {
       const cursor = getCursorAt(ts);
       if (cursor) {
-        const zoomedCursorX = (cursor.x - Math.max(0, srcX)) / Math.max(1, Math.min(vw, srcW)) * videoW + offsetX;
-        const zoomedCursorY = (cursor.y - Math.max(0, srcY)) / Math.max(1, Math.min(vh, srcH)) * videoH + offsetY;
+        const c = screenToVideo(cursor.x, cursor.y, vw, vh);
+        const zoomedCursorX = (c.x - effX) / effW * videoW + offsetX;
+        const zoomedCursorY = (c.y - effY) / effH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
-          drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+          const pack = config.cursorStyle.pack;
+          if (pack) {
+            const img = loadCursorImage(pack.imageUrl, cursorImages.current);
+            if (img && img.complete && img.naturalWidth > 0) {
+              lastPackRef.current = { path: pack.imageUrl, img };
+              const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
+              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * img.naturalWidth;
+              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * img.naturalHeight;
+              ctx.drawImage(img, drawX, drawY);
+            } else if (lastPackRef.current) {
+              // New pack image still loading — draw the previous pack image
+              // instead of flashing the built-in cursor.
+              const prev = lastPackRef.current.img;
+              const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
+              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * prev.naturalWidth;
+              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * prev.naturalHeight;
+              ctx.drawImage(prev, drawX, drawY);
+            } else {
+              drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+            }
+          } else {
+            drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+          }
         }
       }
     }
@@ -317,10 +456,8 @@ export default function Preview({
     clickRipples.current = clickRipples.current.filter((r) => {
       const age = (now - r.t) / 1000;
       if (age > 1.0) return false;
-      const csx = videoW / vw;
-      const csy = videoH / vh;
-      const rx = r.x * csx + offsetX;
-      const ry = r.y * csy + offsetY;
+      const rx = (r.x - effX) / effW * videoW + offsetX;
+      const ry = (r.y - effY) / effH * videoH + offsetY;
       const alpha = 1 - age;
       const radius = age * 40 + 4;
       ctx.save();
@@ -336,8 +473,47 @@ export default function Preview({
 
     ctx.restore();
 
+    // ── Crop Selection Overlay ────────────────────────────────────────────
+    if (cropMode) {
+      const drag = cropDrag.current;
+      let sel: { x: number; y: number; w: number; h: number } | null = null;
+      if (drag) {
+        sel = clampRect(drag.x0, drag.y0, drag.x1, drag.y1, offsetX, offsetY, videoW, videoH);
+      } else if (config.crop) {
+        sel = {
+          x: offsetX + config.crop.x * videoW,
+          y: offsetY + config.crop.y * videoH,
+          w: config.crop.w * videoW,
+          h: config.crop.h * videoH,
+        };
+      }
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      if (sel) {
+        ctx.fillRect(0, 0, cw, sel.y);
+        ctx.fillRect(0, sel.y, sel.x, sel.h);
+        ctx.fillRect(sel.x + sel.w, sel.y, cw - sel.x - sel.w, sel.h);
+        ctx.fillRect(0, sel.y + sel.h, cw, ch - sel.y - sel.h);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(sel.x, sel.y, sel.w, sel.h);
+        ctx.setLineDash([]);
+      } else {
+        ctx.fillRect(0, 0, cw, ch);
+      }
+      ctx.restore();
+    }
+
+    // Spawn click ripples for clicks the playhead crossed since the last frame.
     if (playing) {
-      trackClicks(ts);
+      const prev = prevPlayRef.current < 0 ? ts : prevPlayRef.current;
+      prevPlayRef.current = ts;
+      // If the playhead jumped (seek), don't spawn a burst for every click.
+      const jumped = Math.abs(ts - prev) > 300;
+      spawnClickRipples(jumped ? ts : prev, ts, vw, vh);
+    } else {
+      prevPlayRef.current = -1;
     }
 
     if (Math.abs(video.currentTime - prevTimeRef.current / 1000) >= 0.05) {
@@ -346,17 +522,102 @@ export default function Preview({
     }
   }, [
     canvasSize, config, keyframes, playing,
-    getCursorAt, onTimeUpdate, trackClicks, currentZoom
+    getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
   ]);
+  renderRef.current = render;
+
+  // Track wallpaper changes so the render can crossfade old → new.
+  useEffect(() => {
+    if (config.bgType === "image" && config.wallpaperUrl) {
+      if (wallpaperRef.current && wallpaperRef.current.path !== config.wallpaperUrl) {
+        fadeRef.current = { start: performance.now() };
+      }
+    }
+  }, [config.bgType, config.wallpaperUrl]);
+
+  // Preload the selected pack image so the overlay swaps in on the next frame
+  useEffect(() => {
+    const pack = config.cursorStyle.pack;
+    if (pack) loadCursorImage(pack.imageUrl, cursorImages.current);
+  }, [config.cursorStyle.pack]);
+
+  // Preload the selected wallpaper image
+  useEffect(() => {
+    if (config.bgType === "image" && config.wallpaperUrl) {
+      getWallpaperImage(config.wallpaperUrl, wallpaperImages.current);
+    }
+  }, [config.bgType, config.wallpaperUrl]);
+
+  // ── Crop mode: mouse drag to define the crop rect ─────────────────────────
+  const canvasToBacking = useCallback((clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    const g = geomRef.current;
+    if (!canvas) return { x: clientX, y: clientY };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * (g.cw / Math.max(1, rect.width)),
+      y: (clientY - rect.top) * (g.ch / Math.max(1, rect.height)),
+    };
+  }, []);
+
+  const handleCropMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!cropMode) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const p = canvasToBacking(e.clientX, e.clientY);
+      cropDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+    },
+    [cropMode, canvasToBacking]
+  );
+
+  const handleCropMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!cropMode || !cropDrag.current) return;
+      const p = canvasToBacking(e.clientX, e.clientY);
+      cropDrag.current.x1 = p.x;
+      cropDrag.current.y1 = p.y;
+    },
+    [cropMode, canvasToBacking]
+  );
+
+  const handleCropMouseUp = useCallback(() => {
+    const drag = cropDrag.current;
+    cropDrag.current = null;
+    if (!drag || !cropMode || !onCropApply) return;
+    const g = geomRef.current;
+    const rect = clampRect(drag.x0, drag.y0, drag.x1, drag.y1, g.offsetX, g.offsetY, g.videoW, g.videoH);
+    if (rect.w < 8 || rect.h < 8) {
+      onCropApply(null);
+    } else {
+      onCropApply({
+        x: (rect.x - g.offsetX) / g.videoW,
+        y: (rect.y - g.offsetY) / g.videoH,
+        w: rect.w / g.videoW,
+        h: rect.h / g.videoH,
+      });
+    }
+  }, [cropMode, onCropApply]);
 
   useEffect(() => {
+    if (!cropMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCropCancel?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cropMode, onCropCancel]);
+
+  // Stable rAF loop — always reads the latest render via renderRef, so config
+  // changes (cursor style/pack) apply on the very next frame without restarting.
+  useEffect(() => {
     const loop = () => {
-      render();
+      renderRef.current();
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [render]);
+  }, []);
 
   useEffect(() => {
     const onResize = () => {
@@ -371,26 +632,37 @@ export default function Preview({
   const videoUrl = convertFileSrc(videoPath);
 
   return (
-    <div className="preview-container" ref={containerRef}>
+    <div
+      className={`preview-container ${cropMode ? "crop-mode" : ""}`}
+      ref={containerRef}
+      onMouseDown={handleCropMouseDown}
+      onMouseMove={handleCropMouseMove}
+      onMouseUp={handleCropMouseUp}
+    >
       {loadError && <p className="preview-error">{loadError}</p>}
       <canvas
         ref={canvasRef}
         width={canvasSize.w}
         height={canvasSize.h}
         className="preview-canvas"
+        style={{ cursor: cropMode ? "crosshair" : undefined }}
       />
       <div className="preview-controls" onClick={togglePlay}>
         <div className={`play-overlay ${playing ? "hidden" : ""}`}>
-          <svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48">
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <Play size={44} fill="currentColor" />
         </div>
       </div>
+      {cropMode && (
+        <div className="crop-hint">
+          Drag to crop region • Esc to cancel • tiny click to reset
+        </div>
+      )}
       {config.zoomEnabled && keyframes.length > 0 && currentZoom > 1.02 && (
         <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}
       <video
         ref={videoRef}
+        id="preview-video"
         src={videoUrl}
         style={{ display: "none" }}
         onLoadedMetadata={onMetadata}
@@ -401,6 +673,93 @@ export default function Preview({
 }
 
 // Helpers
+function assetSrc(path: string): string {
+  // Web-root-relative paths (/Wallpapers/.., /Cursors/..) are served by Vite /
+  // the bundled frontend — no asset protocol needed. Absolute filesystem paths
+  // (e.g. recorded video) go through the Tauri asset protocol.
+  return path.startsWith("/") ? path : convertFileSrc(path);
+}
+
+function clampRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  minX: number,
+  minY: number,
+  maxW: number,
+  maxH: number
+): { x: number; y: number; w: number; h: number } {
+  const a = Math.max(minX, Math.min(minX + maxW, x0));
+  const b = Math.max(minX, Math.min(minX + maxW, x1));
+  const c = Math.max(minY, Math.min(minY + maxH, y0));
+  const d = Math.max(minY, Math.min(minY + maxH, y1));
+  return {
+    x: Math.min(a, b),
+    y: Math.min(c, d),
+    w: Math.abs(a - b),
+    h: Math.abs(c - d),
+  };
+}
+
+function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
+  const cached = cache.get(path);
+  if (cached) return cached;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = assetSrc(path);
+  cache.set(path, img);
+  return img;
+}
+
+function getWallpaperImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
+  const cached = cache.get(path);
+  if (cached) return cached;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = assetSrc(path);
+  cache.set(path, img);
+  return img;
+}
+
+function paintGradient(
+  ctx: CanvasRenderingContext2D,
+  preset: { type: "linear" | "radial"; angle: number; colors: { color: string; offset: number }[] },
+  w: number,
+  h: number
+) {
+  if (preset.type === "radial") {
+    const radius = Math.max(w, h) / 2;
+    const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, radius);
+    preset.colors.forEach((c) => grad.addColorStop(Math.min(1, Math.max(0, c.offset / 100)), c.color));
+    ctx.fillStyle = grad;
+  } else {
+    const rad = (preset.angle * Math.PI) / 180;
+    const len = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad));
+    const dx = (Math.cos(rad) * len) / 2;
+    const dy = (Math.sin(rad) * len) / 2;
+    const grad = ctx.createLinearGradient(w / 2 - dx, h / 2 - dy, w / 2 + dx, h / 2 + dy);
+    preset.colors.forEach((c) => grad.addColorStop(Math.min(1, Math.max(0, c.offset / 100)), c.color));
+    ctx.fillStyle = grad;
+  }
+  ctx.fillRect(0, 0, w, h);
+}
+
+function paintImageCover(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  w: number,
+  h: number
+) {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (iw === 0 || ih === 0) return;
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
 function drawCursor(
   ctx: CanvasRenderingContext2D,
   x: number,

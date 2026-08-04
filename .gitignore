@@ -44,4 +44,5 @@ desktop.ini
 *.mp4
 *.wav
 *.jsonl
+*.json
 snap_*

@@ -160,7 +160,10 @@
   border: 1px solid #2a2a38;
   border-radius: 8px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s, border-color 0.15s, transform 80ms ease;
 }
 
 .device-back-btn:hover {
@@ -186,6 +189,9 @@
   background: none;
   border: none;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   transition: color 0.15s;
 }
 

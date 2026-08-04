@@ -1,8 +1,16 @@
-import { useState } from "react";
-import type { EditorConfig, ExportSettings } from "../../../lib/types";
-import { WALLPAPER_PRESETS } from "../../../lib/wallpapers";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { MousePointer, Check } from "lucide-react";
+import type { EditorConfig, ExportSettings, CursorPackInfo } from "../../../lib/types";
+import { GRADIENT_PRESETS, COLOR_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import type { SidebarToolTab } from "../Editor";
 import "./Panels.css";
+
+interface WallpaperEntry {
+  name: string;
+  path: string;
+  url: string;
+}
 
 interface Props {
   config: EditorConfig;
@@ -36,8 +44,11 @@ export default function Panels({
   activeTab,
   onAddManualZoom,
 }: Props) {
-  const [bgCategory, setBgCategory] = useState<"wallpaper" | "gradient" | "color" | "image">("wallpaper");
+  const [wallpapers, setWallpapers] = useState<WallpaperEntry[]>([]);
+  const [wallpapersError, setWallpapersError] = useState("");
   const [selectedPresetId, setSelectedPresetId] = useState<string>("1080p");
+  const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
+  const [cursorPacksError, setCursorPacksError] = useState("");
   const [exportSettings, setExportSettings] = useState<ExportSettings>({
     format: "mp4",
     fps: 60,
@@ -52,6 +63,72 @@ export default function Panels({
     onConfigChange({ ...config, cursorStyle: { ...config.cursorStyle, ...patch } });
   const updateShadow = (patch: Partial<EditorConfig["shadow"]>) =>
     onConfigChange({ ...config, shadow: { ...config.shadow, ...patch } });
+
+  // ── Cursor packs ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const packs = await invoke<CursorPackInfo[]>("list_cursor_packs");
+        if (alive) setCursorPacks(packs);
+      } catch (e) {
+        if (alive) setCursorPacksError(`Failed to load cursor packs: ${e}`);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // ── Wallpaper images ─────────────────────────────────────────────────────
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const imgs = await invoke<WallpaperEntry[]>("list_wallpaper_images");
+        if (alive) setWallpapers(imgs);
+      } catch (e) {
+        if (alive) setWallpapersError(`Failed to load wallpapers: ${e}`);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const packHotspotOrDefault = (packId: string): { x: number; y: number } => {
+    const stored = config.cursorHotspots[packId];
+    if (stored) return stored;
+    const heardHand = /hand/i.test(packId);
+    return heardHand ? { x: 20, y: 0 } : { x: 10, y: 10 };
+  };
+
+  const selectPack = (pack: CursorPackInfo) => {
+    const hotspot = packHotspotOrDefault(pack.name);
+    onConfigChange({
+      ...config,
+      cursorStyle: {
+        ...config.cursorStyle,
+        pack: { id: pack.name, label: pack.label, imageUrl: pack.pointer_url },
+      },
+      cursorHotspots: { ...config.cursorHotspots, [pack.name]: hotspot },
+    });
+  };
+
+  const clearPack = () => updateCursor({ pack: null });
+
+  const setHotspot = (axis: "x" | "y", value: number) => {
+    const pack = config.cursorStyle.pack;
+    if (!pack) return;
+    const v = Math.max(0, Math.min(100, Math.round(value)));
+    onConfigChange({
+      ...config,
+      cursorHotspots: {
+        ...config.cursorHotspots,
+        [pack.id]: { ...packHotspotOrDefault(pack.id), [axis]: v },
+      },
+    });
+  };
 
   const applyPreset = (preset: typeof PREMIERE_PRESETS[number]) => {
     setSelectedPresetId(preset.id);
@@ -69,7 +146,8 @@ export default function Panels({
   const activeDuration = Math.max(1, (config.trimEnd || duration) - config.trimStart);
   const estimatedMB = (activeDuration * (exportSettings.width * exportSettings.height * exportSettings.fps * 0.0000035)).toFixed(1);
 
-  const filteredPresets = WALLPAPER_PRESETS.filter((p) => p.category === bgCategory || (bgCategory === "wallpaper" && p.category === "wallpaper"));
+  const bgTab: "gradient" | "image" | "color" =
+    config.bgType === "image" ? "image" : config.bgType === "color" ? "color" : "gradient";
 
   return (
     <aside className="ss-panels-drawer">
@@ -80,53 +158,95 @@ export default function Panels({
             {/* Category Tabs */}
             <div className="ss-subtab-segmented">
               <button
-                className={`subtab-btn ${bgCategory === "wallpaper" ? "active" : ""}`}
-                onClick={() => { setBgCategory("wallpaper"); update({ bgType: "wallpaper" }); }}
-              >
-                Wallpaper
-              </button>
-              <button
-                className={`subtab-btn ${bgCategory === "gradient" ? "active" : ""}`}
-                onClick={() => { setBgCategory("gradient"); update({ bgType: "gradient" }); }}
+                className={`subtab-btn ${bgTab === "gradient" ? "active" : ""}`}
+                onClick={() => update({ bgType: "gradient" })}
               >
                 Gradient
               </button>
               <button
-                className={`subtab-btn ${bgCategory === "color" ? "active" : ""}`}
-                onClick={() => { setBgCategory("color"); update({ bgType: "color" }); }}
+                className={`subtab-btn ${bgTab === "image" ? "active" : ""}`}
+                onClick={() => update({ bgType: "image" })}
+              >
+                Image
+              </button>
+              <button
+                className={`subtab-btn ${bgTab === "color" ? "active" : ""}`}
+                onClick={() => update({ bgType: "color" })}
               >
                 Color
               </button>
             </div>
 
-            {/* Wallpaper Cards Grid */}
-            <div className="ss-wallpaper-grid">
-              {filteredPresets.map((wp) => (
-                <div
-                  key={wp.id}
-                  className={`ss-wallpaper-card ${config.wallpaperUrl === wp.id ? "active" : ""}`}
-                  style={{ background: wp.gradient }}
-                  onClick={() => update({ bgType: bgCategory, wallpaperUrl: wp.id, backgroundColor: wp.gradient })}
-                  title={wp.name}
-                />
-              ))}
-            </div>
+            {/* Gradient Presets Grid */}
+            {bgTab === "gradient" && (
+              <div className="ss-wallpaper-grid">
+                {GRADIENT_PRESETS.map((preset) => (
+                  <div
+                    key={preset.id}
+                    className={`ss-wallpaper-card ${config.wallpaperUrl === preset.id ? "active" : ""}`}
+                    style={{ background: gradientToCss(preset) }}
+                    onClick={() => update({ bgType: "gradient", wallpaperUrl: preset.id })}
+                    title={preset.name}
+                  />
+                ))}
+              </div>
+            )}
 
-            <ColorRow label="Custom Solid Color" value={config.backgroundColor} onChange={(v) => update({ backgroundColor: v, bgType: "color" })} />
+            {/* Wallpaper Images Grid */}
+            {bgTab === "image" && (
+              <>
+                <div className="ss-wallpaper-grid">
+                  {wallpapers.map((wp) => (
+                    <div
+                      key={wp.path}
+                      className={`ss-wallpaper-img-card ${config.wallpaperUrl === wp.url ? "active" : ""}`}
+                      onClick={() => update({ bgType: "image", wallpaperUrl: wp.url })}
+                      title={wp.name}
+                    >
+                      <img src={wp.url} alt={wp.name} draggable={false} />
+                    </div>
+                  ))}
+                </div>
+                {wallpapersError && <p className="cursor-pack-error">{wallpapersError}</p>}
+                {wallpapers.length === 0 && !wallpapersError && (
+                  <p className="cursor-pack-error">No images found — place PNG/JPG files in public/Wallpapers/</p>
+                )}
+              </>
+            )}
+
+            {/* Color Presets Grid */}
+            {bgTab === "color" && (
+              <>
+                <div className="ss-wallpaper-grid">
+                  {COLOR_PRESETS.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className={`ss-wallpaper-card ${config.bgType === "color" && config.backgroundColor === preset.color ? "active" : ""}`}
+                      style={{ background: preset.color, border: "1px solid var(--border-subtle)" }}
+                      onClick={() => update({ bgType: "color", backgroundColor: preset.color })}
+                      title={preset.name}
+                    />
+                  ))}
+                </div>
+                <ColorRow label="Custom Solid Color" value={config.backgroundColor} onChange={(v) => update({ backgroundColor: v, bgType: "color" })} />
+              </>
+            )}
           </Section>
 
-          {/* Background Blur */}
-          <Section title="Background Blur">
-            <SliderRow
-              label="Blur Radius"
-              value={config.bgBlur}
-              min={0}
-              max={100}
-              step={2}
-              unit="px"
-              onChange={(v) => update({ bgBlur: v })}
-            />
-          </Section>
+          {/* Background Blur — only applies to wallpaper images */}
+          {bgTab === "image" && (
+            <Section title="Background Blur (Image Only)">
+              <SliderRow
+                label="Blur Radius"
+                value={config.bgBlur}
+                min={0}
+                max={100}
+                step={2}
+                unit="px"
+                onChange={(v) => update({ bgBlur: v })}
+              />
+            </Section>
+          )}
 
           {/* Shape & Padding */}
           <Section title="Shape &amp; Padding (4-Side)">
@@ -223,6 +343,73 @@ export default function Panels({
         <div className="ss-drawer-content">
           <Section title="Cursor Overlay">
             <CheckRow label="Show Cursor Overlay" checked={config.showCursor} onChange={(v) => update({ showCursor: v })} />
+
+            {/* Cursor Pack Grid */}
+            <div className="cursor-pack-grid">
+              <div
+                className={`cursor-pack-card ${!config.cursorStyle.pack ? "active" : ""}`}
+                onClick={clearPack}
+                title="Built-in cursor"
+              >
+                <div className="cursor-pack-thumb default-thumb">
+                  <MousePointer size={16} />
+                </div>
+                <span className="cursor-pack-label">Default</span>
+              </div>
+
+              {cursorPacks.map((pack) => (
+                <div
+                  key={pack.name}
+                  className={`cursor-pack-card ${config.cursorStyle.pack?.id === pack.name ? "active" : ""}`}
+                  onClick={() => selectPack(pack)}
+                  title={pack.label}
+                >
+                  <div className="cursor-pack-thumb">
+                    <img
+                      src={pack.pointer_url}
+                      alt={pack.label}
+                      draggable={false}
+                    />
+                  </div>
+                  <span className="cursor-pack-label">{pack.label}</span>
+                </div>
+              ))}
+            </div>
+            {cursorPacksError && <p className="cursor-pack-error">{cursorPacksError}</p>}
+            {cursorPacks.length === 0 && !cursorPacksError && (
+              <p className="cursor-pack-error">No packs found in public/Cursors/</p>
+            )}
+
+            {/* Hotspot tuning (pack cursors only) */}
+            {config.cursorStyle.pack && (
+              <div className="hotspot-box">
+                <div className="hotspot-title">
+                  Hotspot
+                  <span className="hotspot-hint">click point as % of image</span>
+                </div>
+                <div className="hotspot-row">
+                  <label>Hotspot X</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={packHotspotOrDefault(config.cursorStyle.pack.id).x}
+                    onChange={(e) => setHotspot("x", Number(e.target.value))}
+                  />
+                </div>
+                <div className="hotspot-row">
+                  <label>Hotspot Y</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={packHotspotOrDefault(config.cursorStyle.pack.id).y}
+                    onChange={(e) => setHotspot("y", Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            )}
+
             <ColorRow label="Cursor Color" value={config.cursorStyle.color} onChange={(v) => updateCursor({ color: v })} />
             <SliderRow label="Cursor Size" value={config.cursorStyle.size} min={8} max={40} step={1} unit="px" onChange={(v) => updateCursor({ size: v })} />
             <div className="field-row">
@@ -370,11 +557,7 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
     <div className="field-row check-row" onClick={() => onChange(!checked)}>
       <label>{label}</label>
       <div className={`pro-checkbox ${checked ? "checked" : ""}`}>
-        {checked && (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" width="12" height="12">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        )}
+        {checked && <Check size={12} strokeWidth={3} />}
       </div>
     </div>
   );

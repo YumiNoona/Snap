@@ -4,15 +4,35 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0a0a0a;
+  background: var(--bg-base);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   min-height: 0;
 }
 
 .preview-canvas {
-  border-radius: 4px;
   max-width: 100%;
   max-height: 100%;
+}
+
+.preview-container.crop-mode .preview-controls {
+  pointer-events: none;
+  opacity: 0;
+}
+
+.crop-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--font-xs);
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid var(--border-strong);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  z-index: 11;
+  pointer-events: none;
 }
 
 .preview-error {
@@ -20,11 +40,12 @@
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  color: #f87171;
-  font-size: 12px;
-  background: rgba(0, 0, 0, 0.7);
+  color: var(--danger);
+  font-size: var(--font-xs);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
   padding: 6px 14px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   z-index: 10;
 }
 
@@ -41,14 +62,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(6px);
-  color: #fff;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--accent-primary);
   opacity: 1;
-  transition: opacity 0.2s, transform 0.2s;
+  transition: opacity 150ms ease, transform 150ms ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .play-overlay.hidden {
@@ -57,5 +79,19 @@
 }
 
 .play-overlay:hover {
-  transform: scale(1.1);
+  transform: scale(1.08);
+}
+
+.zoom-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  font-size: var(--font-xs);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--accent-focus);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  z-index: 10;
 }

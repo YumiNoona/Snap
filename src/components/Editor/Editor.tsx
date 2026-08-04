@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ChevronLeft, Clock, ChevronDown, Upload, Minus, Square, X, Image as ImageIcon, ZoomIn, MousePointer, Shapes } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -16,20 +17,43 @@ interface Props {
 
 export type SidebarToolTab = "background" | "zoom" | "cursor" | "audio" | "shadow" | "export";
 
+const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
+
+function loadCursorHotspots(): Record<string, { x: number; y: number }> {
+  try {
+    return JSON.parse(localStorage.getItem(HOTSPOTS_STORAGE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
 export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
-  const [config, setConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
+  const [config, setConfig] = useState<EditorConfig>(() => ({
+    ...DEFAULT_EDITOR_CONFIG,
+    cursorHotspots: loadCursorHotspots(),
+  }));
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("background");
+  const [cropMode, setCropMode] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const appWindow = getCurrentWindow();
 
+  // Persist per-pack cursor hotspot nudges across sessions
+  useEffect(() => {
+    try {
+      localStorage.setItem(HOTSPOTS_STORAGE_KEY, JSON.stringify(config.cursorHotspots));
+    } catch {
+      // ignore storage errors
+    }
+  }, [config.cursorHotspots]);
+
   // Sync playing state with video element
   useEffect(() => {
-    const el = document.querySelector("video");
+    const el = document.querySelector<HTMLVideoElement>("video#preview-video");
     if (el) {
       videoRef.current = el;
       const onPlay = () => setPlaying(true);
@@ -41,19 +65,77 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         el.removeEventListener("pause", onPause);
       };
     }
-  }, []);
+  }, [videoPath]);
 
   const togglePlay = useCallback(() => {
-    const el = videoRef.current;
+    const el = videoRef.current ?? document.querySelector<HTMLVideoElement>("video#preview-video");
     if (!el) return;
     if (el.paused) {
-      el.play();
+      el.play()?.catch(() => {});
       setPlaying(true);
     } else {
       el.pause();
       setPlaying(false);
     }
   }, []);
+
+  // Pause playback at the trim end / keep playhead inside the trim range
+  useEffect(() => {
+    const el = videoRef.current ?? document.querySelector("video");
+    if (!el) return;
+    const onTime = () => {
+      const end = config.trimEnd || el.duration || 0;
+      if (!el.paused && end > 0 && el.currentTime >= end) {
+        el.pause();
+        el.currentTime = end;
+        setCurrentTime(end);
+      }
+    };
+    el.addEventListener("timeupdate", onTime);
+    return () => el.removeEventListener("timeupdate", onTime);
+  }, [config.trimEnd, config.trimStart]);
+
+  const seekTo = useCallback(
+    (t: number) => {
+      const el = videoRef.current;
+      if (!el) return;
+      const end = config.trimEnd || el.duration || t;
+      const clamped = Math.max(config.trimStart, Math.min(t, end));
+      el.currentTime = clamped;
+      setCurrentTime(clamped);
+    },
+    [config.trimStart, config.trimEnd]
+  );
+
+  const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
+
+  const handleCropApply = useCallback(
+    (crop: { x: number; y: number; w: number; h: number } | null) => {
+      setConfig((c) => ({ ...c, crop }));
+      setCropMode(false);
+    },
+    []
+  );
+
+  const handleCropCancel = useCallback(() => setCropMode(false), []);
+
+  const handleTrimStart = (t: number) => {
+    setConfig({ ...config, trimStart: t });
+    const el = videoRef.current;
+    if (el && el.currentTime < t) {
+      el.currentTime = t;
+      setCurrentTime(t);
+    }
+  };
+
+  const handleTrimEnd = (t: number) => {
+    setConfig({ ...config, trimEnd: t });
+    const el = videoRef.current;
+    if (el && el.currentTime > t) {
+      el.currentTime = t;
+      setCurrentTime(t);
+    }
+  };
 
   const handleExport = async (settings: ExportSettings) => {
     setExportStatus("Exporting...");
@@ -91,9 +173,10 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   return (
     <div className="screenstudio-editor-layout">
       {/* ── Top Bar ────────────────────────────────────────────── */}
-      <header className="ss-topbar">
+      <header className="ss-topbar" data-tauri-drag-region>
         <div
           className="ss-drag-area"
+          data-tauri-drag-region
           onMouseDown={async (e) => {
             e.preventDefault();
             await appWindow.startDragging();
@@ -102,10 +185,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
 
         <div className="ss-topbar-left">
           {/* Back button */}
-          <button className="ss-icon-btn back-btn" onClick={onClose} title="Back to Launcher">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
+          <button className="ss-icon-btn back-btn" onClick={onClose} title="Close Editor">
+            <ChevronLeft size={16} />
           </button>
 
           <span className="ss-file-title">
@@ -116,14 +197,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <div className="ss-topbar-center">
           {/* Quick Presets / Undo */}
           <div className="ss-presets-pill">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 8v4l3 3" />
-            </svg>
+            <Clock size={13} />
             <span>Presets</span>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
-              <path d="M6 9l6 6 6-6" />
-            </svg>
+            <ChevronDown size={12} />
           </div>
         </div>
 
@@ -133,30 +209,19 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             className="ss-topbar-export-btn"
             onClick={() => setActiveTool("export")}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" width="14" height="14">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
+            <Upload size={14} />
             Export
           </button>
 
           <div className="ss-window-controls">
             <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" width="12" height="12">
-                <line x1="2" y1="6" x2="10" y2="6" />
-              </svg>
+              <Minus size={12} />
             </button>
             <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" width="12" height="12">
-                <rect x="2" y="2" width="8" height="8" rx="1" />
-              </svg>
+              <Square size={10} />
             </button>
             <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" width="12" height="12">
-                <line x1="2" y1="2" x2="10" y2="10" />
-                <line x1="10" y1="2" x2="2" y2="10" />
-              </svg>
+              <X size={12} />
             </button>
           </div>
         </div>
@@ -171,11 +236,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("background")}
             title="Background & Wallpaper"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <rect x="3" y="3" width="18" height="18" rx="3" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <polyline points="21 15 16 10 5 21" />
-            </svg>
+            <ImageIcon size={18} />
           </button>
 
           <button
@@ -183,12 +244,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("zoom")}
             title="Zoom & Pan Motion"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              <line x1="11" y1="8" x2="11" y2="14" />
-              <line x1="8" y1="11" x2="14" y2="11" />
-            </svg>
+            <ZoomIn size={18} />
           </button>
 
           <button
@@ -196,9 +252,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("cursor")}
             title="Cursor & Pointer Styling"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <path d="M3 3l7 18 3-7 7-3L3 3z" />
-            </svg>
+            <MousePointer size={18} />
           </button>
 
           <button
@@ -206,9 +260,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("shadow")}
             title="Shadow & Corners"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <rect x="4" y="4" width="16" height="16" rx="3" />
-            </svg>
+            <Shapes size={18} />
           </button>
 
           <button
@@ -216,11 +268,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("export")}
             title="Render & Export Settings"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
+            <Upload size={18} />
           </button>
         </aside>
 
@@ -236,11 +284,12 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onTimeUpdate={setCurrentTime}
             onDuration={(d) => {
               setDuration(d);
-              if (config.trimEnd === 0) {
-                setConfig({ ...config, trimEnd: d });
-              }
+              setConfig((c) => (c.trimEnd === 0 ? { ...c, trimEnd: d } : c));
             }}
             onClick={togglePlay}
+            cropMode={cropMode}
+            onCropApply={handleCropApply}
+            onCropCancel={handleCropCancel}
           />
         </div>
 
@@ -265,23 +314,17 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         currentTime={currentTime}
         keyframes={keyframes}
         config={config}
-        onSeek={(t: number) => {
-          const el = videoRef.current;
-          if (el) {
-            el.currentTime = t;
-            setCurrentTime(t);
-          }
-        }}
-        onTrimStartChange={(t: number) =>
-          setConfig({ ...config, trimStart: t })
-        }
-        onTrimEndChange={(t: number) =>
-          setConfig({ ...config, trimEnd: t })
-        }
+        playing={playing}
+        onTogglePlay={togglePlay}
+        onSeek={seekTo}
+        onTrimStartChange={handleTrimStart}
+        onTrimEndChange={handleTrimEnd}
         onCutsChange={(newCuts: number[]) =>
           setConfig({ ...config, cuts: newCuts })
         }
         onAspectChange={(ar) => setConfig({ ...config, aspectRatio: ar })}
+        onToggleCrop={handleToggleCrop}
+        cropActive={cropMode || !!config.crop}
       />
     </div>
   );

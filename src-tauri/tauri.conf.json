@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Snap",
         "width": 920,
         "height": 320,
@@ -19,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "img-src 'self' asset: https://asset.localhost data:; media-src 'self' asset: https://asset.localhost blob:; default-src 'self'",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost data:; media-src 'self' asset: http://asset.localhost https://asset.localhost blob:; connect-src ipc: http://ipc.localhost http://asset.localhost https://asset.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

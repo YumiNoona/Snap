@@ -31,6 +31,49 @@ pub struct DisplayTarget {
     pub target_type: String,
 }
 
+#[derive(Clone, Serialize)]
+pub struct TargetBounds {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// Physical-pixel bounds of a monitor or window target. The editor uses these to
+/// map input-hook screen coordinates onto the recorded video frame.
+#[tauri::command]
+pub fn get_target_bounds(target_id: String) -> std::result::Result<TargetBounds, String> {
+    unsafe {
+        if let Some(hmon) = hmonitor_from_id(&target_id) {
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(hmon, &mut info).as_bool() {
+                let r = info.rcMonitor;
+                return Ok(TargetBounds {
+                    x: r.left,
+                    y: r.top,
+                    w: r.right - r.left,
+                    h: r.bottom - r.top,
+                });
+            }
+        }
+        if let Some(hwnd) = hwnd_from_id(&target_id) {
+            let mut r = RECT::default();
+            if GetWindowRect(hwnd, &mut r).is_ok() {
+                return Ok(TargetBounds {
+                    x: r.left,
+                    y: r.top,
+                    w: r.right - r.left,
+                    h: r.bottom - r.top,
+                });
+            }
+        }
+    }
+    Err(format!("Could not resolve bounds for target {target_id}"))
+}
+
 // ── Utility: get user's Videos directory path ────────────────────────────────
 
 #[tauri::command]
@@ -270,7 +313,11 @@ fn run_capture_thread(
             size,
         )?;
         let session = frame_pool.CreateCaptureSession(&item)?;
-        eprintln!("[Snap] Step 5/7: Frame pool and capture session created OK");
+        // Never bake the OS cursor into the raw video — the editor draws its own
+        // custom cursor overlay from the input-hook log. Must be set before
+        // StartCapture. Only affects NEW recordings.
+        session.SetIsCursorCaptureEnabled(false)?;
+        eprintln!("[Snap] Step 5/7: Frame pool and capture session created OK (OS cursor capture disabled)");
 
         // ── Step 6: Start capture (polling — no DispatcherQueue needed) ──
         eprintln!("[Snap] Step 6/7: Starting capture session (polling mode)...");
@@ -295,6 +342,13 @@ fn run_capture_thread(
             match frame_pool.TryGetNextFrame() {
                 Ok(frame) => {
                     frame_count += 1;
+
+                    // First frame == video time 0 — stamp it into the input log so
+                    // the editor can align input-event timestamps with the video.
+                    if frame_count == 1 {
+                        crate::input_hook::mark_capture_start();
+                        eprintln!("[Snap] Step 7/7: first frame received via poll OK");
+                    }
 
                     if now >= next_target || frame_count == 1 {
                         if frame_count == 1 {

@@ -88,7 +88,9 @@ fn ensure_hook_started() {
                         let mut last = LAST_MOUSE.lock().unwrap();
                         let now = Instant::now();
                         if let Some(prev) = *last {
-                            if now.duration_since(prev) < Duration::from_micros(16_667) {
+                            // ~250Hz mousemove cap — dense enough for smooth cursor
+                            // interpolation without exploding the log file size.
+                            if now.duration_since(prev) < Duration::from_micros(4_000) {
                                 return;
                             }
                         }
@@ -174,6 +176,10 @@ fn ensure_hook_started() {
 pub async fn start_input_logging(
     output_path: String,
     _session_start_time: String,
+    region_x: Option<f64>,
+    region_y: Option<f64>,
+    region_w: Option<f64>,
+    region_h: Option<f64>,
 ) -> std::result::Result<(), String> {
     // If already active, stop the previous session first.
     if IS_ACTIVE.load(Ordering::Relaxed) {
@@ -201,13 +207,50 @@ pub async fn start_input_logging(
     // Reset mouse throttle
     *LAST_MOUSE.lock().map_err(|e| e.to_string())? = None;
 
-    *ACTIVE_WRITER.lock().map_err(|e| e.to_string())? = Some(BufWriter::new(file));
+    // Build the writer first, then write the recording region meta line before
+    // any event can be flushed — the hook thread may already be alive and starts
+    // writing events immediately after IS_ACTIVE flips.
+    let mut writer = BufWriter::new(file);
+
+    if let (Some(x), Some(y), Some(w), Some(h)) = (region_x, region_y, region_w, region_h) {
+        if w > 0.0 && h > 0.0 {
+            let meta = serde_json::json!({
+                "type": "meta",
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            })
+            .to_string();
+            let _ = writeln!(writer, "{meta}");
+        }
+    }
+
+    *ACTIVE_WRITER.lock().map_err(|e| e.to_string())? = Some(writer);
     IS_ACTIVE.store(true, Ordering::SeqCst);
 
     ensure_hook_started();
 
     eprintln!("[Snap Input] Step 2: logging active");
     Ok(())
+}
+
+/// Timestamp the moment the video capture produces its first frame (video time 0).
+/// Called by the capture module; writes a `meta` line the editor uses to align
+/// input-event timestamps with video time.
+pub fn mark_capture_start() {
+    if !IS_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
+    let ts = match *SESSION_START.lock().unwrap() {
+        Some(start) => start.elapsed().as_millis() as u64,
+        None => return,
+    };
+    if let Ok(mut guard) = ACTIVE_WRITER.lock() {
+        if let Some(ref mut w) = *guard {
+            let _ = writeln!(w, "{{\"type\":\"meta\",\"captureStartMs\":{ts}}}");
+        }
+    }
 }
 
 // ── Stop input logging (async) ───────────────────────────────────────────────

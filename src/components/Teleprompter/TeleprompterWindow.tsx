@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Grip, X, Play, Pause, RotateCcw } from "lucide-react";
 import "./TeleprompterWindow.css";
 
 interface Props {
@@ -117,14 +118,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
       {/* Drag Titlebar */}
       <div className="tp-titlebar">
         <div className="tp-drag-handle">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
-            <circle cx="9" cy="5" r="1" />
-            <circle cx="9" cy="12" r="1" />
-            <circle cx="9" cy="19" r="1" />
-            <circle cx="15" cy="5" r="1" />
-            <circle cx="15" cy="12" r="1" />
-            <circle cx="15" cy="19" r="1" />
-          </svg>
+          <Grip size={15} />
           <span className="tp-window-title">Teleprompter</span>
         </div>
 
@@ -144,7 +138,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
         </div>
 
         <button className="tp-close-btn" onClick={onClose} title="Close Teleprompter">
-          ✕
+          <X size={14} />
         </button>
       </div>
 
@@ -215,27 +209,19 @@ export default function TeleprompterWindow({ onClose }: Props) {
             >
               {isPlaying ? (
                 <>
-                  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                    <rect x="6" y="4" width="4" height="16" rx="1" />
-                    <rect x="14" y="4" width="4" height="16" rx="1" />
-                  </svg>
+                  <Pause size={14} fill="currentColor" />
                   Pause
                 </>
               ) : (
                 <>
-                  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-                    <polygon points="5,3 19,12 5,21" />
-                  </svg>
+                  <Play size={14} fill="currentColor" />
                   Start
                 </>
               )}
             </button>
 
             <button className="tp-icon-btn" onClick={resetPrompt} title="Reset to Top">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                <path d="M3 3v5h5" />
-              </svg>
+              <RotateCcw size={14} />
             </button>
 
             <div className="tp-control-item">

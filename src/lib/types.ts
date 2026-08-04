@@ -16,11 +16,32 @@ export interface Keyframe {
   easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out";
 }
 
+export interface CursorPackState {
+  name: string;
+  path: string;
+  url: string;
+}
+
+export interface CursorPackInfo {
+  name: string;
+  label: string;
+  pointer_path: string;
+  pointer_url: string;
+  states: CursorPackState[];
+}
+
+export interface CursorPackSelection {
+  id: string;
+  label: string;
+  imageUrl: string;
+}
+
 export interface CursorStyle {
   color: string;
   size: number;
   shape: "circle" | "arrow";
   showClickRipples: boolean;
+  pack: CursorPackSelection | null;
 }
 
 export interface ShadowConfig {
@@ -41,6 +62,7 @@ export interface EditorConfig {
   borderRadius: number;
   shadow: ShadowConfig;
   cursorStyle: CursorStyle;
+  cursorHotspots: Record<string, { x: number; y: number }>;
   showCursor: boolean;
   zoomEnabled: boolean;
   zoomMode: "auto" | "manual";
@@ -86,7 +108,9 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     size: 16,
     shape: "arrow",
     showClickRipples: true,
+    pack: null,
   },
+  cursorHotspots: {},
   showCursor: true,
   zoomEnabled: true,
   zoomMode: "auto",

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import "./DeviceView.css";
 
 interface Props {
@@ -74,14 +75,14 @@ export default function DeviceView({ onBack }: Props) {
           </div>
 
           <button className="device-back-btn" onClick={onBack}>
-            ‹ Back to Launcher
+            <ChevronLeft size={15} /> Back to Launcher
           </button>
         </div>
       ) : (
         /* Step-by-Step USB Connection Guide (image_2.png) */
         <div className="device-guide-content">
           <button className="guide-back-link" onClick={() => setSelectedOs("none")}>
-            ‹ Back
+            <ChevronLeft size={14} /> Back
           </button>
 
           <div className="guide-steps-container">

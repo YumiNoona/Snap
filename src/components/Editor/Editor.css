@@ -2,9 +2,9 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #09090d;
-  color: #e4e4e4;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-family);
   user-select: none;
   overflow: hidden;
 }
@@ -15,10 +15,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 42px;
+  height: 44px;
   padding: 0 12px;
-  background: #111118;
-  border-bottom: 1px solid #1a1a26;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   position: relative;
   z-index: 10;
@@ -41,27 +41,26 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  color: #8888a0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   background: none;
   border: none;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .ss-icon-btn:hover {
-  color: #ffffff;
-  background: #1c1c28;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .ss-file-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #cccccc;
-  letter-spacing: 0.2px;
-  font-family: monospace;
+  font-size: var(--font-sm);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .ss-topbar-center {
@@ -79,48 +78,46 @@
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 600;
-  color: #a0a0b8;
-  background: #161622;
-  border: 1px solid #242436;
-  border-radius: 20px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 150ms ease, border-color 150ms ease;
 }
 
 .ss-presets-pill:hover {
-  color: #ffffff;
-  border-color: #38bdf8;
+  color: var(--text-primary);
+  border-color: var(--border-strong);
 }
 
 .ss-topbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   z-index: 1;
 }
 
-/* PROMINENT TOP-RIGHT EXPORT BUTTON */
+/* TOP-RIGHT EXPORT BUTTON (Flash Amber #F5A623) */
 .ss-topbar-export-btn {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 6px 16px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
-  color: #ffffff;
-  background: linear-gradient(135deg, #6366f1, #3b82f6);
+  color: var(--bg-base);
+  background: var(--accent-primary);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
-  transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
+  transition: opacity 150ms ease, transform 80ms ease;
 }
 
 .ss-topbar-export-btn:hover {
   opacity: 0.95;
-  box-shadow: 0 6px 18px rgba(99, 102, 241, 0.55);
 }
 
 .ss-topbar-export-btn:active {
@@ -138,27 +135,27 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 24px;
-  border-radius: 4px;
-  color: #8888a0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   background: none;
   border: none;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .ss-window-controls .window-btn:hover {
-  color: #ffffff;
-  background: #1c1c28;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .ss-window-controls .window-btn.close-btn:hover {
-  color: #ffffff;
-  background: #e81123;
+  color: var(--danger);
+  background: rgba(229, 72, 77, 0.15);
 }
 
-/* ── Main Workspace ─────────────────────────────────────── */
+/* ── MODULE 5: Three-Zone Main Workspace ────────────────── */
 
 .ss-editor-body {
   display: flex;
@@ -167,51 +164,52 @@
   position: relative;
 }
 
-/* Left Vertical Tool Palette (Screen Studio Icon Toolbar) */
+/* Left Vertical Tool Palette */
 .ss-vertical-tool-palette {
   width: 48px;
   flex-shrink: 0;
-  background: #111118;
-  border-right: 1px solid #1a1a26;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 12px 0;
-  gap: 14px;
+  gap: 12px;
   z-index: 5;
 }
 
 .ss-tool-icon-btn {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  color: #777790;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   background: none;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, transform 0.1s;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
 .ss-tool-icon-btn:hover {
-  color: #ffffff;
-  background: #1a1a28;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .ss-tool-icon-btn.active {
-  color: #6366f1;
-  background: rgba(99, 102, 241, 0.15);
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: var(--accent-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent-primary);
 }
 
-/* Center Preview Area */
+/* Center Preview Workspace (Stage) */
 .ss-preview-center-area {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #07070b;
+  background: var(--bg-base);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5);
   position: relative;
   overflow: hidden;
 }

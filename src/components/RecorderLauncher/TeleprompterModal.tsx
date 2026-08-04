@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { FileText, X } from "lucide-react";
 import "./TeleprompterModal.css";
 
 interface Props {
@@ -29,14 +30,11 @@ export default function TeleprompterModal({ onClose }: Props) {
       <div className="teleprompter-card">
         <div className="teleprompter-header">
           <div className="teleprompter-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <rect x="2" y="4" width="20" height="16" rx="2" />
-              <path d="M6 8h12M6 12h12M6 16h8" />
-            </svg>
+            <FileText size={16} />
             Teleprompter Script
           </div>
           <button className="teleprompter-close-btn" onClick={onClose}>
-            ✕
+            <X size={14} />
           </button>
         </div>
 

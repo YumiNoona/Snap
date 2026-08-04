@@ -2,24 +2,26 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0b0b0e;
-  color: #e4e4e4;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-family);
   user-select: none;
+  overflow: hidden;
 }
 
-/* ── Topbar (Compact & Sleek) ────────────────────────── */
+/* ── MODULE 1: Title bar ────────────────────────── */
 
 .titlebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 38px;
+  height: 44px;
   padding: 0 12px;
-  background: #111116;
-  border-bottom: 1px solid #1a1a24;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   position: relative;
+  z-index: 100;
 }
 
 .titlebar-drag-area {
@@ -31,21 +33,35 @@
 .titlebar-left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   z-index: 1;
 }
 
 .brand-logo-area {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .app-name {
+  font-size: var(--font-lg);
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+.brand-logo-text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f5a623, #e8871a);
+  color: var(--bg-base);
   font-size: 13px;
-  font-weight: 700;
-  color: #ffffff;
-  letter-spacing: 0.2px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .menu-wrap {
@@ -53,20 +69,20 @@
 }
 
 .menu-item {
-  font-size: 12px;
-  color: #a0a0b2;
-  padding: 3px 8px;
-  border-radius: 4px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  transition: color 0.15s, background 0.15s;
+  gap: 5px;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .menu-item:hover {
-  color: #ffffff;
-  background: #1c1c28;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .dropdown-menu {
@@ -74,12 +90,12 @@
   top: 100%;
   left: 0;
   margin-top: 4px;
-  background: #161620;
-  border: 1px solid #282838;
-  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
   padding: 4px;
   min-width: 170px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
   z-index: 200;
 }
 
@@ -88,31 +104,31 @@
   width: 100%;
   text-align: left;
   padding: 6px 10px;
-  font-size: 12px;
-  color: #a0a0b2;
-  border-radius: 4px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
   background: none;
   border: none;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition: background 150ms ease, color 150ms ease;
 }
 
 .dropdown-item:hover {
-  background: #222232;
-  color: #ffffff;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .dropdown-item.danger {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .dropdown-item.danger:hover {
-  background: rgba(239, 68, 68, 0.12);
+  background: rgba(229, 72, 77, 0.15);
 }
 
 .dropdown-divider {
   height: 1px;
-  background: #242434;
+  background: var(--border-subtle);
   margin: 4px 6px;
 }
 
@@ -123,29 +139,23 @@
   z-index: 1;
 }
 
-/* Compact Settings Gear & Window Control Buttons */
 .titlebar-icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  color: #8888a0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   background: none;
   border: none;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .titlebar-icon-btn:hover {
-  color: #ffffff;
-  background: #1c1c28;
-}
-
-.titlebar-icon-btn svg {
-  width: 14px;
-  height: 14px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .window-controls {
@@ -155,37 +165,37 @@
   margin-left: 4px;
 }
 
+/* Ghost Icon Buttons 32x32px hit area */
 .window-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 24px;
-  border-radius: 4px;
-  color: #8888a0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
   background: none;
   border: none;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .window-btn:hover {
-  color: #ffffff;
-  background: #1c1c28;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .window-btn.close-btn:hover {
-  color: #ffffff;
-  background: #e81123;
+  color: var(--danger);
+  background: rgba(229, 72, 77, 0.15);
 }
 
 .window-btn svg {
-  width: 11px;
-  height: 11px;
-  pointer-events: none;
+  width: 12px;
+  height: 12px;
 }
 
-/* ── Main Workspace (Compact Height) ───────────────────────── */
+/* ── MODULE 2: RecorderLauncher (Mode Picker) ───────────────────── */
 
 .main-content {
   display: flex;
@@ -193,72 +203,91 @@
   overflow: hidden;
 }
 
-/* Left: Recording Modes Area */
 .recording-modes-area {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 16px 20px;
-  background: #0b0b0e;
+  padding: 20px;
+  background: var(--bg-base);
 }
 
 .section-heading {
-  font-size: 13px;
-  font-weight: 500;
-  color: #8888a0;
-  margin-bottom: 16px;
-  letter-spacing: 0.2px;
+  font-size: var(--font-2xl);
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  letter-spacing: -0.4px;
+}
+
+.section-sub {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.card-preview-icon {
+  color: rgba(245, 166, 35, 0.65);
+  filter: drop-shadow(0 0 10px rgba(245, 166, 35, 0.25));
+  transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1), color 150ms ease;
+}
+
+.focusee-card:hover .card-preview-icon {
+  transform: scale(1.12) translateY(-1px);
+  color: var(--accent-primary);
 }
 
 .focusee-mode-cards-grid {
   display: flex;
-  gap: 14px;
+  gap: 16px;
 }
 
+/* Mode Cards 160x140px, --bg-surface, 1px --border-subtle, --radius-lg */
 .focusee-card {
-  width: 145px;
-  height: 135px;
-  background: #14141c;
-  border: 1px solid #222230;
-  border-radius: 14px;
+  width: 160px;
+  height: 140px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
   padding: 12px 10px 14px 10px;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+  transition: border-color 150ms ease, transform 150ms ease, background 150ms ease;
 }
 
 .focusee-card:hover {
-  background: #1a1a24;
-  border-color: #3b82f6;
-  transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.15);
+  border-color: rgba(245, 166, 35, 0.4);
+  transform: translateY(-2px);
+  background: var(--bg-elevated);
 }
 
-.focusee-card:active {
-  transform: scale(0.97);
+.focusee-card.active {
+  border-color: var(--accent-primary);
+  background: var(--bg-elevated);
 }
 
-/* Card Thumbnails */
+.focusee-card.active .card-title-text {
+  color: var(--accent-primary);
+}
+
+/* Thumbnail Frame */
 .card-thumb-frame {
   width: 100%;
-  height: 72px;
-  border-radius: 8px;
+  height: 76px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   position: relative;
-  background: #0a0a0f;
-  box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.5);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
 }
 
 .wallpaper-preview {
   width: 100%;
   height: 100%;
-  background-size: cover;
-  background-position: center;
   position: relative;
   display: flex;
   align-items: center;
@@ -266,34 +295,32 @@
 }
 
 .full-screen-preview {
-  background: radial-gradient(circle at 50% 50%, #2563eb 0%, #1d4ed8 40%, #0f172a 100%);
+  background: radial-gradient(circle at 50% 50%, #202336 0%, #131214 100%);
 }
 
 .custom-region-preview {
-  background: radial-gradient(circle at 50% 50%, #2563eb 0%, #1d4ed8 40%, #0f172a 100%);
+  background: radial-gradient(circle at 50% 50%, #202336 0%, #131214 100%);
 }
 
 .cyan-crop-box {
   width: 70%;
   height: 65%;
-  border: 2px dashed #06b6d4;
-  border-radius: 4px;
-  background: rgba(6, 182, 212, 0.15);
-  box-shadow: 0 0 10px rgba(6, 182, 212, 0.4);
+  border: 2px dashed var(--accent-focus);
+  border-radius: var(--radius-sm);
+  background: rgba(91, 141, 239, 0.12);
 }
 
 .window-preview {
-  background: linear-gradient(135deg, #1e293b, #0f172a);
+  background: #181924;
 }
 
 .window-mockup-overlay {
   width: 80%;
   height: 70%;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 5px;
-  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px;
 }
 
 .mockup-bar {
@@ -305,73 +332,61 @@
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--text-muted);
 }
 
 .device-preview {
-  background: linear-gradient(135deg, #1e1b4b, #0f172a);
+  background: #181726;
 }
 
 .phone-illustration-icon {
-  width: 26px;
-  height: 44px;
-  border: 2px solid rgba(59, 130, 246, 0.6);
-  border-radius: 7px;
-  background: rgba(59, 130, 246, 0.2);
+  width: 24px;
+  height: 42px;
+  border: 2px solid var(--accent-primary);
+  border-radius: 6px;
+  background: rgba(245, 166, 35, 0.15);
   position: relative;
 }
 
-.phone-illustration-icon::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 8px;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.4);
-  border-radius: 2px;
-}
-
 .card-title-text {
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #d1d1e0;
+  color: var(--text-secondary);
 }
 
 .focusee-card:hover .card-title-text {
-  color: #ffffff;
+  color: var(--text-primary);
 }
 
 .launcher-status-text {
   margin-top: 12px;
-  font-size: 12px;
-  color: #8888a0;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
 }
 
 .open-last-btn {
   margin-top: 12px;
-  padding: 8px 18px;
-  font-size: 12px;
+  padding: 8px 16px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #ffffff;
-  background: #3b82f6;
+  color: var(--bg-base);
+  background: var(--accent-primary);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: opacity 150ms ease;
 }
 
 .open-last-btn:hover {
-  background: #2563eb;
+  opacity: 0.9;
 }
 
-/* Right Sidebar: Device & Tool Panel */
+/* Sidebar: Device & Tool Panel */
 .focusee-sidebar {
   width: 250px;
   flex-shrink: 0;
-  background: #111116;
-  border-left: 1px solid #1a1a24;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
   padding: 16px 14px;
   display: flex;
   flex-direction: column;
@@ -379,31 +394,31 @@
 }
 
 .sidebar-heading {
-  font-size: 13px;
-  font-weight: 600;
-  color: #ffffff;
-  letter-spacing: 0.2px;
+  font-size: var(--font-sm);
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
   margin-bottom: 2px;
 }
 
 .focusee-device-select-row {
   display: flex;
   align-items: center;
-  background: #161620;
-  border: 1px solid #242434;
-  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
   position: relative;
-  overflow: visible;
-  transition: border-color 0.15s;
+  transition: border-color 150ms ease;
 }
 
 .focusee-device-select-row:hover {
-  border-color: #33334a;
+  border-color: var(--border-strong);
 }
 
 .device-icon-box {
-  color: #8888a0;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -412,56 +427,13 @@
 
 .sidebar-select {
   flex: 1;
-  background: #161620;
+  background: var(--bg-elevated);
   border: none;
-  color: #ffffff !important;
-  font-size: 12px;
+  color: var(--text-primary) !important;
+  font-size: var(--font-sm);
   font-weight: 500;
   outline: none;
   cursor: pointer;
-  appearance: none;
-  padding-right: 18px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%238888a0' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-}
-
-/* Explicit Dark Background & White Text for Dropdown Options */
-.sidebar-select option,
-select option {
-  background-color: #14141d !important;
-  color: #f1f1f5 !important;
-  padding: 8px 12px !important;
-  font-size: 12px;
-}
-
-.sidebar-select option:hover,
-.sidebar-select option:focus,
-.sidebar-select option:active,
-.sidebar-select option:checked,
-select option:hover,
-select option:focus,
-select option:active,
-select option:checked {
-  background-color: #2a2a3e !important;
-  color: #ffffff !important;
-}
-
-.active-accent-bar {
-  position: absolute;
-  bottom: 0;
-  left: 10px;
-  right: 10px;
-  height: 2px;
-  border-radius: 2px;
-}
-
-.active-accent-bar.blue {
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
-}
-
-.active-accent-bar.purple {
-  background: linear-gradient(90deg, #a855f7, #c084fc);
 }
 
 .teleprompter-sidebar-btn {
@@ -471,19 +443,29 @@ select option:checked {
   justify-content: center;
   gap: 8px;
   padding: 8px 0;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #ffffff;
-  background: #1a1a26;
-  border: 1px solid #28283a;
-  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
 .teleprompter-sidebar-btn:hover {
-  background: #222232;
-  border-color: #383852;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+}
+
+.sidebar-hint {
+  margin-top: auto;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  line-height: 1.6;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
 }
 
 /* Modals */
@@ -491,7 +473,6 @@ select option:checked {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -501,9 +482,9 @@ select option:checked {
 .focusee-modal-card {
   width: 400px;
   max-height: 70vh;
-  background: #14141c;
-  border: 1px solid #282838;
-  border-radius: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -511,15 +492,15 @@ select option:checked {
 }
 
 .focusee-modal-card h3 {
-  font-size: 15px;
+  font-size: var(--font-lg);
   font-weight: 700;
-  color: #ffffff;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .modal-sub {
-  font-size: 11px;
-  color: #8888a0;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
   margin-bottom: 14px;
 }
 
@@ -536,33 +517,33 @@ select option:checked {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  font-size: 12px;
-  color: #cccccc;
-  background: #1a1a26;
-  border: 1px solid #282838;
-  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
 }
 
 .window-option-btn:hover {
-  background: #222232;
-  border-color: #3b82f6;
-  color: #ffffff;
+  background: var(--bg-base);
+  border-color: var(--accent-focus);
+  color: var(--text-primary);
 }
 
 .modal-close-btn {
   padding: 8px;
-  font-size: 12px;
-  color: #8888a0;
-  background: #1a1a24;
-  border: 1px solid #282838;
-  border-radius: 8px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
 .modal-close-btn:hover {
-  color: #ffffff;
+  color: var(--text-primary);
 }
