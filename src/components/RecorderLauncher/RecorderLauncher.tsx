@@ -57,7 +57,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const [_selectedTarget, setSelectedTarget] = useState("");
   const [selectedMic, setSelectedMic] = useState("default");
   const [selectedSpeaker, setSelectedSpeaker] = useState("default");
-  const [selectedCamera, setSelectedCamera] = useState("OBS Virtual Camera");
+  const [selectedCamera, setSelectedCamera] = useState("OBS Virtual Cam");
 
   // Settings (persisted)
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -218,29 +218,28 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   };
 
   const stopRecording = async () => {
-    try {
-      if (elapsedRef.current) clearInterval(elapsedRef.current);
-      setRecordStatus("Stopping...");
-      await invoke("stop_recording");
-      const count = await invoke<number>("stop_input_logging");
-      try { await invoke("stop_audio_capture"); } catch { /* ignore */ }
-      setRecording(false);
-      setRecordStatus(`Done — ${count} events captured`);
+    if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+    if (countdownRef.current) { clearTimeout(countdownRef.current); countdownRef.current = null; }
+    setRecordStatus("Stopping...");
 
-      // Hide the floating dock window + recording border overlay.
-      invoke("set_dock_visible", { visible: false }).catch(() => {});
-      invoke("set_recording_overlay", { enabled: false, style: "off", region: null }).catch(() => {});
-      invoke("set_overlay_paused", { paused: false }).catch(() => {});
-      setIsPaused(false);
-      pausedRef.current = false;
+    let count = 0;
+    try { await invoke("stop_recording"); } catch (e) { console.error("stop_recording failed:", e); }
+    try { count = await invoke<number>("stop_input_logging"); } catch { /* input logging may not have started */ }
+    try { await invoke("stop_audio_capture"); } catch { /* audio capture may not have started */ }
 
-      // Open the recording in its own editor window
-      if (lastVideo && lastLog) {
-        onOpenEditor(lastVideo, lastLog);
-      }
-    } catch (e) {
-      setRecording(false);
-      setRecordStatus(`Stop error: ${e}`);
+    setRecording(false);
+    setIsPaused(false);
+    pausedRef.current = false;
+    setRecordStatus(`Done — ${count} events captured`);
+
+    // Hide the floating dock window + recording border overlay.
+    invoke("set_dock_visible", { visible: false }).catch(() => {});
+    invoke("set_recording_overlay", { enabled: false, style: "off", region: null }).catch(() => {});
+    invoke("set_overlay_paused", { paused: false }).catch(() => {});
+
+    // Open the recording in its own editor window
+    if (lastVideo && lastLog) {
+      onOpenEditor(lastVideo, lastLog);
     }
   };
 
@@ -342,12 +341,14 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     return () => {
       un.then((fn) => fn());
     };
-  });
+  }, []); // mount once, ref accessed via actionHandlersRef
 
-  // Safety: never leave the dock floating if this window goes away.
+  // Safety: never leave the dock floating, clear all timers on unmount.
   useEffect(() => {
     return () => {
       invoke("set_dock_visible", { visible: false }).catch(() => {});
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+      if (countdownRef.current) { clearTimeout(countdownRef.current); countdownRef.current = null; }
     };
   }, []);
 

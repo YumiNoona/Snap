@@ -30,6 +30,15 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const flatIdxRef = useRef(0);
+  const subLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clean up submenu leave timer on unmount
+  useEffect(() => {
+    return () => {
+      if (subLeaveTimer.current) clearTimeout(subLeaveTimer.current);
+    };
+  }, []);
 
   const selectedOption = findOption(options, value);
   const selectedLabel = selectedOption?.label ?? placeholder ?? "Select...";
@@ -71,7 +80,10 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
   }, [open, close, subOpen]);
 
   const toggle = useCallback(() => {
-    setOpen((p) => !p);
+    setOpen((p) => {
+      if (!p) flatIdxRef.current = 0;
+      return !p;
+    });
     setHoveredIdx(-1);
   }, []);
 
@@ -99,6 +111,7 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
       if (!open) {
         if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
           e.preventDefault();
+          flatIdxRef.current = 0;
           setOpen(true);
         }
         return;
@@ -137,10 +150,11 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
   }, []);
 
   const handleSubLeave = useCallback(() => {
-    // Small delay to allow moving mouse into submenu
-    setTimeout(() => {
-      setSubOpen((prev) => prev);
-    }, 100);
+    if (subLeaveTimer.current) clearTimeout(subLeaveTimer.current);
+    subLeaveTimer.current = setTimeout(() => {
+      setSubOpen(null);
+      setSubRect(null);
+    }, 150);
   }, []);
 
   const selectedValue = value;
@@ -180,7 +194,7 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
               onSelect={select}
               onHover={setHoveredIdx}
               listRef={listRef}
-              flatIdxRef={useRef(0)}
+              flatIdxRef={flatIdxRef}
               subOpen={subOpen}
               subRect={subRect}
               onSubEnter={handleSubEnter}
@@ -253,6 +267,7 @@ function DropdownList({
   setSubRect: (r: DOMRect | null) => void;
   close: () => void;
 }) {
+  flatIdxRef.current = 0;
   return (
     <ul ref={depth === 0 ? listRef : undefined} role="listbox" style={{ listStyle: "none", padding: 0, margin: 0 }}>
       {options.map((opt) => {

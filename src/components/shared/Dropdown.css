@@ -147,13 +147,6 @@
   overflow-y: auto;
 }
 
-/* Divider */
-.dd-divider {
-  height: 1px;
-  background: var(--border-subtle);
-  margin: var(--space-1) 0;
-}
-
 /* Disabled item */
 .dd-item:disabled {
   opacity: 0.4;

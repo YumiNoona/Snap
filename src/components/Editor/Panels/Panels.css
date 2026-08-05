@@ -150,32 +150,6 @@
   box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent);
 }
 
-.ss-wallpaper-img-card {
-  aspect-ratio: 16 / 10;
-  border-radius: var(--radius-sm);
-  border: 2px solid transparent;
-  cursor: pointer;
-  overflow: hidden;
-  background: var(--bg-surface-sunken);
-  transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-standard);
-}
-
-.ss-wallpaper-img-card img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.ss-wallpaper-img-card:hover {
-  border-color: var(--border-default);
-  transform: translateY(-1px);
-}
-
-.ss-wallpaper-img-card.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent);
-}
-
 /* ── Cursor Pack Grid ───────────────────────────────── */
 
 .cursor-pack-grid {
@@ -335,26 +309,6 @@
 
 .ss-drawer-action-btn.primary:hover {
   background: var(--accent-hover);
-}
-
-.ss-drawer-action-btn.secondary {
-  color: var(--text-secondary);
-  background: var(--bg-surface-sunken);
-  border: 1px solid var(--border-subtle);
-}
-
-.ss-drawer-action-btn.secondary:hover {
-  color: var(--text-primary);
-  border-color: var(--border-default);
-}
-
-.ss-btn-group {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.ss-btn-group .ss-drawer-action-btn {
-  flex: 1;
 }
 
 /* ── Export presets cards ──────────────────────────── */
@@ -530,4 +484,181 @@
 
 .check-row:hover .pro-checkbox {
   border-color: var(--accent);
+}
+
+/* ── Aspect Ratio Pills ──────────────────────────── */
+
+.aspect-pills-row {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.seg-btn.pill {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+}
+
+.seg-btn.pill:hover {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.seg-btn.pill.active {
+  color: var(--bg-app);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Click Effect Grid ───────────────────────────── */
+
+.effect-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+}
+
+.effect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-1);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard);
+  min-height: 64px;
+  justify-content: center;
+}
+
+.effect-card:hover {
+  border-color: var(--border-default);
+}
+
+.effect-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--accent);
+}
+
+.effect-icon {
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.effect-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ── Annotation Cards ────────────────────────────── */
+
+.annotation-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-2);
+}
+
+.annotation-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.annotation-card:hover {
+  transform: translateY(-1px);
+}
+
+.annotation-preview {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-sunken);
+}
+
+/* ── Layers List ──────────────────────────────────── */
+
+.layers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-standard);
+}
+
+.layer-row:hover {
+  border-color: var(--border-default);
+}
+
+.layer-row.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.layer-type-tag {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.12);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  text-transform: capitalize;
+}
+
+.layer-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.layer-delete-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
+}
+
+.layer-row:hover .layer-delete-btn {
+  opacity: 1;
+}
+
+.layer-delete-btn:hover {
+  color: var(--danger);
 }

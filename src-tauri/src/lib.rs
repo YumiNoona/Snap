@@ -65,6 +65,7 @@ fn open_editor_window(
     .min_inner_size(980.0, 640.0)
     .center()
     .decorations(false)
+    .devtools(true)
     .on_page_load(|_webview, payload| {
         eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
     })
@@ -76,7 +77,7 @@ fn open_editor_window(
         .map_err(|e| format!("Failed to notify editor window: {e}"))?;
     let _ = win.show();
     win.set_focus().map_err(|e| format!("Failed to focus editor window: {e}"))?;
-    eprintln!("[Snap] editor window shown + focused");
+    eprintln!("[Snap] Press F12 or right-click > Inspect on the editor window to view JS console errors");
     Ok(())
 }
 
@@ -100,12 +101,14 @@ fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
     .min_inner_size(420.0, 320.0)
     .center()
     .decorations(false)
+    .devtools(true)
     .always_on_top(true)
     .build()
     .map_err(|e| format!("Failed to create teleprompter window: {e}"))?;
 
     let _ = win.show();
     win.set_focus().map_err(|e| format!("Failed to focus teleprompter window: {e}"))?;
+    eprintln!("[Snap] Press F12 or right-click > Inspect on the teleprompter window to view JS console errors");
     Ok(())
 }
 
@@ -498,24 +501,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
-        .setup(|app| {
-            // TEMP DIAGNOSTIC: auto-open the editor window 2.5s after startup
-            // to reproduce the white-screen issue without manual interaction.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-                eprintln!("[Snap] TEMP DIAGNOSTIC: auto-opening editor window");
-                let h = handle.clone();
-                let state = handle.state::<EditorPaths>();
-                let _ = open_editor_window(
-                    h,
-                    state,
-                    "C:\\Users\\ringale\\Videos\\snap_diag.mp4".into(),
-                    "C:\\Users\\ringale\\Videos\\snap_diag.json".into(),
-                );
-            });
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,

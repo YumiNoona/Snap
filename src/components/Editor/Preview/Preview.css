@@ -81,12 +81,3 @@
   border-radius: var(--radius-pill);
   opacity: 0.85;
 }
-
-/* Loading state */
-.preview-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
-  font-size: var(--text-base);
-}

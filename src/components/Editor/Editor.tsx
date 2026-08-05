@@ -1,11 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, Clock, ChevronDown, Upload, Minus, Square, X, Image as ImageIcon, ZoomIn, MousePointer, Shapes } from "lucide-react";
+import { ChevronLeft, Clock, ChevronDown, Upload, Minus, Square, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Download } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
-import type { EditorConfig, Keyframe, ExportSettings } from "../../lib/types";
+import type { EditorConfig, Keyframe, ExportSettings, Layer } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG } from "../../lib/types";
 import "./Editor.css";
 
@@ -15,7 +15,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "background" | "zoom" | "cursor" | "audio" | "shadow" | "export";
+export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "audio" | "export";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 
@@ -37,8 +37,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
-  const [activeTool, setActiveTool] = useState<SidebarToolTab>("background");
+  const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
   const [cropMode, setCropMode] = useState(false);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const appWindow = getCurrentWindow();
 
@@ -63,6 +64,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       return () => {
         el.removeEventListener("play", onPlay);
         el.removeEventListener("pause", onPause);
+        videoRef.current = null;
       };
     }
   }, [videoPath]);
@@ -93,7 +95,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     };
     el.addEventListener("timeupdate", onTime);
     return () => el.removeEventListener("timeupdate", onTime);
-  }, [config.trimEnd, config.trimStart]);
+  }, [config.trimEnd, config.trimStart, videoPath]);
 
   const seekTo = useCallback(
     (t: number) => {
@@ -155,7 +157,6 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     }
   };
 
-  // Add a manual zoom keyframe at playhead position
   const handleAddManualZoom = () => {
     const tMs = Math.round(currentTime * 1000);
     const newKf: Keyframe = {
@@ -232,19 +233,11 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         {/* Left Vertical Tool Bar (Screen Studio style) */}
         <aside className="ss-vertical-tool-palette">
           <button
-            className={`ss-tool-icon-btn ${activeTool === "background" ? "active" : ""}`}
-            onClick={() => setActiveTool("background")}
-            title="Background & Wallpaper"
+            className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
+            onClick={() => setActiveTool("canvas")}
+            title="Canvas & Background"
           >
-            <ImageIcon size={18} />
-          </button>
-
-          <button
-            className={`ss-tool-icon-btn ${activeTool === "zoom" ? "active" : ""}`}
-            onClick={() => setActiveTool("zoom")}
-            title="Zoom & Pan Motion"
-          >
-            <ZoomIn size={18} />
+            <LayoutTemplate size={18} />
           </button>
 
           <button
@@ -252,15 +245,31 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("cursor")}
             title="Cursor & Pointer Styling"
           >
-            <MousePointer size={18} />
+            <MousePointer2 size={18} />
           </button>
 
           <button
-            className={`ss-tool-icon-btn ${activeTool === "shadow" ? "active" : ""}`}
-            onClick={() => setActiveTool("shadow")}
-            title="Shadow & Corners"
+            className={`ss-tool-icon-btn ${activeTool === "annotations" ? "active" : ""}`}
+            onClick={() => setActiveTool("annotations")}
+            title="Annotations & Layers"
           >
-            <Shapes size={18} />
+            <Type size={18} />
+          </button>
+
+          <button
+            className={`ss-tool-icon-btn ${activeTool === "motion" ? "active" : ""}`}
+            onClick={() => setActiveTool("motion")}
+            title="Motion & Blur"
+          >
+            <Sparkles size={18} />
+          </button>
+
+          <button
+            className={`ss-tool-icon-btn ${activeTool === "audio" ? "active" : ""}`}
+            onClick={() => setActiveTool("audio")}
+            title="Audio"
+          >
+            <AudioWaveform size={18} />
           </button>
 
           <button
@@ -268,7 +277,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("export")}
             title="Render & Export Settings"
           >
-            <Upload size={18} />
+            <Download size={18} />
           </button>
         </aside>
 
@@ -290,6 +299,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             cropMode={cropMode}
             onCropApply={handleCropApply}
             onCropCancel={handleCropCancel}
+            selectedLayerId={selectedLayerId}
           />
         </div>
 
@@ -299,7 +309,12 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           onConfigChange={setConfig}
           videoPath={videoPath}
           duration={duration}
+          currentTime={currentTime}
           keyframesCount={keyframes.length}
+          layers={config.layers}
+          selectedLayerId={selectedLayerId}
+          onAddLayer={(layer: Layer) => setConfig((c) => ({ ...c, layers: [...c.layers, layer] }))}
+          onSelectLayer={setSelectedLayerId}
           onExport={handleExport}
           exportStatus={exportStatus}
           activeTab={activeTool}
@@ -320,9 +335,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         onTrimStartChange={handleTrimStart}
         onTrimEndChange={handleTrimEnd}
         onCutsChange={(newCuts: number[]) =>
-          setConfig({ ...config, cuts: newCuts })
+            setConfig((c) => ({ ...c, cuts: newCuts }))
         }
-        onAspectChange={(ar) => setConfig({ ...config, aspectRatio: ar })}
+        onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
       />

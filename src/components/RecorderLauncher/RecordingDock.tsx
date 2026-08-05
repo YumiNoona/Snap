@@ -34,9 +34,11 @@ export default function RecordingDock() {
 
   // Pull the current snapshot (window may open after recording already started).
   useEffect(() => {
+    let alive = true;
     invoke<DockState>("get_dock_state")
-      .then(setState)
+      .then((s) => { if (alive) setState(s); })
       .catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   // Stay in sync with the launcher window.

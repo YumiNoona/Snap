@@ -36,12 +36,17 @@ export interface CursorPackSelection {
   imageUrl: string;
 }
 
+export type ClickEffect = "none" | "default" | "ripple" | "ring" | "diffusion" | "spotlight" | "sparkle" | "firework" | "christmas";
+
 export interface CursorStyle {
   color: string;
   size: number;
   shape: "circle" | "arrow";
   showClickRipples: boolean;
   pack: CursorPackSelection | null;
+  clickEffect: ClickEffect;
+  clickSound: boolean;
+  hideWhenIdle: boolean;
 }
 
 export interface ShadowConfig {
@@ -53,6 +58,57 @@ export interface ShadowConfig {
   offsetY: number;
 }
 
+export type LayerType = "text" | "shape" | "mask";
+
+export interface BaseLayer {
+  id: string;
+  type: LayerType;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface TextLayer extends BaseLayer {
+  type: "text";
+  content: string;
+  style: "plain" | "boxed" | "pill" | "badge";
+  color: string;
+  fontSize: number;
+}
+
+export interface ShapeLayer extends BaseLayer {
+  type: "shape";
+  shape: "line" | "dashedLine" | "arrow" | "rectangle" | "roundedRect" | "circle" | "blob" | "downArrow" | "pointer";
+  color: string;
+  strokeWidth: number;
+}
+
+export interface MaskLayer extends BaseLayer {
+  type: "mask";
+  mask: "spotlight" | "blur" | "magnifier";
+  intensity: number;
+}
+
+export type Layer = TextLayer | ShapeLayer | MaskLayer;
+
+export interface MotionBlurConfig {
+  enabled: boolean;
+  zoomAmount: number;
+  panAmount: number;
+  cursorAmount: number;
+}
+
+export type MovementSpeed = "slow" | "medium" | "fast" | "rapid" | "custom";
+
+export interface MovementConfig {
+  enabled: boolean;
+  speed: MovementSpeed;
+  durationMs: number;
+}
+
 export interface EditorConfig {
   backgroundColor: string;
   bgType: "wallpaper" | "gradient" | "color" | "image";
@@ -60,6 +116,8 @@ export interface EditorConfig {
   bgBlur: number;
   padding: number;
   borderRadius: number;
+  inset: number;
+  insetColor: string;
   shadow: ShadowConfig;
   cursorStyle: CursorStyle;
   cursorHotspots: Record<string, { x: number; y: number }>;
@@ -67,16 +125,16 @@ export interface EditorConfig {
   zoomEnabled: boolean;
   zoomMode: "auto" | "manual";
   zoomLevel: number;
+  fixedZoomPart: boolean;
   aspectRatio: { width: number; height: number } | null;
   crop: { x: number; y: number; w: number; h: number } | null;
   trimStart: number;
   trimEnd: number;
   cuts: number[];
-}
-
-export interface ClipSegment {
-  start: number;
-  end: number;
+  layers: Layer[];
+  motionBlur: MotionBlurConfig;
+  cursorMovement: MovementConfig;
+  zoomMovement: MovementConfig;
 }
 
 export interface ExportSettings {
@@ -95,6 +153,8 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   bgBlur: 0,
   padding: 48,
   borderRadius: 14,
+  inset: 0,
+  insetColor: "#000000",
   shadow: {
     enabled: true,
     blur: 40,
@@ -109,17 +169,38 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     shape: "arrow",
     showClickRipples: true,
     pack: null,
+    clickEffect: "default",
+    clickSound: false,
+    hideWhenIdle: false,
   },
   cursorHotspots: {},
   showCursor: true,
   zoomEnabled: true,
   zoomMode: "auto",
   zoomLevel: 2.0,
+  fixedZoomPart: false,
   aspectRatio: null,
   crop: null,
   trimStart: 0,
   trimEnd: 0,
   cuts: [],
+  layers: [],
+  motionBlur: {
+    enabled: false,
+    zoomAmount: 0,
+    panAmount: 0,
+    cursorAmount: 0,
+  },
+  cursorMovement: {
+    enabled: false,
+    speed: "medium",
+    durationMs: 600,
+  },
+  zoomMovement: {
+    enabled: false,
+    speed: "slow",
+    durationMs: 800,
+  },
 };
 
 export const ASPECT_RATIOS = [
@@ -131,3 +212,16 @@ export const ASPECT_RATIOS = [
   { label: "21:9", width: 21, height: 9 },
   { label: "3:2", width: 3, height: 2 },
 ];
+
+export const MOVEMENT_SPEED_MAP: Record<MovementSpeed, number> = {
+  slow: 900,
+  medium: 600,
+  fast: 350,
+  rapid: 180,
+  custom: 600,
+};
+
+export function getMovementDuration(config: MovementConfig): number {
+  if (config.speed === "custom") return config.durationMs;
+  return MOVEMENT_SPEED_MAP[config.speed];
+}

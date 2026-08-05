@@ -47,7 +47,15 @@ export default function Timeline({
   const [waveforms, setWaveforms] = useState<{ sys?: number[]; mic?: number[] }>({});
   const [contentWidth, setContentWidth] = useState(600);
 
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const timeAreaRef = useRef<HTMLDivElement>(null);
+
+  // Clean up drag listeners on unmount
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+    };
+  }, []);
   const [hasSys, setHasSys] = useState(false);
   const [hasMic, setHasMic] = useState(false);
 
@@ -137,6 +145,10 @@ export default function Timeline({
     };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+    dragCleanupRef.current = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
   };
 
   // Position helpers — all measured in the timeline (time) column space

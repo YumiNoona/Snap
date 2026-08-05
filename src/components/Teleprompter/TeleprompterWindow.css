@@ -1,16 +1,23 @@
-.teleprompter-standalone-window {
+.teleprompter-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Legacy floating overlay (non-standalone, rendered inside launcher) */
+.teleprompter-window:not(.standalone) {
   position: fixed;
   width: 580px;
   height: 420px;
-  background: var(--bg-app);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
   z-index: 9999;
-  overflow: hidden;
-  user-select: none;
 }
 
 .tp-titlebar {

@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Grip, X, RotateCcw } from "lucide-react";
 import { Play, Pause } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import "./TeleprompterWindow.css";
 
 interface Props {
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 const DEFAULT_SCRIPT = `Welcome to Snap Screen Recorder!
@@ -21,58 +22,56 @@ Features built for seamless recording:
 Type your script in Edit mode, then press Start Prompt to begin reading!`;
 
 export default function TeleprompterWindow({ onClose }: Props) {
+  const appWindow = getCurrentWindow();
+  const isStandalone = appWindow.label === "teleprompter";
+
   const [mode, setMode] = useState<"edit" | "prompt">("prompt");
   const [script, setScript] = useState(DEFAULT_SCRIPT);
-  
-  // Prompter controls
+
   const [isPlaying, setIsPlaying] = useState(false);
-  const [wpm, setWpm] = useState(150); // Words per minute
+  const [wpm, setWpm] = useState(150);
   const [fontSize, setFontSize] = useState(28);
   const [opacity, setOpacity] = useState(0.92);
   const [isFlipped, setIsFlipped] = useState(false);
-  
-  // Position & Drag state for floating window
-  const [pos, setPos] = useState({ x: Math.max(20, (window.innerWidth - 620) / 2), y: 40 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStart = useRef({ x: 0, y: 0 });
 
-  // Scroll & Word reveal tracking
   const scrollRef = useRef<HTMLDivElement>(null);
   const words = script.split(/(\s+)/);
   const [currentWordIdx, setCurrentWordIdx] = useState(0);
 
-  // Calculate total non-whitespace words
   const actualWordCount = words.filter((w) => w.trim().length > 0).length;
 
-  // Handle Dragging window around screen
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".teleprompter-controls, button, input, textarea")) return;
-    setIsDragging(true);
-    dragStart.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
-  };
-
   useEffect(() => {
-    if (!isDragging) return;
-    const onMove = (e: MouseEvent) => {
-      setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 300, e.clientX - dragStart.current.x)),
-        y: Math.max(0, Math.min(window.innerHeight - 200, e.clientY - dragStart.current.y)),
-      });
-    };
-    const onUp = () => setIsDragging(false);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    console.log("[Snap Teleprompter] mounted OK, standalone:", isStandalone);
+    if (!isStandalone) return;
+    const prevBg = document.body.style.background;
+    const prevColor = document.body.style.color;
+    document.body.style.background = "#0b0d12";
+    document.body.style.color = "#f2f4f8";
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      document.body.style.background = prevBg;
+      document.body.style.color = prevColor;
     };
-  }, [isDragging]);
+  }, [isStandalone]);
+
+  const handleClose = useCallback(() => {
+    if (onClose) {
+      onClose();
+    } else if (isStandalone) {
+      appWindow.close();
+    }
+  }, [onClose, isStandalone, appWindow]);
+
+  const handleTitlebarDrag = async (e: React.MouseEvent) => {
+    if (isStandalone) {
+      e.preventDefault();
+      await appWindow.startDragging();
+    }
+  };
 
   // Word-by-word reveal & auto scroll timer
   useEffect(() => {
     if (!isPlaying || mode !== "prompt") return;
 
-    // Time per word in ms based on WPM
     const msPerWord = (60 / Math.max(30, wpm)) * 1000;
 
     const interval = setInterval(() => {
@@ -83,7 +82,6 @@ export default function TeleprompterWindow({ onClose }: Props) {
           return prev;
         }
 
-        // Auto-scroll active word into center view smoothly
         const wordEl = document.getElementById(`tp-word-${next}`);
         if (wordEl && scrollRef.current) {
           const container = scrollRef.current;
@@ -109,16 +107,11 @@ export default function TeleprompterWindow({ onClose }: Props) {
 
   return (
     <div
-      className="teleprompter-standalone-window"
-      style={{
-        left: `${pos.x}px`,
-        top: `${pos.y}px`,
-        opacity: opacity,
-      }}
-      onMouseDown={handleMouseDown}
+      className={`teleprompter-window ${isStandalone ? "standalone" : ""}`}
+      style={isStandalone ? { opacity } : undefined}
     >
       {/* Drag Titlebar */}
-      <div className="tp-titlebar">
+      <div className="tp-titlebar" onMouseDown={handleTitlebarDrag}>
         <div className="tp-drag-handle">
           <Grip size={15} />
           <span className="tp-window-title">Teleprompter</span>
@@ -139,7 +132,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
           </button>
         </div>
 
-        <button className="tp-close-btn" onClick={onClose} title="Close Teleprompter">
+        <button className="tp-close-btn" onClick={handleClose} title="Close Teleprompter">
           <X size={14} />
         </button>
       </div>
@@ -162,7 +155,6 @@ export default function TeleprompterWindow({ onClose }: Props) {
         </div>
       ) : (
         <div className="tp-prompt-body">
-          {/* Active Reading Center Line Marker */}
           <div className="tp-reading-marker" />
 
           <div

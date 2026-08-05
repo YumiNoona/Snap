@@ -91,14 +91,20 @@ body,
 #root {
   height: 100%;
   overflow: hidden;
+  background: #0b0d12;
+  background: var(--bg-app, #0b0d12);
+  color: #f2f4f8;
+  color: var(--text-primary, #f2f4f8);
 }
 
 body {
-  font-family: var(--font-family);
-  font-size: var(--font-md);
+  font-family: var(--font-family, 'Inter', system-ui, sans-serif);
+  font-size: var(--font-md, 14px);
   line-height: 1.5;
-  color: var(--text-primary);
-  background: var(--bg-base);
+  background: #0b0d12;
+  background: var(--bg-app, #0b0d12);
+  color: #f2f4f8;
+  color: var(--text-primary, #f2f4f8);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   user-select: none;
@@ -160,13 +166,6 @@ select option:checked {
   color: var(--text-primary) !important;
 }
 
-/* Monospaced readouts */
-.mono-text,
-.timecode {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
 /* Shared micro-UX: smooth button hover/active states */
 button,
 .focusee-card,
@@ -176,8 +175,7 @@ button,
   -webkit-tap-highlight-color: transparent;
 }
 
-button:disabled,
-.btn-disabled {
+button:disabled {
   opacity: 0.45;
   pointer-events: none;
 }

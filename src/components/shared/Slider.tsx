@@ -9,14 +9,18 @@ interface SliderProps {
   step?: number;
   unit?: string;
   onChange: (value: number) => void;
+  onReset?: () => void;
+  defaultValue?: number;
+  disabled?: boolean;
   compact?: boolean;
 }
 
-export default function Slider({ label, value, min, max, step = 1, unit = "", onChange, compact }: SliderProps) {
+export default function Slider({ label, value, min, max, step = 1, unit = "", onChange, onReset, defaultValue, disabled, compact }: SliderProps) {
   const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const isDifferent = defaultValue !== undefined && value !== defaultValue;
 
   return (
-    <div className={`slider-row${compact ? " compact" : ""}`}>
+    <div className={`slider-row${compact ? " compact" : ""}${disabled ? " disabled" : ""}`}>
       {label && <span className="slider-label">{label}</span>}
       <div className="slider-track-wrap">
         <input
@@ -28,12 +32,16 @@ export default function Slider({ label, value, min, max, step = 1, unit = "", on
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
           aria-label={label}
+          disabled={disabled}
         />
         <div className="slider-track" />
-        <div className="slider-fill" style={{ width: `${percent}%` }} />
+        <div className="slider-fill" style={{ width: `${percent}%`, opacity: disabled ? 0.3 : 1 }} />
         <div className="slider-thumb" style={{ left: `${percent}%` }} />
       </div>
       <span className="slider-value">{value}{unit}</span>
+      {onReset && isDifferent && (
+        <button className="slider-reset-btn" onClick={onReset} type="button">Reset</button>
+      )}
     </div>
   );
 }

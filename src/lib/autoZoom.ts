@@ -18,7 +18,6 @@ const UNZOOM_GAP_THRESHOLD_MS = 3500; // Only return to 1.0x center if gap >= 3.
 const MIN_SCALE = 1.15;               // Gentle minimum zoom scale
 const MAX_SCALE = 1.75;               // Cap max automatic scale to 1.75x
 const ZOOM_PADDING = 200;             // Padding around focus bounding box
-const TRANSITION_DURATION_MS = 600;   // Smooth 600ms camera pan/zoom easing
 
 /**
  * Filter and group input events into activity clusters.
@@ -164,7 +163,8 @@ export function generateKeyframes(
   events: InputEvent[],
   videoWidth: number,
   videoHeight: number,
-  videoDurationMs: number
+  videoDurationMs: number,
+  transitionDurationMs: number = 600
 ): Keyframe[] {
   const clusters = findClusters(events);
 
@@ -209,19 +209,19 @@ export function generateKeyframes(
       const unzoomTime = prevEndTime + 800;
       keyframes.push({
         time: unzoomTime,
-        duration: TRANSITION_DURATION_MS,
+        duration: transitionDurationMs,
         x: 0.5,
         y: 0.5,
         scale: 1.0,
         easing: "ease-in-out",
       });
-      zoomInTime = Math.max(zoomInTime, unzoomTime + TRANSITION_DURATION_MS);
+      zoomInTime = Math.max(zoomInTime, unzoomTime + transitionDurationMs);
     }
 
     // Zoom or Direct Pan to current cluster focus
     keyframes.push({
       time: zoomInTime,
-      duration: TRANSITION_DURATION_MS,
+      duration: transitionDurationMs,
       x: cx,
       y: cy,
       scale,
@@ -231,7 +231,7 @@ export function generateKeyframes(
     // Hold focus through the end of cluster activity
     keyframes.push({
       time: holdEndTime,
-      duration: TRANSITION_DURATION_MS,
+      duration: transitionDurationMs,
       x: cx,
       y: cy,
       scale,
@@ -244,7 +244,7 @@ export function generateKeyframes(
   if (lastKf.scale > 1.0 && lastKf.time + 1000 < videoDurationMs) {
     keyframes.push({
       time: lastKf.time + 800,
-      duration: TRANSITION_DURATION_MS,
+      duration: transitionDurationMs,
       x: 0.5,
       y: 0.5,
       scale: 1.0,

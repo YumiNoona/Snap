@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play } from "lucide-react";
 import type { InputEvent, Keyframe, EditorConfig, CursorStyle } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
+import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset } from "../../../lib/wallpapers";
 import "./Preview.css";
 
@@ -20,6 +21,7 @@ interface Props {
   cropMode?: boolean;
   onCropApply?: (crop: { x: number; y: number; w: number; h: number } | null) => void;
   onCropCancel?: () => void;
+  selectedLayerId?: string | null;
 }
 
 export default function Preview({
@@ -35,6 +37,7 @@ export default function Preview({
   cropMode = false,
   onCropApply,
   onCropCancel,
+  selectedLayerId = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -146,7 +149,8 @@ export default function Preview({
         allEvents.current,
         meta.w,
         meta.h,
-        meta.d * 1000
+        meta.d * 1000,
+        getMovementDuration(config.zoomMovement)
       );
       onKeyframesChange(kf);
     }
@@ -489,6 +493,49 @@ export default function Preview({
 
     ctx.restore();
 
+    // ── Mask Layers (blur, spotlight, magnifier) ──────────────────────────
+    const videoTs = video.currentTime;
+    for (const layer of config.layers) {
+      if (layer.type !== "mask") continue;
+      const ls = layer.start;
+      const le = layer.end;
+      if (videoTs < ls || videoTs > le) continue;
+
+      const lx = offsetX + layer.x * videoW;
+      const ly = offsetY + layer.y * videoH;
+      const lw = layer.w * videoW;
+      const lh = layer.h * videoH;
+
+      if (layer.mask === "blur") {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(lx, ly, lw, lh);
+        ctx.clip();
+        ctx.filter = `blur(${layer.intensity}px)`;
+        ctx.drawImage(video, effX, effY, effW, effH, offsetX, offsetY, videoW, videoH);
+        ctx.filter = "none";
+        // Dim the blurred region slightly so it reads as obscured
+        ctx.fillStyle = "rgba(0,0,0,0.12)";
+        ctx.fillRect(lx, ly, lw, lh);
+        ctx.restore();
+      } else if (layer.mask === "spotlight") {
+        // TODO: spotlight mask not yet implemented in canvas renderer
+      } else if (layer.mask === "magnifier") {
+        // TODO: magnifier mask not yet implemented in canvas renderer
+      }
+
+      // Draw layer border when selected
+      if (layer.id === selectedLayerId) {
+        ctx.save();
+        ctx.strokeStyle = "var(--accent, #3b82f6)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(lx, ly, lw, lh);
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+
     // ── Crop Selection Overlay ────────────────────────────────────────────
     if (cropMode) {
       const drag = cropDrag.current;
@@ -721,6 +768,11 @@ function clampRect(
 function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
   const cached = cache.get(path);
   if (cached) return cached;
+  // Evict oldest entries if cache grows too large
+  if (cache.size > 20) {
+    const first = cache.keys().next().value;
+    if (first) cache.delete(first);
+  }
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.src = assetSrc(path);
@@ -731,6 +783,10 @@ function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HT
 function getWallpaperImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
   const cached = cache.get(path);
   if (cached) return cached;
+  if (cache.size > 20) {
+    const first = cache.keys().next().value;
+    if (first) cache.delete(first);
+  }
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.src = assetSrc(path);
