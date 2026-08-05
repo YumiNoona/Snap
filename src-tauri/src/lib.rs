@@ -201,9 +201,29 @@ static OVERLAY_APPEARANCE: Mutex<Option<(String, Option<OverlayRegion>)>> = Mute
 /// True while the recording is paused — the border renders green.
 static OVERLAY_PAUSED: AtomicBool = AtomicBool::new(false);
 
-/// Show a transparent always-on-top border overlay over the recorded area
-/// while recording. Styles: "off" | "red" | "dashed". Region is in physical
-/// px (from get_target_bounds) and converted to logical px for the overlay.
+/// Emit a countdown value (3, 2, 1, or null to clear) to the recorder-overlay
+/// window so it renders full-screen, not clipped to the small launcher window.
+#[tauri::command]
+fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String> {
+    let win = app
+        .get_webview_window("recorder-overlay")
+        .ok_or_else(|| "Overlay window not found".to_string())?;
+
+    let payload = serde_json::json!({ "countdown": value });
+    win.emit("countdown-state", payload)
+        .map_err(|e| format!("Failed to emit countdown: {e}"))?;
+
+    if value.is_some() {
+        win.set_ignore_cursor_events(true)
+            .map_err(|e| format!("Failed to set overlay click-through: {e}"))?;
+        let _ = win.show();
+    } else {
+        let _ = win.hide();
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn set_recording_overlay(
     app: tauri::AppHandle,
@@ -525,6 +545,7 @@ pub fn run() {
             dock_action,
             set_recording_overlay,
             set_overlay_paused,
+            set_countdown,
             read_text_file,
             list_directory,
             list_cursor_packs,

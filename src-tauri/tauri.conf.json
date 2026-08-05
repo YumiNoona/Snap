@@ -18,7 +18,8 @@
         "height": 320,
         "decorations": false,
         "maximizable": false,
-        "resizable": false
+        "resizable": false,
+        "visible": false
       },
       {
         "label": "dock",

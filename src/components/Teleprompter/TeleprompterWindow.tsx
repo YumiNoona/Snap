@@ -62,7 +62,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
   }, [onClose, isStandalone, appWindow]);
 
   const handleTitlebarDrag = async (e: React.MouseEvent) => {
-    if (isStandalone) {
+    if (isStandalone && (e.target as HTMLElement).closest(".tp-drag-handle")) {
       e.preventDefault();
       await appWindow.startDragging();
     }

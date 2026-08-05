@@ -15,12 +15,16 @@ interface OverlayState {
   paused?: boolean;
 }
 
+interface CountdownState {
+  countdown: number | null;
+}
+
 export default function RecordingOverlay() {
   const [style, setStyle] = useState<"off" | "red" | "dashed">("off");
   const [region, setRegion] = useState<OverlayRegion | null>(null);
   const [paused, setPaused] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
 
-  // Transparent window — clear the app-level dark body background.
   useEffect(() => {
     document.body.style.background = "transparent";
     const html = document.documentElement;
@@ -42,7 +46,14 @@ export default function RecordingOverlay() {
     };
   }, []);
 
-  if (style === "off") return null;
+  useEffect(() => {
+    const un = listen<CountdownState>("countdown-state", (e) => {
+      setCountdown(e.payload.countdown);
+    });
+    return () => {
+      un.then((fn) => fn());
+    };
+  }, []);
 
   const box =
     region && region.w > 0 && region.h > 0
@@ -57,7 +68,12 @@ export default function RecordingOverlay() {
 
   return (
     <div className="overlay-window-root">
-      <div className={cls} style={box} />
+      {style !== "off" && <div className={cls} style={box} />}
+      {countdown !== null && (
+        <div className="countdown-fullscreen-overlay">
+          <div className="countdown-number">{countdown}</div>
+        </div>
+      )}
     </div>
   );
 }

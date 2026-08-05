@@ -85,7 +85,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const [elapsed, setElapsed] = useState(0);
   const [lastVideo, setLastVideo] = useState("");
   const [lastLog, setLastLog] = useState("");
-  const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -96,6 +95,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   useEffect(() => {
     pausedRef.current = isPaused;
   }, [isPaused]);
+
+  // Show the window once React has painted (window starts hidden to avoid white flash).
+  useEffect(() => {
+    appWindow.show().catch(() => {});
+  }, []);
 
   // Persist settings
   useEffect(() => {
@@ -113,15 +117,15 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       startRecording(targetId);
       return;
     }
-    setCountdownValue(3);
+    invoke("set_countdown", { value: 3 }).catch(() => {});
     let count = 3;
     const tick = () => {
       count -= 1;
       if (count > 0) {
-        setCountdownValue(count);
+        invoke("set_countdown", { value: count }).catch(() => {});
         countdownRef.current = setTimeout(tick, 1000);
       } else {
-        setCountdownValue(null);
+        invoke("set_countdown", { value: null }).catch(() => {});
         startRecording(targetId);
       }
     };
@@ -213,6 +217,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
         }).catch(() => {});
       }
     } catch (e) {
+      console.error("[Snap] startRecording failed:", e);
       setRecordStatus(`Error: ${e}`);
     }
   };
@@ -570,13 +575,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
           onSelect={handleRegionSelect}
           onCancel={() => setShowRegionSelector(false)}
         />
-      )}
-
-      {/* ── 3-2-1 Countdown Overlay (before recording starts) ────── */}
-      {countdownValue !== null && (
-        <div className="countdown-fullscreen-overlay">
-          <div className="countdown-number">{countdownValue}</div>
-        </div>
       )}
 
       {/* ── Settings Modal ──────────────────────────────────────── */}

@@ -729,7 +729,12 @@ export default function Preview({
         src={videoUrl}
         style={{ display: "none" }}
         onLoadedMetadata={onMetadata}
-        crossOrigin="anonymous"
+        onError={(e) => {
+          const el = e.currentTarget as HTMLVideoElement;
+          const err = el.error;
+          setLoadError(`Video failed to load: ${err?.message || err?.code || "unknown error"}`);
+          console.error("[Snap Preview] video load error:", err);
+        }}
       />
     </div>
   );
