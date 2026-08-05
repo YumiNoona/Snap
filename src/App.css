@@ -91,18 +91,34 @@ body,
 #root {
   height: 100%;
   overflow: hidden;
+  background: transparent;
+  color: #f2f4f8;
+}
+
+/* Opaque dark background ONLY for content windows — transparent overlays
+   (recorder-overlay, dock) must stay see-through so the user's desktop
+   shows through them. The body class is added in main.tsx from the Tauri
+   window label before React mounts. */
+body.window-main,
+body.window-editor,
+body.window-teleprompter,
+body:not([class*="window-"]) {
   background: #0b0d12;
   background: var(--bg-app, #0b0d12);
-  color: #f2f4f8;
-  color: var(--text-primary, #f2f4f8);
+}
+
+body.window-main #root,
+body.window-editor #root,
+body.window-teleprompter #root,
+body:not([class*="window-"]) #root {
+  background: #0b0d12;
+  background: var(--bg-app, #0b0d12);
 }
 
 body {
   font-family: var(--font-family, 'Inter', system-ui, sans-serif);
   font-size: var(--font-md, 14px);
   line-height: 1.5;
-  background: #0b0d12;
-  background: var(--bg-app, #0b0d12);
   color: #f2f4f8;
   color: var(--text-primary, #f2f4f8);
   -webkit-font-smoothing: antialiased;
