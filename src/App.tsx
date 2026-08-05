@@ -119,18 +119,43 @@ function App() {
   }, [appWindow]);
 
   if (isDockWindow) {
-    return <RecordingDock />;
+    return (
+      <ErrorBoundary onReset={closeEditorWindow}>
+        <RecordingDock />
+      </ErrorBoundary>
+    );
   }
 
   if (isOverlayWindow) {
-    return <RecordingOverlay />;
+    return (
+      <ErrorBoundary onReset={closeEditorWindow}>
+        <RecordingOverlay />
+      </ErrorBoundary>
+    );
   }
 
   if (isTeleprompterWindow) {
-    return <TeleprompterWindow onClose={closeTeleprompterWindow} />;
+    return (
+      <ErrorBoundary onReset={closeTeleprompterWindow}>
+        <TeleprompterWindow onClose={closeTeleprompterWindow} />
+      </ErrorBoundary>
+    );
   }
 
+  useEffect(() => {
+    if (isEditorWindow || isTeleprompterWindow) {
+      invoke("window_ready").catch(() => {});
+    }
+  }, [isEditorWindow, isTeleprompterWindow]);
+
   if (isEditorWindow) {
+    if (editorVideo) {
+      return (
+        <ErrorBoundary onReset={closeEditorWindow}>
+          <Editor videoPath={editorVideo} inputLogPath={editorLog || editorVideo.replace(/\.[^/.]+$/, ".json")} onClose={closeEditorWindow} />
+        </ErrorBoundary>
+      );
+    }
     if (!editorReady) {
       return (
         <div className="app-layout" style={{ alignItems: "center", justifyContent: "center" }}>
@@ -138,21 +163,40 @@ function App() {
         </div>
       );
     }
-    if (editorVideo && editorLog) {
-      return (
-        <ErrorBoundary onReset={closeEditorWindow}>
-          <Editor videoPath={editorVideo} inputLogPath={editorLog} onClose={closeEditorWindow} />
-        </ErrorBoundary>
-      );
-    }
     return (
-      <div className="app-layout" style={{ alignItems: "center", justifyContent: "center" }}>
-        <span className="launcher-status-text">No recording selected. Record something first.</span>
+      <div className="app-layout" style={{ alignItems: "center", justifyContent: "center", gap: "16px" }}>
+        <span className="launcher-status-text" style={{ fontSize: "16px", color: "var(--text-secondary)" }}>
+          No recording active. Record something or select a file to edit.
+        </span>
+        <button
+          className="open-last-btn"
+          onClick={async () => {
+            try {
+              const dir = await invoke<string>("get_videos_dir");
+              const files = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>("list_directory", { path: dir });
+              const mp4s = files.filter((f) => !f.is_dir && f.name.endsWith(".mp4"));
+              if (mp4s.length > 0) {
+                const latest = mp4s[0];
+                const jsonPath = latest.path.replace(/\.mp4$/, ".json");
+                setEditorVideo(latest.path);
+                setEditorLog(jsonPath);
+              }
+            } catch (e) {
+              console.error("Failed to find recordings:", e);
+            }
+          }}
+        >
+          Load Latest Recording
+        </button>
       </div>
     );
   }
 
-  return <RecorderLauncher onOpenEditor={openInEditorWindow} onOpenTeleprompter={openTeleprompterWindow} editorError={editorError} />;
+  return (
+    <ErrorBoundary onReset={() => {}}>
+      <RecorderLauncher onOpenEditor={openInEditorWindow} onOpenTeleprompter={openTeleprompterWindow} editorError={editorError} />
+    </ErrorBoundary>
+  );
 }
 
 export default App;

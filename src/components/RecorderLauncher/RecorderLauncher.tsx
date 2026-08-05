@@ -47,7 +47,7 @@ interface AppSettings {
 }
 
 const SETTINGS_KEY = "snap.settings";
-const DEFAULT_SETTINGS: AppSettings = { borderStyle: "off", countdown: true };
+const DEFAULT_SETTINGS: AppSettings = { borderStyle: "red", countdown: true };
 
 // ── Component ───────────────────────────────────────────────────────────────
 
@@ -83,8 +83,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const [micMuted, setMicMuted] = useState(false);
   const [recordStatus, setRecordStatus] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  const [lastVideo, setLastVideo] = useState("");
-  const [lastLog, setLastLog] = useState("");
+  
+  const lastVideoRef = useRef(localStorage.getItem("snap.lastVideo") || "");
+  const lastLogRef = useRef(localStorage.getItem("snap.lastLog") || "");
+  const [lastVideo, setLastVideo] = useState(lastVideoRef.current);
+  const [lastLog, setLastLog] = useState(lastLogRef.current);
+
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -158,6 +162,15 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       const logPath = `${videosDir}\\snap_${stamp}.json`;
       const audioDir = `${videosDir}\\snap_${stamp}`;
 
+      lastVideoRef.current = videoPath;
+      lastLogRef.current = logPath;
+      setLastVideo(videoPath);
+      setLastLog(logPath);
+      try {
+        localStorage.setItem("snap.lastVideo", videoPath);
+        localStorage.setItem("snap.lastLog", logPath);
+      } catch {}
+
       setRecordStatus("Starting...");
       await invoke("start_recording", { targetId, outputPath: videoPath });
       let region: { x: number; y: number; w: number; h: number } | null = null;
@@ -188,14 +201,15 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       setRecording(true);
       setIsPaused(false);
       setElapsed(0);
-      setLastVideo(videoPath);
-      setLastLog(logPath);
 
       elapsedRef.current = setInterval(
         () => setElapsed((p) => (pausedRef.current ? p : p + 1)),
         1000
       );
       setRecordStatus("Recording");
+
+      // Minimize launcher window out of the way while recording
+      appWindow.minimize().catch(() => {});
 
       // Show the floating dock on the desktop (its own small window).
       invoke("set_dock_visible", { visible: true }).catch(() => {});
@@ -238,8 +252,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     invoke("set_overlay_paused", { paused: false }).catch(() => {});
 
     // Open the recording in its own editor window
-    if (lastVideo && lastLog) {
-      onOpenEditor(lastVideo, lastLog);
+    const targetVideo = lastVideoRef.current || lastVideo;
+    const targetLog = lastLogRef.current || lastLog;
+    if (targetVideo && targetLog) {
+      onOpenEditor(targetVideo, targetLog);
     }
   };
 
@@ -364,14 +380,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     <div className={`app-layout ${shutterFlash ? "shutter-flash-active" : ""}`}>
       {/* ── Topbar ────────────────────────── */}
       <header className="titlebar" data-tauri-drag-region>
-        <div
-          className="titlebar-drag-area"
-          data-tauri-drag-region
-          onMouseDown={async (e) => {
-            e.preventDefault();
-            await appWindow.startDragging();
-          }}
-        />
+        <div className="titlebar-drag-area" data-tauri-drag-region />
         <div className="titlebar-left">
           <div className="brand-logo-area">
             <span className="brand-logo-text">S</span>
@@ -484,8 +493,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
             </p>
           )}
 
-          {lastVideo && lastLog && !recording && (
-            <button className="open-last-btn" onClick={() => onOpenEditor(lastVideo, lastLog)}>
+          {((lastVideo || lastVideoRef.current) && (lastLog || lastLogRef.current)) && !recording && (
+            <button
+              className="open-last-btn"
+              onClick={() => onOpenEditor(lastVideoRef.current || lastVideo, lastLogRef.current || lastLog)}
+            >
               Open Last Recording
             </button>
           )}

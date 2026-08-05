@@ -66,7 +66,7 @@ fn open_editor_window(
     .min_inner_size(980.0, 640.0)
     .center()
     .decorations(false)
-    .visible(false)
+    .visible(true)
     .background_color(Color(11, 13, 18, 255))
     .devtools(true)
     .on_page_load(|_webview, payload| {
@@ -74,6 +74,9 @@ fn open_editor_window(
     })
     .build()
     .map_err(|e| format!("Failed to create editor window: {e}"))?;
+
+    let _ = win.show();
+    let _ = win.set_focus();
 
     eprintln!("[Snap] editor window created, emitting editor-open");
     win.emit("editor-open", (video.clone(), log.clone()))
@@ -220,16 +223,35 @@ fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String
         .get_webview_window("recorder-overlay")
         .ok_or_else(|| "Overlay window not found".to_string())?;
 
+    if let Some(monitor) = app
+        .get_webview_window("main")
+        .and_then(|m| m.current_monitor().ok())
+        .flatten()
+    {
+        let scale = monitor.scale_factor();
+        let logical_w = monitor.size().width as f64 / scale;
+        let logical_h = monitor.size().height as f64 / scale;
+        let logical_x = monitor.position().x as f64 / scale;
+        let logical_y = monitor.position().y as f64 / scale;
+
+        let _ = win.set_size(tauri::LogicalSize::new(logical_w, logical_h));
+        let _ = win.set_position(tauri::LogicalPosition::new(logical_x, logical_y));
+    }
+
     let payload = serde_json::json!({ "countdown": value });
-    win.emit("countdown-state", payload)
-        .map_err(|e| format!("Failed to emit countdown: {e}"))?;
+    let _ = win.emit("countdown-state", payload);
 
     if value.is_some() {
-        win.set_ignore_cursor_events(true)
-            .map_err(|e| format!("Failed to set overlay click-through: {e}"))?;
+        let _ = win.set_ignore_cursor_events(true);
+        let _ = win.set_always_on_top(true);
         let _ = win.show();
+        let _ = win.set_focus();
     } else {
-        let _ = win.hide();
+        // If overlay border is active, don't hide the window — just clear countdown
+        let border_active = OVERLAY_APPEARANCE.lock().map(|g| g.is_some()).unwrap_or(false);
+        if !border_active {
+            let _ = win.hide();
+        }
     }
 
     Ok(())

@@ -70,25 +70,68 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
     let mut args: Vec<String> = vec![
         "-y".into(),
         "-i".into(), request.input_video.clone(),
-        "-r".into(), settings.fps.to_string(),
     ];
+
+    // Detect sidecar audio files
+    let input_path = std::path::Path::new(&request.input_video);
+    let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
+    let parent = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let audio_dir = parent.join(stem.as_ref());
+
+    let sys_wav = audio_dir.join("system_audio.wav");
+    let mic_wav = audio_dir.join("mic_audio.wav");
+    let has_sys = sys_wav.exists() && std::fs::metadata(&sys_wav).map(|m| m.len() > 0).unwrap_or(false);
+    let has_mic = mic_wav.exists() && std::fs::metadata(&mic_wav).map(|m| m.len() > 0).unwrap_or(false);
+
+    let mut audio_inputs = 0;
+    if has_sys {
+        args.push("-i".into());
+        args.push(sys_wav.to_string_lossy().to_string());
+        audio_inputs += 1;
+    }
+    if has_mic {
+        args.push("-i".into());
+        args.push(mic_wav.to_string_lossy().to_string());
+        audio_inputs += 1;
+    }
+
+    args.push("-r".into());
+    args.push(settings.fps.to_string());
 
     let w = settings.width;
     let h = settings.height;
 
-    // Build complex filtergraph for pan/zoom + background
-    if cfg.zoom_enabled && !cfg.keyframes.is_empty() {
+    // Build video filter
+    let vf = if cfg.zoom_enabled && !cfg.keyframes.is_empty() {
         let zoom_expr = build_zoompan_expr(&cfg.keyframes, settings.fps, inner_w, inner_h);
-        args.push("-vf".into());
-        args.push(format!(
-            "pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg},{}",
-            zoom_expr
-        ));
+        format!("pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg},{zoom_expr}")
+    } else {
+        format!("scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg}")
+    };
+
+    if audio_inputs > 0 {
+        if audio_inputs == 2 {
+            args.push("-filter_complex".into());
+            args.push(format!("[0:v]{vf}[v];[1:a][2:a]amix=inputs=2:duration=first[a]"));
+            args.push("-map".into());
+            args.push("[v]".into());
+            args.push("-map".into());
+            args.push("[a]".into());
+        } else {
+            args.push("-filter_complex".into());
+            args.push(format!("[0:v]{vf}[v]"));
+            args.push("-map".into());
+            args.push("[v]".into());
+            args.push("-map".into());
+            args.push("1:a".into());
+        }
+        args.push("-c:a".into());
+        args.push("aac".into());
+        args.push("-b:a".into());
+        args.push("192k".into());
     } else {
         args.push("-vf".into());
-        args.push(format!(
-            "scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg}"
-        ));
+        args.push(vf);
     }
 
     // Format-specific args

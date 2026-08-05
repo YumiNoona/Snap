@@ -53,7 +53,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   }, [config.cursorHotspots]);
 
   useEffect(() => {
-    invoke("window_ready").catch(() => {});
+    invoke("window_ready").catch((e) => {
+      console.error("[Snap] window_ready failed — editor window will stay hidden:", e);
+    });
   }, []);
 
   // Sync playing state with video element
@@ -179,15 +181,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     <div className="screenstudio-editor-layout">
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
-        <div
-          className="ss-drag-area"
-          data-tauri-drag-region
-          onMouseDown={async (e) => {
-            e.preventDefault();
-            await appWindow.startDragging();
-          }}
-        />
-
+        <div className="ss-drag-area" data-tauri-drag-region />
         <div className="ss-topbar-left">
           {/* Back button */}
           <button className="ss-icon-btn back-btn" onClick={onClose} title="Close Editor">

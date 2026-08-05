@@ -1,13 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 
 const rootEl = document.getElementById("root") as HTMLElement;
 
-// Tag <body> with the Tauri window label synchronously so App.css can scope
-// opaque backgrounds to content windows. Must run before any render.
-const label = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
-document.body.classList.add(`window-${label}`);
+try {
+  const win = getCurrentWindow();
+  if (win && win.label) {
+    document.body.classList.add(`window-${win.label}`);
+  }
+} catch {
+  // Safe fallback if not in Tauri
+}
+
 
 function showError(label: string, err: unknown) {
   const message = err instanceof Error ? `${err.message}\n\n${err.stack || ""}` : String(err);

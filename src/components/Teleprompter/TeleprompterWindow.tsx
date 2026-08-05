@@ -55,7 +55,9 @@ export default function TeleprompterWindow({ onClose }: Props) {
   }, [isStandalone]);
 
   useEffect(() => {
-    invoke("window_ready").catch(() => {});
+    invoke("window_ready").catch((e) => {
+      console.error("[Snap] window_ready failed — teleprompter window will stay hidden:", e);
+    });
   }, []);
 
   const handleClose = useCallback(() => {
@@ -66,12 +68,6 @@ export default function TeleprompterWindow({ onClose }: Props) {
     }
   }, [onClose, isStandalone, appWindow]);
 
-  const handleTitlebarDrag = async (e: React.MouseEvent) => {
-    if (isStandalone && (e.target as HTMLElement).closest(".tp-drag-handle")) {
-      e.preventDefault();
-      await appWindow.startDragging();
-    }
-  };
 
   // Word-by-word reveal & auto scroll timer
   useEffect(() => {
@@ -116,10 +112,10 @@ export default function TeleprompterWindow({ onClose }: Props) {
       style={isStandalone ? { opacity } : undefined}
     >
       {/* Drag Titlebar */}
-      <div className="tp-titlebar" onMouseDown={handleTitlebarDrag}>
-        <div className="tp-drag-handle">
+      <div className="tp-titlebar" data-tauri-drag-region>
+        <div className="tp-drag-handle" data-tauri-drag-region>
           <Grip size={15} />
-          <span className="tp-window-title">Teleprompter</span>
+          <span className="tp-window-title" data-tauri-drag-region>Teleprompter</span>
         </div>
 
         <div className="tp-mode-tabs">
