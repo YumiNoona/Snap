@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Grip, X, RotateCcw } from "lucide-react";
 import { Play, Pause } from "lucide";
@@ -52,6 +53,10 @@ export default function TeleprompterWindow({ onClose }: Props) {
       document.body.style.color = prevColor;
     };
   }, [isStandalone]);
+
+  useEffect(() => {
+    invoke("window_ready").catch(() => {});
+  }, []);
 
   const handleClose = useCallback(() => {
     if (onClose) {

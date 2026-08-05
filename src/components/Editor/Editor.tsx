@@ -52,6 +52,10 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     }
   }, [config.cursorHotspots]);
 
+  useEffect(() => {
+    invoke("window_ready").catch(() => {});
+  }, []);
+
   // Sync playing state with video element
   useEffect(() => {
     const el = document.querySelector<HTMLVideoElement>("video#preview-video");

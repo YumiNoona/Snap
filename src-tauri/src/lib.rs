@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::webview::Color;
 
 /// Pending video/log paths handed to the dedicated editor window.
 struct EditorPaths(Mutex<Option<(String, String)>>);
@@ -65,6 +66,8 @@ fn open_editor_window(
     .min_inner_size(980.0, 640.0)
     .center()
     .decorations(false)
+    .visible(false)
+    .background_color(Color(11, 13, 18, 255))
     .devtools(true)
     .on_page_load(|_webview, payload| {
         eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
@@ -75,9 +78,17 @@ fn open_editor_window(
     eprintln!("[Snap] editor window created, emitting editor-open");
     win.emit("editor-open", (video.clone(), log.clone()))
         .map_err(|e| format!("Failed to notify editor window: {e}"))?;
-    let _ = win.show();
-    win.set_focus().map_err(|e| format!("Failed to focus editor window: {e}"))?;
     eprintln!("[Snap] Press F12 or right-click > Inspect on the editor window to view JS console errors");
+    Ok(())
+}
+
+/// Called by the frontend after React mounts and the UI is rendered — the
+/// window stays hidden (.visible(false) on the builder) until this fires,
+/// eliminating any white pre-content frame.
+#[tauri::command]
+fn window_ready(window: tauri::Window) -> Result<(), String> {
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -91,7 +102,7 @@ fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let win = tauri::WebviewWindowBuilder::new(
+    let _win = tauri::WebviewWindowBuilder::new(
         &app,
         "teleprompter",
         tauri::WebviewUrl::App("index.html".into()),
@@ -101,13 +112,13 @@ fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
     .min_inner_size(420.0, 320.0)
     .center()
     .decorations(false)
+    .visible(false)
+    .background_color(Color(11, 13, 18, 255))
     .devtools(true)
     .always_on_top(true)
     .build()
     .map_err(|e| format!("Failed to create teleprompter window: {e}"))?;
 
-    let _ = win.show();
-    win.set_focus().map_err(|e| format!("Failed to focus teleprompter window: {e}"))?;
     eprintln!("[Snap] Press F12 or right-click > Inspect on the teleprompter window to view JS console errors");
     Ok(())
 }
@@ -521,18 +532,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
-        .setup(|app| {
-            // Set all content windows to a dark background so the initial
-            // paint before React mounts is dark, not white.
-            use tauri::Manager;
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.eval("document.documentElement.style.backgroundColor = '#0b0d12'");
-            }
-            if let Some(win) = app.get_webview_window("editor") {
-                let _ = win.eval("document.documentElement.style.backgroundColor = '#0b0d12'");
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,
@@ -550,6 +549,7 @@ pub fn run() {
             export::export_video,
             open_editor_window,
             open_teleprompter_window,
+            window_ready,
             get_pending_editor_paths,
             set_dock_visible,
             update_dock_state,

@@ -4,18 +4,10 @@ import App from "./App";
 
 const rootEl = document.getElementById("root") as HTMLElement;
 
-// Tag <body> with the Tauri window label so App.css can scope opaque
-// backgrounds to content windows, leaving transparent overlays (recorder-
-// overlay, dock) see-through. Must run before any render.
-(async () => {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    const label = getCurrentWindow().label;
-    document.body.classList.add(`window-${label}`);
-  } catch {
-    // Not running inside Tauri (e.g. plain browser) — safe to ignore.
-  }
-})();
+// Tag <body> with the Tauri window label synchronously so App.css can scope
+// opaque backgrounds to content windows. Must run before any render.
+const label = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? "main";
+document.body.classList.add(`window-${label}`);
 
 function showError(label: string, err: unknown) {
   const message = err instanceof Error ? `${err.message}\n\n${err.stack || ""}` : String(err);
