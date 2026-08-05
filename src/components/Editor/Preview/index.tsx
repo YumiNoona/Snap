@@ -64,6 +64,22 @@ export default function Preview({
   const videoMetaRef = useRef<{ w: number; h: number; d: number } | null>(null);
   const kfGenerated = useRef(false);
 
+  // Cache resolved CSS variable colors ONCE — never call getComputedStyle inside rAF.
+  const colorsRef = useRef({ shadow: "#0f172a", crop: "rgba(0,0,0,0.45)", border: "#ffffff", cursorWhite: "#ffffff" });
+
+  // Resolve CSS variable colors once on mount
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const cs = getComputedStyle(el);
+    colorsRef.current = {
+      shadow: cs.getPropertyValue("--bg-surface-sunken").trim() || "#0f172a",
+      crop: "rgba(0, 0, 0, 0.45)",
+      border: cs.getPropertyValue("--text-primary").trim() || "#ffffff",
+      cursorWhite: "#ffffff",
+    };
+  }, []);
+
   useEffect(() => {
     setEventsReady(false);
     kfGenerated.current = false;
@@ -385,7 +401,7 @@ export default function Preview({
       ctx.shadowBlur = config.shadow.blur;
       ctx.shadowOffsetX = config.shadow.offsetX;
       ctx.shadowOffsetY = config.shadow.offsetY;
-      ctx.fillStyle = "#0f172a";
+      ctx.fillStyle = colorsRef.current.shadow;
       ctx.beginPath();
       roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
       ctx.fill();
@@ -488,13 +504,13 @@ export default function Preview({
         };
       }
       ctx.save();
-      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.fillStyle = colorsRef.current.crop;
       if (sel) {
         ctx.fillRect(0, 0, cw, sel.y);
         ctx.fillRect(0, sel.y, sel.x, sel.h);
         ctx.fillRect(sel.x + sel.w, sel.y, cw - sel.x - sel.w, sel.h);
         ctx.fillRect(0, sel.y + sel.h, cw, ch - sel.y - sel.h);
-        ctx.strokeStyle = "#ffffff";
+        ctx.strokeStyle = colorsRef.current.border;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 4]);
         ctx.strokeRect(sel.x, sel.y, sel.w, sel.h);

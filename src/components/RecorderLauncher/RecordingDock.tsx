@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Play, Pause, Mic, MicOff, Square } from "lucide-react";
+import { Play, Pause, Mic, MicOff } from "lucide";
+import { Square } from "lucide-react";
+import { MorphIcon } from "morphicons/react";
 import "./FloatingToolbar.css";
 
 interface DockState {
@@ -70,7 +72,7 @@ export default function RecordingDock() {
           onClick={() => send("pause")}
           title={state.paused ? "Resume Recording" : "Pause Recording"}
         >
-          {state.paused ? <Play size={16} /> : <Pause size={16} />}
+          <MorphIcon icon={state.paused ? Play : Pause} spring="snappy" size={16} />
         </button>
 
         <button
@@ -78,7 +80,7 @@ export default function RecordingDock() {
           onClick={() => send("mic")}
           title={state.mic_muted ? "Unmute Microphone" : "Mute Microphone"}
         >
-          {state.mic_muted ? <MicOff size={16} /> : <Mic size={16} />}
+          <MorphIcon icon={state.mic_muted ? MicOff : Mic} spring="snappy" size={16} />
         </button>
 
         <button className="dock-stop-btn" onClick={() => send("stop")} title="Stop & Open Editor">

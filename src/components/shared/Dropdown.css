@@ -1,0 +1,161 @@
+.dd-trigger {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 var(--space-3);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  min-width: 0;
+  transition: border-color var(--dur-base) var(--ease-standard), box-shadow var(--dur-base) var(--ease-standard);
+}
+
+.dd-trigger:hover {
+  border-color: var(--border-default);
+}
+
+.dd-trigger.open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.dd-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dd-trigger-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.dd-trigger-label {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.dd-trigger-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Panel — portalled to document.body */
+.dd-panel {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: var(--space-2);
+  min-width: var(--dd-min-width, 180px);
+  max-height: 320px;
+  overflow-y: auto;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity var(--dur-base) var(--ease-standard), transform var(--dur-base) var(--ease-standard);
+  pointer-events: none;
+}
+
+.dd-panel.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* Menu items */
+.dd-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-standard);
+  white-space: nowrap;
+}
+
+.dd-item:hover {
+  background: var(--bg-surface-sunken);
+}
+
+.dd-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.dd-item-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Checkmark slot — always 20px wide so labels align */
+.dd-item-check {
+  width: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.dd-item-check svg {
+  color: var(--accent);
+}
+
+/* Submenu chevron */
+.dd-item-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  margin-left: var(--space-2);
+  display: flex;
+  align-items: center;
+}
+
+/* Submenu panel — flyout to the right */
+.dd-sub-panel {
+  position: fixed;
+  z-index: 10001;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: var(--space-2);
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Divider */
+.dd-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-1) 0;
+}
+
+/* Disabled item */
+.dd-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

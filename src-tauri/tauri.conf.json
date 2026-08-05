@@ -16,7 +16,9 @@
         "title": "Snap",
         "width": 920,
         "height": 320,
-        "decorations": false
+        "decorations": false,
+        "maximizable": false,
+        "resizable": false
       },
       {
         "label": "dock",

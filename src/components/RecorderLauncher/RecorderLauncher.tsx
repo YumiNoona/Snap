@@ -5,7 +5,6 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Settings,
   Minus,
-  Square,
   X,
   Folder,
   Video,
@@ -17,7 +16,7 @@ import {
 } from "lucide-react";
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
-import TeleprompterWindow from "../Teleprompter/TeleprompterWindow";
+import Dropdown from "../shared/Dropdown";
 import "./RecorderLauncher.css";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -36,6 +35,7 @@ interface AudioDevice {
 
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
+  onOpenTeleprompter: () => void;
   editorError?: string | null;
 }
 
@@ -51,7 +51,7 @@ const DEFAULT_SETTINGS: AppSettings = { borderStyle: "off", countdown: true };
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
+export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, editorError }: Props) {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [_selectedTarget, setSelectedTarget] = useState("");
@@ -71,7 +71,6 @@ export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
 
   // Navigation / Views
   const [activeView, setActiveView] = useState<"launcher" | "device">("launcher");
-  const [showTeleprompter, setShowTeleprompter] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showWindowPicker, setShowWindowPicker] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
@@ -412,9 +411,6 @@ export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
             <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
               <Minus size={12} />
             </button>
-            <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
-              <Square size={10} />
-            </button>
             <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
               <X size={12} />
             </button>
@@ -496,59 +492,43 @@ export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
           <h3 className="sidebar-heading">Device &amp; Tool</h3>
 
           {/* Camera Dropdown */}
-          <div className="focusee-device-select-row">
-            <div className="device-icon-box">
-              <Video size={16} />
-            </div>
-            <select
-              value={selectedCamera}
-              onChange={(e) => setSelectedCamera(e.target.value)}
-              className="sidebar-select"
-            >
-              <option value="OBS Virtual Cam">OBS Virtual Cam...</option>
-              <option value="Integrated Webcam">Integrated Webcam</option>
-              <option value="Disabled">No Camera</option>
-            </select>
-          </div>
+          <Dropdown
+            value={selectedCamera}
+            onChange={setSelectedCamera}
+            icon={<Video size={16} />}
+            options={[
+              { value: "OBS Virtual Cam", label: "OBS Virtual Cam..." },
+              { value: "Integrated Webcam", label: "Integrated Webcam" },
+              { value: "Disabled", label: "No Camera" },
+            ]}
+          />
 
           {/* Microphone Dropdown */}
-          <div className="focusee-device-select-row">
-            <div className="device-icon-box">
-              <Mic size={16} />
-            </div>
-            <select
-              value={selectedMic}
-              onChange={(e) => setSelectedMic(e.target.value)}
-              className="sidebar-select"
-            >
-              <option value="default">Microphone (System...)</option>
-              {microphones.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
+          <Dropdown
+            value={selectedMic}
+            onChange={setSelectedMic}
+            icon={<Mic size={16} />}
+            options={[
+              { value: "default", label: "Microphone (Default)" },
+              ...microphones.map((m) => ({ value: m.id, label: m.name })),
+            ]}
+          />
 
           {/* Speaker Dropdown */}
-          <div className="focusee-device-select-row">
-            <div className="device-icon-box">
-              <Volume2 size={16} />
-            </div>
-            <select
-              value={selectedSpeaker}
-              onChange={(e) => setSelectedSpeaker(e.target.value)}
-              className="sidebar-select"
-            >
-              <option value="default">Headphones (System...)</option>
-              {speakers.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+          <Dropdown
+            value={selectedSpeaker}
+            onChange={setSelectedSpeaker}
+            icon={<Volume2 size={16} />}
+            options={[
+              { value: "default", label: "Headphones (System)" },
+              ...speakers.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
 
           {/* Teleprompter Button */}
           <button
             className="teleprompter-sidebar-btn"
-            onClick={() => setShowTeleprompter(true)}
+            onClick={() => onOpenTeleprompter()}
           >
             <FileText size={15} />
             Teleprompter
@@ -589,11 +569,6 @@ export default function RecorderLauncher({ onOpenEditor, editorError }: Props) {
           onSelect={handleRegionSelect}
           onCancel={() => setShowRegionSelector(false)}
         />
-      )}
-
-      {/* ── Teleprompter Window Module ───────────────────────────── */}
-      {showTeleprompter && (
-        <TeleprompterWindow onClose={() => setShowTeleprompter(false)} />
       )}
 
       {/* ── 3-2-1 Countdown Overlay (before recording starts) ────── */}

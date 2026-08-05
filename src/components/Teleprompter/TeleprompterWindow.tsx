@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { Grip, X, Play, Pause, RotateCcw } from "lucide-react";
+import { Grip, X, RotateCcw } from "lucide-react";
+import { Play, Pause } from "lucide";
+import { MorphIcon } from "morphicons/react";
 import "./TeleprompterWindow.css";
 
 interface Props {
@@ -207,17 +209,8 @@ export default function TeleprompterWindow({ onClose }: Props) {
               className={`tp-play-btn ${isPlaying ? "playing" : ""}`}
               onClick={() => setIsPlaying(!isPlaying)}
             >
-              {isPlaying ? (
-                <>
-                  <Pause size={14} fill="currentColor" />
-                  Pause
-                </>
-              ) : (
-                <>
-                  <Play size={14} fill="currentColor" />
-                  Start
-                </>
-              )}
+              <MorphIcon icon={isPlaying ? Pause : Play} spring="snappy" size={14} />
+              {isPlaying ? "Pause" : "Start"}
             </button>
 
             <button className="tp-icon-btn" onClick={resetPrompt} title="Reset to Top">

@@ -4,6 +4,7 @@ import { MousePointer, Check } from "lucide-react";
 import type { EditorConfig, ExportSettings, CursorPackInfo } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import type { SidebarToolTab } from "../Editor";
+import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
 
 interface WallpaperEntry {
@@ -228,7 +229,7 @@ export default function Panels({
                     />
                   ))}
                 </div>
-                <ColorRow label="Custom Solid Color" value={config.backgroundColor} onChange={(v) => update({ backgroundColor: v, bgType: "color" })} />
+                <ColorInput label="Custom Solid Color" value={config.backgroundColor} onChange={(v) => update({ backgroundColor: v, bgType: "color" })} />
               </>
             )}
           </Section>
@@ -236,21 +237,21 @@ export default function Panels({
           {/* Background Blur — only applies to wallpaper images */}
           {bgTab === "image" && (
             <Section title="Background Blur (Image Only)">
-              <SliderRow
-                label="Blur Radius"
-                value={config.bgBlur}
-                min={0}
-                max={100}
-                step={2}
-                unit="px"
-                onChange={(v) => update({ bgBlur: v })}
-              />
+            <Slider
+              label="Blur Radius"
+              value={config.bgBlur}
+              min={0}
+              max={100}
+              step={2}
+              unit="px"
+              onChange={(v) => update({ bgBlur: v })}
+            />
             </Section>
           )}
 
           {/* Shape & Padding */}
           <Section title="Shape &amp; Padding (4-Side)">
-            <SliderRow
+            <Slider
               label="Canvas Padding"
               value={config.padding}
               min={0}
@@ -259,7 +260,7 @@ export default function Panels({
               unit="px"
               onChange={(v) => update({ padding: v })}
             />
-            <SliderRow
+            <Slider
               label="Corner Radius"
               value={config.borderRadius}
               min={0}
@@ -310,7 +311,7 @@ export default function Panels({
                   </span>
                 </div>
 
-                <SliderRow
+                <Slider
                   label="Zoom Level"
                   value={config.zoomLevel}
                   min={1.2}
@@ -410,8 +411,8 @@ export default function Panels({
               </div>
             )}
 
-            <ColorRow label="Cursor Color" value={config.cursorStyle.color} onChange={(v) => updateCursor({ color: v })} />
-            <SliderRow label="Cursor Size" value={config.cursorStyle.size} min={8} max={40} step={1} unit="px" onChange={(v) => updateCursor({ size: v })} />
+            <ColorInput label="Cursor Color" value={config.cursorStyle.color} onChange={(v) => updateCursor({ color: v })} />
+            <Slider label="Cursor Size" value={config.cursorStyle.size} min={8} max={40} step={1} unit="px" onChange={(v) => updateCursor({ size: v })} />
             <div className="field-row">
               <label>Cursor Style</label>
               <div className="toggle-segmented">
@@ -439,9 +440,9 @@ export default function Panels({
         <div className="ss-drawer-content">
           <Section title="Video Drop Shadow">
             <CheckRow label="Enable Drop Shadow" checked={config.shadow.enabled} onChange={(v) => updateShadow({ enabled: v })} />
-            <SliderRow label="Shadow Blur" value={config.shadow.blur} min={0} max={100} step={2} unit="px" onChange={(v) => updateShadow({ blur: v })} />
-            <SliderRow label="Vertical Offset" value={config.shadow.offsetY} min={0} max={50} step={1} unit="px" onChange={(v) => updateShadow({ offsetY: v })} />
-            <ColorRow label="Shadow Color" value={config.shadow.color} onChange={(v) => updateShadow({ color: v })} />
+            <Slider label="Shadow Blur" value={config.shadow.blur} min={0} max={100} step={2} unit="px" onChange={(v) => updateShadow({ blur: v })} />
+            <Slider label="Vertical Offset" value={config.shadow.offsetY} min={0} max={50} step={1} unit="px" onChange={(v) => updateShadow({ offsetY: v })} />
+            <ColorInput label="Shadow Color" value={config.shadow.color} onChange={(v) => updateShadow({ color: v })} />
           </Section>
         </div>
       )}
@@ -524,30 +525,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="ss-section">
       <h4 className="ss-section-heading">{title}</h4>
       <div className="ss-section-body">{children}</div>
-    </div>
-  );
-}
-
-function ColorRow({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="field-row">
-      <label>{label}</label>
-      <div className="color-wrap">
-        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="swatch" />
-        <input type="text" value={value} onChange={(e) => onChange(e.target.value)} className="hex-input" />
-      </div>
-    </div>
-  );
-}
-
-function SliderRow({ label, value, min, max, step, unit = "", onChange }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (v: number) => void }) {
-  return (
-    <div className="field-row">
-      <label>{label}</label>
-      <div className="slider-wrap">
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-        <span className="slider-val">{value}{unit}</span>
-      </div>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
 import RecordingDock from "./components/RecorderLauncher/RecordingDock";
 import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
 import Editor from "./components/Editor/Editor";
+import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
 import "./App.css";
 
 interface ErrorBoundaryState {
@@ -33,24 +34,16 @@ class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: 32, textAlign: "center", color: "#f87171", background: "#0d0d0d", height: "100vh" }}>
+        <div className="error-boundary-screen">
           <h2>Something went wrong in the Editor</h2>
-          <p style={{ marginTop: 12, fontSize: 13, color: "#999" }}>
+          <p className="error-boundary-message">
             {this.state.error?.message}
           </p>
           <button
+            className="error-boundary-btn"
             onClick={() => {
               this.setState({ hasError: false, error: null });
               this.props.onReset();
-            }}
-            style={{
-              marginTop: 20,
-              padding: "8px 20px",
-              background: "#3b82f6",
-              color: "#fff",
-              borderRadius: 6,
-              border: "none",
-              cursor: "pointer",
             }}
           >
             Back to Recorder
@@ -69,6 +62,7 @@ function App() {
   const isEditorWindow = appWindow.label === "editor";
   const isDockWindow = appWindow.label === "dock";
   const isOverlayWindow = appWindow.label === "recorder-overlay";
+  const isTeleprompterWindow = appWindow.label === "teleprompter";
 
   const [editorVideo, setEditorVideo] = useState("");
   const [editorLog, setEditorLog] = useState("");
@@ -114,12 +108,26 @@ function App() {
     appWindow.close();
   }, [appWindow]);
 
+  const openTeleprompterWindow = useCallback(() => {
+    invoke("open_teleprompter_window").catch((e) => {
+      console.error("open_teleprompter_window failed:", e);
+    });
+  }, []);
+
+  const closeTeleprompterWindow = useCallback(() => {
+    appWindow.close();
+  }, [appWindow]);
+
   if (isDockWindow) {
     return <RecordingDock />;
   }
 
   if (isOverlayWindow) {
     return <RecordingOverlay />;
+  }
+
+  if (isTeleprompterWindow) {
+    return <TeleprompterWindow onClose={closeTeleprompterWindow} />;
   }
 
   if (isEditorWindow) {
@@ -144,7 +152,7 @@ function App() {
     );
   }
 
-  return <RecorderLauncher onOpenEditor={openInEditorWindow} editorError={editorError} />;
+  return <RecorderLauncher onOpenEditor={openInEditorWindow} onOpenTeleprompter={openTeleprompterWindow} editorError={editorError} />;
 }
 
 export default App;

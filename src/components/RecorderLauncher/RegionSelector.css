@@ -1,65 +1,66 @@
 .region-overlay {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  background: rgba(0, 0, 0, 0.45);
   cursor: crosshair;
-  user-select: none;
-}
-
-.region-hint {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: var(--font-md);
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  padding: 10px 20px;
-  border-radius: var(--radius-md);
-  pointer-events: none;
+  z-index: 500;
 }
 
 .region-box {
   position: fixed;
-  border: 2px solid var(--accent-focus);
-  background: rgba(91, 141, 239, 0.08);
-  pointer-events: none;
-  z-index: 301;
+  border: 2px dashed var(--accent);
   border-radius: var(--radius-sm);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+  background: var(--accent-glow);
+  z-index: 501;
 }
 
 .region-size {
   position: absolute;
-  bottom: -28px;
+  top: -26px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: var(--font-xs);
-  font-family: var(--font-mono);
+  background: var(--bg-surface-raised);
   color: var(--text-primary);
-  background: var(--accent-focus);
-  padding: 3px 8px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   white-space: nowrap;
+  pointer-events: none;
+}
+
+.region-hint {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
+  pointer-events: none;
+  text-align: center;
+  opacity: 0.8;
 }
 
 .region-cancel {
   position: fixed;
-  bottom: 32px;
+  bottom: var(--space-8);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 302;
-  padding: 8px 24px;
-  font-size: var(--font-sm);
+  padding: var(--space-2) var(--space-6);
+  font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  transition: background 150ms ease;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  z-index: 501;
+  transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard);
 }
 
 .region-cancel:hover {
-  background: var(--bg-surface);
+  color: var(--text-primary);
+  background: var(--bg-surface-sunken);
 }

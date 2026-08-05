@@ -77,6 +77,36 @@ fn open_editor_window(
     let _ = win.show();
     win.set_focus().map_err(|e| format!("Failed to focus editor window: {e}"))?;
     eprintln!("[Snap] editor window shown + focused");
+    Ok(())
+}
+
+/// Open the standalone teleprompter as its own OS-level window (not a DOM overlay),
+/// so it stays off-screen relative to the launcher and can be independently positioned.
+#[tauri::command]
+fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("teleprompter") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let win = tauri::WebviewWindowBuilder::new(
+        &app,
+        "teleprompter",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Snap Teleprompter")
+    .inner_size(620.0, 480.0)
+    .min_inner_size(420.0, 320.0)
+    .center()
+    .decorations(false)
+    .always_on_top(true)
+    .build()
+    .map_err(|e| format!("Failed to create teleprompter window: {e}"))?;
+
+    let _ = win.show();
+    win.set_focus().map_err(|e| format!("Failed to focus teleprompter window: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -472,12 +502,13 @@ pub fn run() {
             // TEMP DIAGNOSTIC: auto-open the editor window 2.5s after startup
             // to reproduce the white-screen issue without manual interaction.
             let handle = app.handle().clone();
-            let state = app.state::<EditorPaths>();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
                 eprintln!("[Snap] TEMP DIAGNOSTIC: auto-opening editor window");
+                let h = handle.clone();
+                let state = handle.state::<EditorPaths>();
                 let _ = open_editor_window(
-                    handle,
+                    h,
                     state,
                     "C:\\Users\\ringale\\Videos\\snap_diag.mp4".into(),
                     "C:\\Users\\ringale\\Videos\\snap_diag.json".into(),
@@ -501,6 +532,7 @@ pub fn run() {
             input_hook::set_input_paused,
             export::export_video,
             open_editor_window,
+            open_teleprompter_window,
             get_pending_editor_paths,
             set_dock_visible,
             update_dock_state,

@@ -1,7 +1,9 @@
 import { useRef, useCallback, useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { RectangleHorizontal, ChevronDown, Crop, SkipBack, SkipForward, PlayCircle, PauseCircle, Scissors, ZoomIn, ZoomOut, Film } from "lucide-react";
+import { PlayCircle, PauseCircle, ChevronDown, ChevronUp } from "lucide";
+import { MorphIcon } from "morphicons/react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film } from "lucide-react";
 import type { Keyframe, EditorConfig } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import "./Timeline.css";
@@ -158,7 +160,7 @@ export default function Timeline({
             >
               <RectangleHorizontal size={14} />
               <span>{currentAspectLabel}</span>
-              <ChevronDown size={12} />
+              <MorphIcon icon={showAspectMenu ? ChevronUp : ChevronDown} spring="snappy" size={12} />
             </button>
 
             {showAspectMenu && (
@@ -199,7 +201,7 @@ export default function Timeline({
             </button>
 
             <button className="tb-play-circle-btn" onClick={onTogglePlay} title={playing ? "Pause" : "Play"}>
-              {playing ? <PauseCircle size={18} /> : <PlayCircle size={18} />}
+              <MorphIcon icon={playing ? PauseCircle : PlayCircle} spring="snappy" size={18} />
             </button>
 
             <button className="tb-transport-btn" onClick={() => onSeek(duration)} title="Jump to End">
@@ -326,6 +328,14 @@ export default function Timeline({
 
 function WaveRow({ data }: { data: number[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const colorRef = useRef("#9aa3b2");
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const cs = getComputedStyle(canvas);
+    colorRef.current = cs.getPropertyValue("--text-secondary").trim() || "#9aa3b2";
+  }, []);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -345,7 +355,7 @@ function WaveRow({ data }: { data: number[] }) {
 
       const n = data.length;
       if (n === 0) return;
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = colorRef.current;
       const barW = wpx / n;
       for (let i = 0; i < n; i++) {
         const v = Math.max(0.04, Math.min(1, data[i]));
