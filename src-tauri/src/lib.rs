@@ -521,6 +521,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
+        .setup(|app| {
+            // Set all content windows to a dark background so the initial
+            // paint before React mounts is dark, not white.
+            use tauri::Manager;
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.eval("document.documentElement.style.backgroundColor = '#0b0d12'");
+            }
+            if let Some(win) = app.get_webview_window("editor") {
+                let _ = win.eval("document.documentElement.style.backgroundColor = '#0b0d12'");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,

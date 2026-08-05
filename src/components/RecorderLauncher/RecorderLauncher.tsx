@@ -96,11 +96,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     pausedRef.current = isPaused;
   }, [isPaused]);
 
-  // Show the window once React has painted (window starts hidden to avoid white flash).
-  useEffect(() => {
-    appWindow.show().catch(() => {});
-  }, []);
-
   // Persist settings
   useEffect(() => {
     try {
@@ -328,9 +323,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   }, [recording, elapsed, isPaused, micMuted]);
 
   // Relay dock button presses (stop / pause / mic) back to this window.
-  const actionHandlersRef = useRef<{ stop: () => void }>({ stop: () => {} });
+  const actionHandlersRef = useRef<{ stop: () => void; pause: () => void }>({
+    stop: () => {},
+    pause: () => {},
+  });
   useEffect(() => {
-    actionHandlersRef.current = { stop: stopRecording };
+    actionHandlersRef.current = { stop: stopRecording, pause: togglePause };
   });
 
   useEffect(() => {
@@ -338,7 +336,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       if (e.payload === "stop") {
         actionHandlersRef.current.stop();
       } else if (e.payload === "pause") {
-        togglePause();
+        actionHandlersRef.current.pause();
       } else if (e.payload === "mic") {
         setMicMuted((m) => !m);
       }
