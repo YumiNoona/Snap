@@ -1,18 +1,23 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 
 const rootEl = document.getElementById("root") as HTMLElement;
 
-try {
-  const win = getCurrentWindow();
-  if (win && win.label) {
-    document.body.classList.add(`window-${win.label}`);
-  }
-} catch {
-  // Safe fallback if not in Tauri
-}
+// Tag <body> with the window identity so App.css can scope opaque
+// backgrounds to content windows. Read from the URL (`?window=editor`, set
+// by the Rust side when each window is created — see src-tauri/src/lib.rs
+// and tauri.conf.json), NOT from Tauri's getCurrentWindow()/IPC state.
+//
+// getCurrentWindow() reads window.__TAURI_INTERNALS__.metadata, which is
+// injected by Tauri asynchronously and is NOT guaranteed to exist yet when
+// this script's top-level code runs — especially on Windows (see
+// https://github.com/tauri-apps/tauri/issues/12694 and #12990, both open
+// upstream bugs about this exact race). Calling it this early can throw.
+// The URL query param is available synchronously, immediately, with zero
+// dependency on Tauri's IPC bridge being ready — it can never race.
+const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
+document.body.classList.add(`window-${windowLabel}`);
 
 
 function showError(label: string, err: unknown) {

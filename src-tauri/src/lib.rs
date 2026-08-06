@@ -59,14 +59,14 @@ fn open_editor_window(
     let win = tauri::WebviewWindowBuilder::new(
         &app,
         "editor",
-        tauri::WebviewUrl::App("index.html".into()),
+        tauri::WebviewUrl::App("index.html?window=editor".into()),
     )
     .title("Snap Editor")
     .inner_size(1360.0, 860.0)
     .min_inner_size(980.0, 640.0)
     .center()
     .decorations(false)
-    .visible(true)
+    .visible(false)
     .background_color(Color(11, 13, 18, 255))
     .devtools(true)
     .on_page_load(|_webview, payload| {
@@ -75,8 +75,10 @@ fn open_editor_window(
     .build()
     .map_err(|e| format!("Failed to create editor window: {e}"))?;
 
-    let _ = win.show();
-    let _ = win.set_focus();
+    // Window is revealed by the `window_ready` command once React has actually
+    // mounted (see src/App.tsx) — do NOT call win.show()/set_focus() here.
+    // Showing immediately re-introduces the black/white pre-content flash
+    // (or a permanently blank window if the frontend ever fails to mount).
 
     eprintln!("[Snap] editor window created, emitting editor-open");
     win.emit("editor-open", (video.clone(), log.clone()))
@@ -108,7 +110,7 @@ fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
     let _win = tauri::WebviewWindowBuilder::new(
         &app,
         "teleprompter",
-        tauri::WebviewUrl::App("index.html".into()),
+        tauri::WebviewUrl::App("index.html?window=teleprompter".into()),
     )
     .title("Snap Teleprompter")
     .inner_size(620.0, 480.0)

@@ -22,6 +22,7 @@
       },
       {
         "label": "dock",
+        "url": "index.html?window=dock",
         "title": "Snap Recorder",
         "width": 460,
         "height": 74,
@@ -38,6 +39,7 @@
       },
       {
         "label": "recorder-overlay",
+        "url": "index.html?window=recorder-overlay",
         "title": "Snap Overlay",
         "width": 1920,
         "height": 1080,

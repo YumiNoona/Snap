@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronRight } from "lucide-react";
 import { MorphIcon } from "morphicons/react";
@@ -98,13 +98,30 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
   );
 
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
+  const [panelRect, setPanelRect] = useState<DOMRect | null>(null);
 
   // Recalculate trigger position when opening
   useEffect(() => {
     if (open && triggerRef.current) {
       setTriggerRect(triggerRef.current.getBoundingClientRect());
+    } else {
+      setPanelRect(null);
     }
   }, [open]);
+
+  // After the panel actually mounts (via portal) and we know its real
+  // rendered width/height, clamp it to stay inside the window bounds.
+  // Tauri windows have no browser chrome to scroll into — content
+  // positioned past the edge is simply clipped by the OS window, so we
+  // must never let `left` push the panel past the right/bottom edge.
+  // This is what was cutting off entries like "Headphones (Synaptics HD
+  // Audio)" in the sidebar: the panel always anchored to the trigger's
+  // left edge with no bounds check, so wide labels ran off-window.
+  useLayoutEffect(() => {
+    if (open && panelRef.current) {
+      setPanelRect(panelRef.current.getBoundingClientRect());
+    }
+  }, [open, options, triggerRect]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -134,13 +151,38 @@ export default function Dropdown({ options, value, onChange, icon, placeholder, 
     [open, options, hoveredIdx, select]
   );
 
+  const EDGE_MARGIN = 8;
   const panelStyle: React.CSSProperties | undefined = triggerRect
-    ? {
-        position: "fixed",
-        top: triggerRect.bottom + 4,
-        left: triggerRect.left,
-        minWidth: triggerRect.width,
-      }
+    ? (() => {
+        const width = panelRect?.width ?? triggerRect.width;
+        const height = panelRect?.height ?? 0;
+
+        // Default: left-aligned with the trigger, like before.
+        let left = triggerRect.left;
+        // If that would push the panel past the right edge of the window,
+        // right-align it to the trigger instead (grow leftward). This is
+        // the case that was clipping long labels in the sidebar, since the
+        // sidebar sits at the right edge of the window with little room to
+        // the right of its triggers.
+        if (left + width > window.innerWidth - EDGE_MARGIN) {
+          left = triggerRect.right - width;
+        }
+        // Still clamp to the left edge as a last resort (very narrow window).
+        left = Math.max(EDGE_MARGIN, left);
+
+        let top = triggerRect.bottom + 4;
+        // If it would overflow the bottom edge, open upward instead.
+        if (height && top + height > window.innerHeight - EDGE_MARGIN) {
+          top = Math.max(EDGE_MARGIN, triggerRect.top - height - 4);
+        }
+
+        return {
+          position: "fixed" as const,
+          top,
+          left,
+          minWidth: triggerRect.width,
+        };
+      })()
     : undefined;
 
   const handleSubEnter = useCallback((optValue: string, el: HTMLElement) => {

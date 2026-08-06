@@ -58,11 +58,23 @@ class ErrorBoundary extends React.Component<
 // The editor lives in its own dedicated window ("editor" label); the launcher
 // runs in the main window. App routes to the right shell per window label.
 function App() {
-  const appWindow = getCurrentWindow();
-  const isEditorWindow = appWindow.label === "editor";
-  const isDockWindow = appWindow.label === "dock";
-  const isOverlayWindow = appWindow.label === "recorder-overlay";
-  const isTeleprompterWindow = appWindow.label === "teleprompter";
+  // Window identity comes from the URL (?window=editor, set by the Rust side
+  // in src-tauri/src/lib.rs and tauri.conf.json), NOT from getCurrentWindow().
+  //
+  // getCurrentWindow() reads window.__TAURI_INTERNALS__.metadata, which Tauri
+  // injects asynchronously and is NOT guaranteed ready the instant this
+  // component first renders — especially on Windows (open upstream bugs:
+  // tauri-apps/tauri #12694, #12990). Calling it unguarded here, at the very
+  // top of App's render, means that if it throws, the crash happens *above*
+  // every ErrorBoundary in the tree below — React unmounts everything and the
+  // window just goes permanently blank, with nothing left to catch or show
+  // an error for. Reading the label from the URL is synchronous, available
+  // immediately on first paint, and has zero dependency on Tauri's IPC state.
+  const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
+  const isEditorWindow = windowLabel === "editor";
+  const isDockWindow = windowLabel === "dock";
+  const isOverlayWindow = windowLabel === "recorder-overlay";
+  const isTeleprompterWindow = windowLabel === "teleprompter";
 
   const [editorVideo, setEditorVideo] = useState("");
   const [editorLog, setEditorLog] = useState("");
@@ -104,9 +116,13 @@ function App() {
     []
   );
 
+  // getCurrentWindow() is safe to call here — these callbacks only ever run
+  // in response to a user click, long after mount, well past the point where
+  // Tauri's IPC bridge is guaranteed to be ready. It's only unsafe to call
+  // synchronously during the component's first render (see note above).
   const closeEditorWindow = useCallback(() => {
-    appWindow.close();
-  }, [appWindow]);
+    getCurrentWindow().close();
+  }, []);
 
   const openTeleprompterWindow = useCallback(() => {
     invoke("open_teleprompter_window").catch((e) => {
@@ -115,8 +131,8 @@ function App() {
   }, []);
 
   const closeTeleprompterWindow = useCallback(() => {
-    appWindow.close();
-  }, [appWindow]);
+    getCurrentWindow().close();
+  }, []);
 
   if (isDockWindow) {
     return (
