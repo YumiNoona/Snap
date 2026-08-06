@@ -39,9 +39,9 @@ impl Default for DockStateSnapshot {
 /// The window is created on demand (runtime) rather than predeclared hidden —
 /// predeclared invisible windows can fail to display on some Windows setups.
 #[tauri::command]
-fn open_editor_window(
+async fn open_editor_window(
     app: tauri::AppHandle,
-    state: tauri::State<EditorPaths>,
+    state: tauri::State<'_, EditorPaths>,
     video: String,
     log: String,
 ) -> Result<(), String> {
@@ -56,35 +56,54 @@ fn open_editor_window(
     }
 
     eprintln!("[Snap] open_editor_window: creating editor window at runtime");
-    let win = tauri::WebviewWindowBuilder::new(
-        &app,
-        "editor",
-        tauri::WebviewUrl::App("index.html?window=editor".into()),
-    )
-    .title("Snap Editor")
-    .inner_size(1360.0, 860.0)
-    .min_inner_size(980.0, 640.0)
-    .center()
-    .decorations(false)
-    .visible(false)
-    .background_color(Color(11, 13, 18, 255))
-    .devtools(true)
-    .on_page_load(|_webview, payload| {
-        eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
-    })
-    .build()
-    .map_err(|e| format!("Failed to create editor window: {e}"))?;
 
-    // Window is revealed by the `window_ready` command once React has actually
-    // mounted (see src/App.tsx) — do NOT call win.show()/set_focus() here.
-    // Showing immediately re-introduces the black/white pre-content flash
-    // (or a permanently blank window if the frontend ever fails to mount).
+    // IMPORTANT: WebviewWindowBuilder::build() deadlocks on Windows when
+    // called directly from a synchronous command — see Tauri's own docs:
+    // https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindowBuilder.html
+    // "On Windows, this function deadlocks when used in a synchronous
+    // command or event handlers... You should use async commands and
+    // separate threads when creating windows."
+    // We're already async here, but that alone isn't enough — build() must
+    // run on a separate thread via a blocking channel round-trip so the
+    // command-dispatch thread doesn't block the main/event-loop thread that
+    // build() itself needs in order to complete.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_handle = app.clone();
+    let video_for_thread = video.clone();
+    let log_for_thread = log.clone();
+    std::thread::spawn(move || {
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_handle,
+            "editor",
+            tauri::WebviewUrl::App("index.html?window=editor".into()),
+        )
+        .title("Snap Editor")
+        .inner_size(1360.0, 860.0)
+        .min_inner_size(980.0, 640.0)
+        .center()
+        .decorations(false)
+        .visible(false)
+        .background_color(Color(11, 13, 18, 255))
+        .devtools(true)
+        .on_page_load(|_webview, payload| {
+            eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
+        })
+        .build()
+        .map(|win| {
+            // Window is revealed by the `window_ready` command once React has
+            // actually mounted (see src/App.tsx) — do NOT show/focus here.
+            // Showing immediately re-introduces the black/white pre-content
+            // flash (or a permanently blank window if the frontend fails to
+            // mount).
+            eprintln!("[Snap] editor window created, emitting editor-open");
+            let _ = win.emit("editor-open", (video_for_thread, log_for_thread));
+            eprintln!("[Snap] Press F12 or right-click > Inspect on the editor window to view JS console errors");
+        })
+        .map_err(|e| format!("Failed to create editor window: {e}"));
+        let _ = tx.send(result);
+    });
 
-    eprintln!("[Snap] editor window created, emitting editor-open");
-    win.emit("editor-open", (video.clone(), log.clone()))
-        .map_err(|e| format!("Failed to notify editor window: {e}"))?;
-    eprintln!("[Snap] Press F12 or right-click > Inspect on the editor window to view JS console errors");
-    Ok(())
+    rx.recv().map_err(|e| format!("Editor window creation thread died: {e}"))?
 }
 
 /// Called by the frontend after React mounts and the UI is rendered — the
@@ -100,32 +119,41 @@ fn window_ready(window: tauri::Window) -> Result<(), String> {
 /// Open the standalone teleprompter as its own OS-level window (not a DOM overlay),
 /// so it stays off-screen relative to the launcher and can be independently positioned.
 #[tauri::command]
-fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("teleprompter") {
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
     }
 
-    let _win = tauri::WebviewWindowBuilder::new(
-        &app,
-        "teleprompter",
-        tauri::WebviewUrl::App("index.html?window=teleprompter".into()),
-    )
-    .title("Snap Teleprompter")
-    .inner_size(620.0, 480.0)
-    .min_inner_size(420.0, 320.0)
-    .center()
-    .decorations(false)
-    .visible(false)
-    .background_color(Color(11, 13, 18, 255))
-    .devtools(true)
-    .always_on_top(true)
-    .build()
-    .map_err(|e| format!("Failed to create teleprompter window: {e}"))?;
+    // Same Windows deadlock concern as open_editor_window above — build() on
+    // a spawned thread, result relayed back via a channel.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_handle,
+            "teleprompter",
+            tauri::WebviewUrl::App("index.html?window=teleprompter".into()),
+        )
+        .title("Snap Teleprompter")
+        .inner_size(620.0, 480.0)
+        .min_inner_size(420.0, 320.0)
+        .center()
+        .decorations(false)
+        .visible(false)
+        .background_color(Color(11, 13, 18, 255))
+        .devtools(true)
+        .always_on_top(true)
+        .build()
+        .map(|_win| {
+            eprintln!("[Snap] Press F12 or right-click > Inspect on the teleprompter window to view JS console errors");
+        })
+        .map_err(|e| format!("Failed to create teleprompter window: {e}"));
+        let _ = tx.send(result);
+    });
 
-    eprintln!("[Snap] Press F12 or right-click > Inspect on the teleprompter window to view JS console errors");
-    Ok(())
+    rx.recv().map_err(|e| format!("Teleprompter window creation thread died: {e}"))?
 }
 
 #[tauri::command]
