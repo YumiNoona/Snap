@@ -201,7 +201,7 @@ export default function Panels({
             <div className="ss-subtab-segmented">
               {["all", "gradient", "color"].map((cat) => (
                 <button key={cat} className={`subtab-btn ${bgCategory === cat ? "active" : ""}`} onClick={() => setBgCategory(cat)}>
-                  {cat === "all" ? "Default" : cat === "gradient" ? "Steady" : "Scenery"}
+                  {cat === "all" ? "All" : cat === "gradient" ? "Gradients" : "Colors"}
                 </button>
               ))}
             </div>

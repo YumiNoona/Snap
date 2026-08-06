@@ -353,8 +353,14 @@ export default function Preview({
     // ── Draw Background ────────────────────────────────────────────────────
     ctx.clearRect(0, 0, cw, ch);
 
+    // Background type is the single source of truth. Previously this looked
+    // up `bgGradient` unconditionally, so picking a solid color still painted
+    // the last-selected gradient (wallpaperUrl was never cleared) — colors
+    // never actually applied. "wallpaper" is treated as gradient for legacy
+    // default-config compatibility.
     const bgIsImage = config.bgType === "image";
-    const bgGradient = getGradientPreset(config.wallpaperUrl);
+    const bgIsGradient = config.bgType === "gradient" || config.bgType === "wallpaper";
+    const bgGradient = bgIsGradient ? getGradientPreset(config.wallpaperUrl) : undefined;
 
     // Blur applies ONLY to the wallpaper image layer (not gradients/solids)
     const FADE_MS = 200;
@@ -427,10 +433,31 @@ export default function Preview({
     const effY = Math.max(baseY, srcY);
     const effW = Math.min(baseX + baseW, srcX + srcW) - effX;
     const effH = Math.min(baseY + baseH, srcY + srcH) - effY;
-    if (effW > 0.5 && effH > 0.5) {
+
+    // "Cover" fit into the destination box (offsetX,offsetY,videoW,videoH).
+    // Previously the zoomed/cropped source rect (native video aspect) was
+    // drawn straight into a destination box shaped like the chosen output
+    // aspect ratio — a non-uniform stretch whenever the two aspects
+    // differed (e.g. picking 9:16 on a 16:9 recording). Instead, crop the
+    // source further, centered, to match the destination aspect exactly,
+    // so the frame fills without distorting.
+    let coverX = effX, coverY = effY, coverW = effW, coverH = effH;
+    if (effW > 0.5 && effH > 0.5 && videoW > 0.5 && videoH > 0.5) {
+      const destAr = videoW / videoH;
+      const srcAr = effW / effH;
+      if (srcAr > destAr) {
+        coverW = effH * destAr;
+        coverX = effX + (effW - coverW) / 2;
+      } else if (srcAr < destAr) {
+        coverH = effW / destAr;
+        coverY = effY + (effH - coverH) / 2;
+      }
+    }
+
+    if (coverW > 0.5 && coverH > 0.5) {
       ctx.drawImage(
         video,
-        effX, effY, effW, effH,
+        coverX, coverY, coverW, coverH,
         offsetX, offsetY, videoW, videoH
       );
     }
@@ -440,8 +467,8 @@ export default function Preview({
       const cursor = getCursorAt(ts);
       if (cursor) {
         const c = screenToVideo(cursor.x, cursor.y, vw, vh);
-        const zoomedCursorX = (c.x - effX) / effW * videoW + offsetX;
-        const zoomedCursorY = (c.y - effY) / effH * videoH + offsetY;
+        const zoomedCursorX = (c.x - coverX) / coverW * videoW + offsetX;
+        const zoomedCursorY = (c.y - coverY) / coverH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
           const pack = config.cursorStyle.pack;
@@ -476,8 +503,8 @@ export default function Preview({
     clickRipples.current = clickRipples.current.filter((r) => {
       const age = (now - r.t) / 1000;
       if (age > 1.0) return false;
-      const rx = (r.x - effX) / effW * videoW + offsetX;
-      const ry = (r.y - effY) / effH * videoH + offsetY;
+      const rx = (r.x - coverX) / coverW * videoW + offsetX;
+      const ry = (r.y - coverY) / coverH * videoH + offsetY;
       const alpha = 1 - age;
       const radius = age * 40 + 4;
       ctx.save();
@@ -512,7 +539,7 @@ export default function Preview({
         ctx.rect(lx, ly, lw, lh);
         ctx.clip();
         ctx.filter = `blur(${layer.intensity}px)`;
-        ctx.drawImage(video, effX, effY, effW, effH, offsetX, offsetY, videoW, videoH);
+        ctx.drawImage(video, coverX, coverY, coverW, coverH, offsetX, offsetY, videoW, videoH);
         ctx.filter = "none";
         // Dim the blurred region slightly so it reads as obscured
         ctx.fillStyle = "rgba(0,0,0,0.12)";

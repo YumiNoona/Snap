@@ -185,34 +185,58 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
     Ok(format!("Exported: {} ({:.1} MB)", output, meta.len() as f64 / 1_048_576.0))
 }
 
-/// Build a zoompan FFmpeg filter expression from keyframes.
-/// Uses a basic approach: at each keyframe time, set zoom position/scale,
-/// with linear interpolation between.
+/// Build a nested if/else FFmpeg expression that piecewise-linearly
+/// interpolates `value_of(kf)` across every keyframe over time, evaluated
+/// at T = on/fps (on = zoompan's per-output-frame counter). Falls back to
+/// the last keyframe's value past the final keyframe, and holds the first
+/// keyframe's value before it starts (the clamped `max(0,min(1,...))` frac
+/// handles that automatically).
+fn build_piecewise(kfs: &[ExportKeyframe], fps: u32, value_of: impl Fn(&ExportKeyframe) -> f64) -> String {
+    if kfs.len() == 1 {
+        return format!("{:.5}", value_of(&kfs[0]));
+    }
+    // Start from the tail value and wrap backwards so evaluation short-
+    // circuits into the correct segment for T.
+    let mut expr = format!("{:.5}", value_of(&kfs[kfs.len() - 1]));
+    for i in (0..kfs.len() - 1).rev() {
+        let t0 = kfs[i].time / 1000.0;
+        let t1 = kfs[i + 1].time / 1000.0;
+        let v0 = value_of(&kfs[i]);
+        let v1 = value_of(&kfs[i + 1]);
+        let span = (t1 - t0).max(1.0 / fps as f64); // avoid div-by-zero on duplicate timestamps
+        expr = format!(
+            "if(lte(on/{fps},{t1:.5}),({v0:.5})+(({v1:.5})-({v0:.5}))*max(0,min(1,(on/{fps}-{t0:.5})/{span:.5})),{expr})",
+            fps = fps, t1 = t1, v0 = v0, v1 = v1, t0 = t0, span = span, expr = expr
+        );
+    }
+    expr
+}
+
+/// Build a zoompan FFmpeg filter expression from keyframes. Follows every
+/// keyframe's real scale and pan target (x, y as fractions of the frame),
+/// linearly interpolated across the full timeline — not just a jump
+/// between two points with a hardcoded center pan.
 fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) -> String {
     if keyframes.is_empty() {
-        return format!("zoompan=z=1:x=0:y=0:d=1:s={}x{}", w, h);
+        return format!("zoompan=z=1:x=0:y=0:d=1:s={}x{}:fps={}", w, h, fps);
     }
 
     // Sort keyframes by time
     let mut kfs = keyframes.to_vec();
     kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
 
-    // Build piecewise zoom expression
-    // For simplicity, use a single zoompan with the last keyframe's settings
-    // A proper implementation would use keyframed zoompan, but FFmpeg's zoompan
-    // is complex. This version applies the largest zoom for the whole video
-    // as a proof of concept.
+    let z_expr = build_piecewise(&kfs, fps, |k| k.scale.max(1.0));
+    let x_frac_expr = build_piecewise(&kfs, fps, |k| k.x);
+    let y_frac_expr = build_piecewise(&kfs, fps, |k| k.y);
 
-    let max_scale = kfs.iter().map(|k| k.scale).fold(1.0f64, f64::max);
-    let last_kf = &kfs[kfs.len() - 1];
-    let mid_kf = &kfs[kfs.len() / 2];
+    // x/y are the top-left corner of the crop window in *input* pixels.
+    // `zoom` in these expressions refers to this frame's already-resolved
+    // z value. Clamp so the crop window never leaves the source frame.
+    let x_expr = format!("max(0,min(iw-iw/zoom,({x_frac_expr})*iw-(iw/zoom)/2))");
+    let y_expr = format!("max(0,min(ih-ih/zoom,({y_frac_expr})*ih-(ih/zoom)/2))");
 
     format!(
-        "zoompan=z='if(gte(in,{}),{:.3},if(gte(in,{}),{:.3},1))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={}x{},fps={}",
-        (mid_kf.time / 1000.0 * fps as f64) as u32,
-        max_scale,
-        (last_kf.time / 1000.0 * fps as f64) as u32,
-        max_scale,
-        w, h, fps
+        "zoompan=z='{z}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={fps}",
+        z = z_expr, x = x_expr, y = y_expr, w = w, h = h, fps = fps
     )
 }
