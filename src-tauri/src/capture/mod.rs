@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use windows::core::*;
 use windows::Graphics::Capture::*;
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
@@ -38,6 +38,17 @@ pub struct TargetBounds {
     pub w: i32,
     pub h: i32,
 }
+
+#[derive(Clone, Copy, Deserialize)]
+pub struct CaptureRegion {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+#[derive(Clone, Copy)]
+struct CropRect { x: u32, y: u32, w: u32, h: u32 }
 
 /// Physical-pixel bounds of a monitor or window target. The editor uses these to
 /// map input-hook screen coordinates onto the recorded video frame.
@@ -189,7 +200,7 @@ fn enumerate_windows(targets: &mut Vec<DisplayTarget>) {
 
     let mut ctx = Ctx { targets };
     unsafe {
-        let _ = EnumWindows(Some(callback), LPARAM(&raw mut ctx as *mut Ctx as isize));
+        let _ = EnumWindows(Some(callback), LPARAM((&raw mut ctx) as isize));
     }
 }
 
@@ -199,7 +210,13 @@ fn enumerate_windows(targets: &mut Vec<DisplayTarget>) {
 pub async fn start_recording(
     target_id: String,
     output_path: String,
+    region: Option<CaptureRegion>,
 ) -> std::result::Result<(), String> {
+    if let Some(selected) = region {
+        if selected.w < 256 || selected.h < 144 {
+            return Err("Recording region must be at least 256x144 pixels".to_string());
+        }
+    }
     let mut guard = STATE.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Err("Recording already in progress".to_string());
@@ -208,15 +225,37 @@ pub async fn start_recording(
     let is_recording = Arc::new(AtomicBool::new(true));
     let is_paused = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let is_rec_clone = is_recording.clone();
     let is_paused_clone = is_paused.clone();
+    let target_bounds = get_target_bounds(target_id.clone()).ok();
+    let crop = region.and_then(|selected| target_bounds.map(|bounds| {
+        let left = (selected.x - bounds.x).clamp(0, bounds.w.saturating_sub(2));
+        let top = (selected.y - bounds.y).clamp(0, bounds.h.saturating_sub(2));
+        let max_w = bounds.w - left;
+        let max_h = bounds.h - top;
+        let mut w = selected.w.clamp(2, max_w) as u32;
+        let mut h = selected.h.clamp(2, max_h) as u32;
+        w -= w % 2; h -= h % 2;
+        CropRect { x: left as u32, y: top as u32, w: w.max(2), h: h.max(2) }
+    }));
 
     // Use std::thread::spawn instead of tokio::task::spawn_blocking to guarantee
     // a fresh thread with no prior COM initialization (avoids RPC_E_CHANGED_MODE).
     thread::spawn(move || {
-        let result = run_capture_thread(&target_id, &output_path, is_rec_clone, is_paused_clone);
+        let result = run_capture_thread(&target_id, &output_path, crop, is_rec_clone, is_paused_clone, startup_tx.clone());
+        if let Err(error) = &result { let _ = startup_tx.send(Err(error.clone())); }
         let _ = done_tx.send(result);
     });
+
+    match startup_rx.recv_timeout(Duration::from_secs(6)) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => return Err(error),
+        Err(_) => {
+            is_recording.store(false, Ordering::SeqCst);
+            return Err("Recorder failed to initialize within 6 seconds".to_string());
+        }
+    }
 
     *guard = Some(CaptureHandle {
         is_recording,
@@ -264,8 +303,10 @@ pub async fn stop_recording() -> std::result::Result<(), String> {
 fn run_capture_thread(
     target_id: &str,
     output_path: &str,
+    crop: Option<CropRect>,
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
+    startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
 ) -> std::result::Result<(), String> {
     // Resolve the absolute output path now, before we hand it to FFmpeg
     let abs_path = match std::path::absolute(output_path) {
@@ -308,19 +349,21 @@ fn run_capture_thread(
         let size = item.Size()?;
         let width = size.Width as u32;
         let height = size.Height as u32;
+        let active_crop = crop.map(|c| CropRect {
+            x: c.x.min(width.saturating_sub(2)),
+            y: c.y.min(height.saturating_sub(2)),
+            w: c.w.min(width.saturating_sub(c.x)).max(2) & !1,
+            h: c.h.min(height.saturating_sub(c.y)).max(2) & !1,
+        });
+        let encode_w = active_crop.map(|c| c.w).unwrap_or(width);
+        let encode_h = active_crop.map(|c| c.h).unwrap_or(height);
         eprintln!("[Snap] Step 3/7: Capture item created OK ({width}x{height})");
 
         // ── Step 4: FFmpeg subprocess ──
         let abs_path_str = abs_path.to_string_lossy().to_string();
-        let (mut ffmpeg_child, ffmpeg_stdin, used_nvenc) =
-            spawn_ffmpeg(&abs_path_str, width, height)?;
-        if used_nvenc {
-            eprintln!("[Snap] Step 4/7: FFmpeg spawned OK (NVENC hardware encoder)");
-        } else {
-            eprintln!(
-                "[Snap] Step 4/7: FFmpeg spawned OK (WARNING: libx264 software fallback)"
-            );
-        }
+        let (mut ffmpeg_child, ffmpeg_stdin, hardware_encoder) =
+            spawn_ffmpeg(&abs_path_str, encode_w, encode_h)?;
+        eprintln!("[Snap] Step 4/7: FFmpeg spawned OK ({hardware_encoder} hardware encoder)");
 
         // ── Step 5: Frame pool + capture session ──
         eprintln!("[Snap] Step 5/7: Creating Direct3D11 frame pool...");
@@ -341,6 +384,7 @@ fn run_capture_thread(
         eprintln!("[Snap] Step 6/7: Starting capture session (polling mode)...");
         let stdin = Arc::new(Mutex::new(ffmpeg_stdin));
         session.StartCapture()?;
+        let _ = startup_tx.send(Ok(()));
         eprintln!("[Snap] Step 6/7: Capture session started OK");
 
         // ── Step 7: Poll for frames ──
@@ -393,6 +437,7 @@ fn run_capture_thread(
                             &context,
                             &stdin,
                             &mut staging_cache,
+                            active_crop,
                         ) {
                             eprintln!("[Snap] frame write error: {e}");
                         }
@@ -426,6 +471,7 @@ fn run_capture_thread(
         }
 
         eprintln!("[Snap] Polled {frame_count} frames, sent {frames_sent} to FFmpeg");
+        crate::input_hook::mark_capture_end(frames_sent);
         drop(stdin);
 
         // ── Cleanup ──
@@ -498,22 +544,8 @@ fn spawn_ffmpeg(
     output_path: &str,
     width: u32,
     height: u32,
-) -> Result<(Child, ChildStdin, bool)> {
+) -> Result<(Child, ChildStdin, String)> {
     let size = format!("{width}x{height}");
-
-    let nvenc_args = [
-        "-y", "-f", "rawvideo", "-pixel_format", "bgra",
-        "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
-        "-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M",
-        "-pix_fmt", "yuv420p", output_path,
-    ];
-
-    let x264_args = [
-        "-y", "-f", "rawvideo", "-pixel_format", "bgra",
-        "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-pix_fmt", "yuv420p", output_path,
-    ];
 
     fn try_ffmpeg(args: &[&str]) -> std::result::Result<Child, std::io::Error> {
         Command::new("ffmpeg")
@@ -524,37 +556,43 @@ fn spawn_ffmpeg(
             .spawn()
     }
 
-    // Try NVENC first. Spawn succeeded doesn't mean the encoder works —
-    // FFmpeg may exit immediately if h264_nvenc isn't available. Wait briefly
-    // and check whether the process is still alive before committing to it.
-    if let Ok(mut child) = try_ffmpeg(&nvenc_args) {
-        thread::sleep(Duration::from_millis(500));
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // FFmpeg exited within 500ms — NVENC likely unavailable
-                eprintln!(
-                    "[Snap] NVENC probe: FFmpeg exited immediately (status={status}), \
-                     falling back to libx264"
-                );
-            }
-            Ok(None) => {
-                // Still running — NVENC is working
-                let stdin = child.stdin.take().unwrap();
-                return Ok((child, stdin, true));
-            }
-            Err(e) => {
-                eprintln!("[Snap] NVENC probe: try_wait error ({e}), falling back to libx264");
-            }
+    let candidates: [(&str, Vec<&str>); 3] = [
+        ("NVENC", vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M"]),
+        ("AMD AMF", vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M"]),
+        ("Intel Quick Sync", vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M"]),
+    ];
+    for (name, codec_args) in candidates {
+        let test_src = format!("color=black:s={size}:r=1");
+        let mut probe_args = vec![
+            "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", &test_src,
+            "-frames:v", "1",
+        ];
+        probe_args.extend(codec_args.iter().copied());
+        probe_args.extend(["-f", "null", "-"]);
+        let probe_ok = Command::new("ffmpeg")
+            .args(&probe_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !probe_ok {
+            eprintln!("[Snap] {name} hardware probe failed; trying next GPU encoder");
+            continue;
+        }
+        let mut args = vec![
+            "-y", "-f", "rawvideo", "-pixel_format", "bgra",
+            "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
+        ];
+        args.extend(codec_args);
+        args.extend(["-pix_fmt", "yuv420p", output_path]);
+        if let Ok(mut child) = try_ffmpeg(&args) {
+            let stdin = child.stdin.take().ok_or_else(|| Error::new(E_FAIL, "FFmpeg stdin unavailable"))?;
+            return Ok((child, stdin, name.to_string()));
         }
     }
-
-    match try_ffmpeg(&x264_args) {
-        Ok(mut child) => {
-            let stdin = child.stdin.take().unwrap();
-            Ok((child, stdin, false))
-        }
-        Err(e) => Err(Error::new(E_FAIL, format!("FFmpeg failed to start: {e}"))),
-    }
+    Err(Error::new(E_FAIL, "No supported hardware H.264 encoder found. Install an FFmpeg build with NVENC, AMF, or Quick Sync support and update the GPU driver."))
 }
 
 // ── FFmpeg lifecycle ─────────────────────────────────────────────────────────
@@ -658,6 +696,7 @@ fn write_frame_to_ffmpeg(
     context: &ID3D11DeviceContext,
     stdin: &Arc<Mutex<ChildStdin>>,
     staging_cache: &mut Option<(ID3D11Texture2D, u32, u32)>,
+    crop: Option<CropRect>,
 ) -> Result<()> {
     let surface = frame.Surface()?;
 
@@ -692,14 +731,15 @@ fn write_frame_to_ffmpeg(
         context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
     }
 
-    let height = desc.Height as usize;
+    let crop = crop.unwrap_or(CropRect { x: 0, y: 0, w: desc.Width, h: desc.Height });
+    let height = crop.h as usize;
     let row_pitch = mapped.RowPitch as usize;
-    let packed_row = (desc.Width * 4) as usize;
+    let packed_row = (crop.w * 4) as usize;
 
     let mut buf = Vec::with_capacity(packed_row * height);
     unsafe {
         for row in 0..height {
-            let src = (mapped.pData as *const u8).add(row * row_pitch);
+            let src = (mapped.pData as *const u8).add((row + crop.y as usize) * row_pitch + crop.x as usize * 4);
             let slice = std::slice::from_raw_parts(src, packed_row);
             buf.extend_from_slice(slice);
         }

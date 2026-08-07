@@ -15,10 +15,12 @@
         "label": "main",
         "title": "Snap",
         "width": 1180,
-        "height": 320,
+        "height": 440,
+        "minWidth": 960,
+        "minHeight": 400,
         "decorations": false,
-        "maximizable": false,
-        "resizable": false
+        "maximizable": true,
+        "resizable": true
       },
       {
         "label": "dock",
@@ -66,6 +68,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -73,5 +76,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaW5pIHB1YmxpYyBrZXk6IDMxNjQ0Nzc3MTc3NDIxOEQKUldTTklYUVhkMGRrTVNVTVNFSFlpbm5XVDVJNzVBNTlielJDK1RnbnVuYzFmTndPVzFCOXFTKy8K",
+      "endpoints": [
+        "https://github.com/YumiNoona/Snap/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

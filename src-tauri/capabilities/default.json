@@ -2,10 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main, editor and recording dock windows",
-  "windows": ["main", "editor", "dock", "recorder-overlay", "teleprompter"],
+  "windows": ["main", "editor", "dock", "recorder-overlay", "teleprompter", "settings"],
   "permissions": [
     "core:default",
     "opener:default",
+    "process:allow-restart",
+    "updater:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",

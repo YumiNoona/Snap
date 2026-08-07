@@ -48,8 +48,10 @@ export async function runCanvasExport(
 
   const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.webm";
 
+  let sinkOpen = false;
   try {
     await invoke("open_export_sink", { path: tempWebmPath });
+    sinkOpen = true;
 
     const stream = compositor.canvas.captureStream(exportSettings.fps);
     const recorder = new MediaRecorder(stream, {
@@ -127,6 +129,7 @@ export async function runCanvasExport(
     if (writeError) throw new Error(`Export write failed: ${writeError}`);
 
     await invoke("close_export_sink");
+    sinkOpen = false;
 
     onProgress({ phase: "finalizing", progress: 0.98, message: "Muxing audio & encoding final video…" });
 
@@ -135,12 +138,19 @@ export async function runCanvasExport(
         tempWebmPath,
         inputVideo: videoPath,
         exportSettings,
+        clickTimesMs: config.cursorStyle.clickSound
+          ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => time - trimStart * 1000)
+          : [],
+        audioMix: config.audio,
+        trimStartSeconds: trimStart,
+        exportDurationSeconds: Math.max(0.01, trimEnd - trimStart),
       },
     });
 
     onProgress({ phase: "done", progress: 1, message: result });
     return result;
   } finally {
+    if (sinkOpen) await invoke("close_export_sink").catch(() => {});
     compositor.destroy();
   }
 }

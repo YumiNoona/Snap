@@ -1,10 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, Clock, ChevronDown, Upload, Minus, Square, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Download } from "lucide-react";
+import { MorphIcon } from "morphicons/react";
+import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
+import { ChevronLeft, Clock, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
+import ExportModal from "./ExportModal";
 import type { EditorConfig, Keyframe, ExportSettings, Layer } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
@@ -16,7 +19,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "audio" | "export";
+export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 
@@ -41,8 +44,63 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [zoomTargetMode, setZoomTargetMode] = useState(false);
+  const [autoZoomRevision, setAutoZoomRevision] = useState(0);
+  const [showExport, setShowExport] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [, setHistoryVersion] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const appWindow = getCurrentWindow();
+  const historyRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
+  const futureRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
+  const lastSnapshotRef = useRef({ config, keyframes });
+  const applyingHistoryRef = useRef(false);
+
+  useEffect(() => {
+    const current = { config, keyframes };
+    if (applyingHistoryRef.current) {
+      applyingHistoryRef.current = false;
+      lastSnapshotRef.current = current;
+      setHistoryVersion((value) => value + 1);
+      return;
+    }
+    const previous = lastSnapshotRef.current;
+    if (previous.config === config && previous.keyframes === keyframes) return;
+    historyRef.current.push(previous);
+    if (historyRef.current.length > 80) historyRef.current.shift();
+    futureRef.current = [];
+    lastSnapshotRef.current = current;
+    setHistoryVersion((value) => value + 1);
+  }, [config, keyframes]);
+
+  const undo = useCallback(() => {
+    const snapshot = historyRef.current.pop();
+    if (!snapshot) return;
+    futureRef.current.push({ config, keyframes });
+    applyingHistoryRef.current = true;
+    setConfig(snapshot.config);
+    setKeyframes(snapshot.keyframes);
+  }, [config, keyframes]);
+
+  const redo = useCallback(() => {
+    const snapshot = futureRef.current.pop();
+    if (!snapshot) return;
+    historyRef.current.push({ config, keyframes });
+    applyingHistoryRef.current = true;
+    setConfig(snapshot.config);
+    setKeyframes(snapshot.keyframes);
+  }, [config, keyframes]);
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      event.preventDefault();
+      if (event.shiftKey) redo(); else undo();
+    };
+    window.addEventListener("keydown", handleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleHistoryShortcut);
+  }, [undo, redo]);
 
   // Persist per-pack cursor hotspot nudges across sessions
   useEffect(() => {
@@ -148,6 +206,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
 
   const handleExport = async (settings: ExportSettings) => {
     setExportStatus("Exporting...");
+    setExportProgress(0);
     try {
       const result = await runCanvasExport(
         videoPath,
@@ -160,31 +219,66 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         (p) => {
           if (p.phase === "recording") {
             setExportStatus(`Exporting... ${Math.round(p.progress * 100)}%`);
+            setExportProgress(p.progress);
           } else if (p.phase === "finalizing") {
             setExportStatus("Finalizing...");
+            setExportProgress(0.98);
           }
         }
       );
       setExportStatus(`Done: ${settings.outputPath}`);
+      setExportProgress(1);
       void result;
     } catch (e) {
       setExportStatus(`Export failed: ${e}`);
     }
   };
 
-  const handleAddManualZoom = () => {
-    const tMs = Math.round(currentTime * 1000);
-    const newKf: Keyframe = {
-      time: tMs,
-      duration: 400,
-      x: 0.5,
-      y: 0.5,
+  const addManualZoomAt = (point: { x: number; y: number }) => {
+    const videoEndMs = Math.max(0, Math.round((config.trimEnd || duration) * 1000));
+    const trimStartMs = Math.round(config.trimStart * 1000);
+    const latestStartMs = Math.max(trimStartMs, videoEndMs - 600);
+    const startMs = Math.min(latestStartMs, Math.max(trimStartMs, Math.round(currentTime * 1000)));
+    const endMs = Math.min(videoEndMs, startMs + 3000);
+    const available = Math.max(300, endMs - startMs);
+    const transitionMs = Math.min(450, Math.max(150, Math.round(available * 0.18)));
+    const zoomInMs = Math.min(endMs, startMs + transitionMs);
+    const holdUntilMs = Math.max(zoomInMs, endMs - transitionMs);
+    const zoomKf: Keyframe = {
+      time: zoomInMs,
+      duration: transitionMs,
+      x: point.x,
+      y: point.y,
       scale: config.zoomLevel || 2.0,
       easing: "ease-in-out",
     };
-    const updated = [...keyframes.filter((k) => Math.abs(k.time - tMs) > 100), newKf].sort((a, b) => a.time - b.time);
+    const holdKf: Keyframe = { ...zoomKf, time: holdUntilMs, duration: 0 };
+    const resetKf: Keyframe = {
+      time: endMs,
+      duration: transitionMs,
+      x: 0.5,
+      y: 0.5,
+      scale: 1,
+      easing: "ease-in-out",
+    };
+    const base = keyframes.length > 0
+      ? keyframes.filter((frame) => frame.time < startMs || frame.time > endMs)
+      : [{ time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1, easing: "ease" as const }];
+    const updated = [...base, zoomKf, holdKf, resetKf].sort((a, b) => a.time - b.time);
     setKeyframes(updated);
+    setZoomTargetMode(false);
   };
+
+  const handleAddManualZoom = () => setZoomTargetMode(true);
+
+  useEffect(() => {
+    if (!zoomTargetMode) return;
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setZoomTargetMode(false);
+    };
+    window.addEventListener("keydown", cancel);
+    return () => window.removeEventListener("keydown", cancel);
+  }, [zoomTargetMode]);
 
   return (
     <div className="screenstudio-editor-layout">
@@ -194,7 +288,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <div className="ss-topbar-left">
           {/* Back button */}
           <button className="ss-icon-btn back-btn" onClick={onClose} title="Close Editor">
-            <ChevronLeft size={16} />
+            <ChevronLeft size={20} />
           </button>
 
           <span className="ss-file-title">
@@ -205,9 +299,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <div className="ss-topbar-center">
           {/* Quick Presets / Undo */}
           <div className="ss-presets-pill">
-            <Clock size={13} />
+            <Clock size={16} />
             <span>Presets</span>
-            <ChevronDown size={12} />
+            <ChevronDown size={14} />
           </div>
         </div>
 
@@ -215,21 +309,24 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           {/* PROMINENT TOP-RIGHT EXPORT BUTTON */}
           <button
             className="ss-topbar-export-btn"
-            onClick={() => setActiveTool("export")}
+            onClick={() => setShowExport(true)}
           >
-            <Upload size={14} />
+            <Upload size={17} />
             Export
           </button>
 
           <div className="ss-window-controls">
             <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
-              <Minus size={12} />
+              <Minus size={15} />
             </button>
-            <button className="window-btn" title="Maximize" onClick={() => appWindow.toggleMaximize()}>
-              <Square size={10} />
+            <button className="window-btn" title={isMaximized ? "Restore" : "Maximize"} onClick={async () => {
+              await appWindow.toggleMaximize();
+              setIsMaximized(await appWindow.isMaximized());
+            }}>
+              <MorphIcon icon={isMaximized ? RestoreIcon : SquareIcon} spring="snappy" size={15} />
             </button>
             <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
-              <X size={12} />
+              <X size={15} />
             </button>
           </div>
         </div>
@@ -244,7 +341,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("canvas")}
             title="Canvas & Background"
           >
-            <LayoutTemplate size={18} />
+            <LayoutTemplate size={21} />
           </button>
 
           <button
@@ -252,7 +349,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("cursor")}
             title="Cursor & Pointer Styling"
           >
-            <MousePointer2 size={18} />
+            <MousePointer2 size={21} />
           </button>
 
           <button
@@ -260,7 +357,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("annotations")}
             title="Annotations & Layers"
           >
-            <Type size={18} />
+            <Type size={21} />
           </button>
 
           <button
@@ -268,7 +365,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("motion")}
             title="Motion & Blur"
           >
-            <Sparkles size={18} />
+            <Sparkles size={21} />
           </button>
 
           <button
@@ -276,16 +373,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onClick={() => setActiveTool("audio")}
             title="Audio"
           >
-            <AudioWaveform size={18} />
+            <AudioWaveform size={21} />
           </button>
 
-          <button
-            className={`ss-tool-icon-btn ${activeTool === "export" ? "active" : ""}`}
-            onClick={() => setActiveTool("export")}
-            title="Render & Export Settings"
-          >
-            <Download size={18} />
-          </button>
         </aside>
 
         {/* Center Preview Workspace */}
@@ -307,6 +397,13 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             onCropApply={handleCropApply}
             onCropCancel={handleCropCancel}
             selectedLayerId={selectedLayerId}
+            onLayerChange={(updated) => setConfig((c) => ({
+              ...c,
+              layers: c.layers.map((layer) => layer.id === updated.id ? updated : layer),
+            }))}
+            zoomTargetMode={zoomTargetMode}
+            onZoomTargetPick={addManualZoomAt}
+            autoZoomRevision={autoZoomRevision}
           />
         </div>
 
@@ -314,7 +411,6 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <Panels
           config={config}
           onConfigChange={setConfig}
-          videoPath={videoPath}
           duration={duration}
           currentTime={currentTime}
           keyframesCount={keyframes.length}
@@ -322,10 +418,21 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           selectedLayerId={selectedLayerId}
           onAddLayer={(layer: Layer) => setConfig((c) => ({ ...c, layers: [...c.layers, layer] }))}
           onSelectLayer={setSelectedLayerId}
-          onExport={handleExport}
-          exportStatus={exportStatus}
           activeTab={activeTool}
           onAddManualZoom={handleAddManualZoom}
+          onRegenerateAutoZoom={() => {
+            setConfig((c) => ({ ...c, zoomMode: "auto" }));
+            setAutoZoomRevision((value) => value + 1);
+          }}
+          onZoomModeChange={(mode) => {
+            setConfig((c) => ({ ...c, zoomMode: mode }));
+            setZoomTargetMode(false);
+            if (mode === "auto") {
+              setAutoZoomRevision((value) => value + 1);
+            } else {
+              setKeyframes([{ time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1, easing: "ease" }]);
+            }
+          }}
         />
       </div>
 
@@ -347,7 +454,30 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
+        canUndo={historyRef.current.length > 0}
+        canRedo={futureRef.current.length > 0}
+        onUndo={undo}
+        onRedo={redo}
+        onKeyframesChange={setKeyframes}
+        onAudioMuteChange={(track, muted) => setConfig((current) => ({
+          ...current,
+          audio: {
+            ...current.audio,
+            ...(track === "system" ? { systemMuted: muted } : { micMuted: muted }),
+          },
+        }))}
       />
+      {showExport && (
+        <ExportModal
+          videoPath={videoPath}
+          duration={duration}
+          config={config}
+          status={exportStatus}
+          progress={exportProgress}
+          onClose={() => setShowExport(false)}
+          onExport={handleExport}
+        />
+      )}
     </div>
   );
 }

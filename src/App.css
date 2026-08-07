@@ -78,6 +78,29 @@
   --dur-slow: 260ms;
 }
 
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
 *,
 *::before,
 *::after {
@@ -102,6 +125,7 @@ body,
 body.window-main,
 body.window-editor,
 body.window-teleprompter,
+body.window-settings,
 body:not([class*="window-"]) {
   background: #0b0d12;
   background: var(--bg-app, #0b0d12);
@@ -110,6 +134,7 @@ body:not([class*="window-"]) {
 body.window-main #root,
 body.window-editor #root,
 body.window-teleprompter #root,
+body.window-settings #root,
 body:not([class*="window-"]) #root {
   background: #0b0d12;
   background: var(--bg-app, #0b0d12);
@@ -225,6 +250,14 @@ button:active:not(:disabled) {
   animation: pop-in var(--dur-base) var(--ease-out-back);
 }
 
+/* Large workspace transitions: calm, directional, and short enough that the
+   interface still feels immediate. Individual controls keep their faster
+   micro-interactions. */
+.ss-preview-center-area { animation: workspace-in 420ms var(--ease-standard) both; }
+.ss-panels-drawer { animation: drawer-in 380ms var(--ease-standard) both; }
+.ss-drawer-content { animation: panel-content-in 240ms var(--ease-standard) both; }
+.ss-timeline-container { animation: timeline-in 420ms var(--ease-standard) both; }
+
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -234,6 +267,11 @@ button:active:not(:disabled) {
   from { opacity: 0; transform: translateY(6px) scale(0.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+
+@keyframes workspace-in { from { opacity: 0; transform: scale(.992); } to { opacity: 1; transform: scale(1); } }
+@keyframes drawer-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes panel-content-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes timeline-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Floating dock entrance — slides up from below with a soft settle */
 @keyframes dock-rise {

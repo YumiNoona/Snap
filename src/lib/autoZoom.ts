@@ -14,7 +14,7 @@ const MIN_TYPING_BURST = 5;           // Require 5+ keydowns for typing burst
 const LEAD_IN_MS = 300;               // Lead-in time before cluster start
 const LEAD_OUT_MS = 600;              // Hold time after cluster activity ends
 const MIN_KEYFRAME_GAP_MS = 1200;     // Cooldown between consecutive camera moves
-const UNZOOM_GAP_THRESHOLD_MS = 3500; // Only return to 1.0x center if gap >= 3.5s
+const UNZOOM_GAP_THRESHOLD_MS = 2300; // Reset during ordinary pauses instead of staying zoomed
 const MIN_SCALE = 1.15;               // Gentle minimum zoom scale
 const MAX_SCALE = 1.75;               // Cap max automatic scale to 1.75x
 const ZOOM_PADDING = 200;             // Padding around focus bounding box
@@ -114,6 +114,16 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function transitionForDistance(
+  baseMs: number,
+  from: { x: number; y: number; scale: number },
+  to: { x: number; y: number; scale: number }
+): number {
+  const travel = Math.hypot(to.x - from.x, to.y - from.y);
+  const scaleTravel = Math.abs(to.scale - from.scale);
+  return Math.round(clamp(baseMs * (0.72 + travel * 1.35 + scaleTravel * 0.42), 350, 1100));
+}
+
 /**
  * Compute the focal center and scale for a cluster.
  * Positions come ONLY from mouse clicks (keydowns have no coordinates and
@@ -207,9 +217,10 @@ export function generateKeyframes(
     const gapFromPrev = zoomInTime - prevEndTime;
     if (gapFromPrev >= UNZOOM_GAP_THRESHOLD_MS && prevKf.scale > 1.0) {
       const unzoomTime = prevEndTime + 800;
+      const resetTarget = { x: 0.5, y: 0.5, scale: 1.0 };
       keyframes.push({
         time: unzoomTime,
-        duration: transitionDurationMs,
+        duration: transitionForDistance(transitionDurationMs, prevKf, resetTarget),
         x: 0.5,
         y: 0.5,
         scale: 1.0,
@@ -219,9 +230,11 @@ export function generateKeyframes(
     }
 
     // Zoom or Direct Pan to current cluster focus
+    const target = { x: cx, y: cy, scale };
+    const moveDuration = transitionForDistance(transitionDurationMs, keyframes[keyframes.length - 1], target);
     keyframes.push({
       time: zoomInTime,
-      duration: transitionDurationMs,
+      duration: moveDuration,
       x: cx,
       y: cy,
       scale,
@@ -231,7 +244,7 @@ export function generateKeyframes(
     // Hold focus through the end of cluster activity
     keyframes.push({
       time: holdEndTime,
-      duration: transitionDurationMs,
+      duration: 0,
       x: cx,
       y: cy,
       scale,
@@ -242,9 +255,10 @@ export function generateKeyframes(
   // After final cluster: unzoom to 1.0x center if time remains
   const lastKf = keyframes[keyframes.length - 1];
   if (lastKf.scale > 1.0 && lastKf.time + 1000 < videoDurationMs) {
+    const resetTarget = { x: 0.5, y: 0.5, scale: 1.0 };
     keyframes.push({
       time: lastKf.time + 800,
-      duration: transitionDurationMs,
+      duration: transitionForDistance(transitionDurationMs, lastKf, resetTarget),
       x: 0.5,
       y: 0.5,
       scale: 1.0,

@@ -1,13 +1,35 @@
 .ss-timeline-container {
   display: flex;
   flex-direction: column;
-  height: 160px;
+  height: 230px;
   background: var(--bg-app);
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
   user-select: none;
   font-family: var(--font-family);
+  position: relative;
 }
+
+.timeline-resize-edge {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  height: 8px;
+  cursor: ns-resize;
+}
+.timeline-resize-edge::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.timeline-resize-edge:hover::after { background: var(--accent); }
 
 /* ── Timeline Toolbar (48px) ────────────────────────── */
 
@@ -15,7 +37,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 48px;
+  height: 52px;
   padding: 0 var(--space-4);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
@@ -36,7 +58,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 32px;
+  height: 36px;
   padding: 0 var(--space-3);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -129,8 +151,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   color: var(--text-secondary);
   background: none;
   border: none;
@@ -147,8 +169,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   color: var(--text-primary);
   background: var(--bg-surface-raised);
   border: 1px solid var(--border-subtle);
@@ -196,8 +218,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   color: var(--text-secondary);
   background: none;
   border: none;
@@ -250,14 +272,45 @@
   white-space: nowrap;
 }
 
-.ss-timeline-col {
+.track-label.audio-label {
+  flex-direction: row;
+  gap: 6px;
+}
+
+.track-mute-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.track-mute-btn:hover { color: var(--text-primary); border-color: var(--border-default); }
+.track-mute-btn.muted { color: #f87171; background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.32); }
+
+.ss-timeline-scroll {
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 3px;
+  scrollbar-width: none;
+}
+.ss-timeline-scroll::-webkit-scrollbar { display: none; }
+
+.ss-timeline-col {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   cursor: pointer;
+  min-width: 100%;
+  height: 100%;
 }
 
 /* Track rows — fixed heights */
@@ -268,13 +321,13 @@
 }
 
 .ss-track-row.video-track {
-  flex: 0 0 40px;
+  flex: 0 0 calc(40px * var(--track-scale, 1));
   background: rgba(245, 166, 35, 0.06);
   border: 1px solid rgba(245, 166, 35, 0.12);
 }
 
 .ss-track-row.audio-track {
-  flex: 0 0 32px;
+  flex: 0 0 calc(32px * var(--track-scale, 1));
   background: rgba(59, 130, 246, 0.05);
   border: 1px solid rgba(59, 130, 246, 0.08);
 }
@@ -283,11 +336,57 @@
   background: rgba(34, 197, 94, 0.05);
   border-color: rgba(34, 197, 94, 0.08);
 }
+.ss-track-row.audio-track.muted { opacity: .28; filter: saturate(.25); }
 
 .ss-track-row.zoom-track {
-  flex: 0 0 28px;
+  flex: 0 0 calc(30px * var(--track-scale, 1));
   background: transparent;
 }
+
+.audio-track.empty { display: flex; align-items: center; padding-left: 10px; border-style: dashed; opacity: .62; }
+.empty-track-label { color: var(--text-tertiary); font-size: 10px; }
+.zoom-segment-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  overflow: hidden;
+  padding: 0 10px;
+  color: #fff;
+  background: linear-gradient(100deg, #1677ff, #6d4aff 58%, #9d3cf2);
+  border: 1px solid rgba(191,219,254,.78);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px rgba(37,99,235,.26), inset 0 1px rgba(255,255,255,.15);
+  cursor: grab;
+  touch-action: none;
+  will-change: left, width;
+}
+.zoom-segment-bar:hover { border-color: #fff; box-shadow: 0 0 0 2px rgba(96,165,250,.2), 0 4px 14px rgba(37,99,235,.34); }
+.zoom-segment-bar:active { cursor: grabbing; }
+.zoom-segment-bar.editing { cursor: grabbing; border-color: #fff; box-shadow: 0 0 0 3px rgba(96,165,250,.22), 0 6px 18px rgba(37,99,235,.42); transition: none; }
+.zoom-segment-bar span { pointer-events: none; overflow: hidden; text-overflow: ellipsis; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.zoom-bar-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 9px;
+  padding: 0;
+  border: 0;
+  background: rgba(255,255,255,.08);
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard), background var(--dur-fast) var(--ease-standard);
+}
+.zoom-segment-bar:hover .zoom-bar-handle { opacity: 1; }
+.zoom-bar-handle:hover { background: rgba(255,255,255,.34); }
+.zoom-bar-handle.left { left: 0; border-radius: 5px 0 0 5px; }
+.zoom-bar-handle.right { right: 0; border-radius: 0 5px 5px 0; }
+.history-btn:disabled { opacity: .3; cursor: not-allowed; }
 
 .wave-canvas {
   position: absolute;
@@ -332,7 +431,7 @@
   margin-left: var(--space-1);
 }
 
-/* ── Zoom Track Markers ─────────────────────────────── */
+/* ── Zoom Track ─────────────────────────────────────── */
 
 .zoom-connecting-line {
   position: absolute;
@@ -342,30 +441,6 @@
   height: 1px;
   background: rgba(59, 130, 246, 0.35);
   transform: translateY(-50%);
-}
-
-.diamond-keyframe-marker {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  background: var(--accent);
-  border: 1.5px solid rgba(255, 255, 255, 0.9);
-  transform: translate(-50%, -50%) rotate(45deg);
-  cursor: grab;
-  z-index: 10;
-  transition: transform var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard);
-}
-
-.diamond-keyframe-marker:hover,
-.diamond-keyframe-marker.zoomed {
-  transform: translate(-50%, -50%) rotate(45deg) scale(1.2);
-  box-shadow: 0 0 10px var(--accent-glow);
-}
-
-.diamond-keyframe-marker:active {
-  cursor: grabbing;
-  box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* ── Cut Markers ────────────────────────────────────── */

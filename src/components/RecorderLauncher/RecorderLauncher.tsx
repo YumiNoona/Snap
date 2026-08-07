@@ -2,21 +2,32 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { MorphIcon } from "morphicons/react";
+import { ChevronDown as ChevronDownIcon, ChevronUp as ChevronUpIcon, Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
 import {
   Settings,
   Minus,
   X,
   Folder,
-  Video,
   Mic,
   Volume2,
   FileText,
-  MonitorCheck,
   AppWindow,
+  Search,
+  ChevronRight,
+  Download,
+  Video,
+  FileVideo2,
+  FolderOpen,
+  LogOut,
+  Smartphone,
 } from "lucide-react";
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
+import { type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
 import "./RecorderLauncher.css";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -33,47 +44,47 @@ interface AudioDevice {
   device_type: string;
 }
 
+interface CameraDevice {
+  id: string;
+  name: string;
+}
+
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
   onOpenTeleprompter: () => void;
+  onOpenSettings: () => void;
   editorError?: string | null;
 }
 
-type BorderStyle = "off" | "red" | "dashed";
-
-interface AppSettings {
-  borderStyle: BorderStyle;
-  countdown: boolean;
-}
-
-const SETTINGS_KEY = "snap.settings";
-const DEFAULT_SETTINGS: AppSettings = { borderStyle: "red", countdown: true };
+type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "installing" | "error";
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, editorError }: Props) {
+export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onOpenSettings }: Props) {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
   const [_selectedTarget, setSelectedTarget] = useState("");
-  const [selectedMic, setSelectedMic] = useState("default");
-  const [selectedSpeaker, setSelectedSpeaker] = useState("default");
-  const [selectedCamera, setSelectedCamera] = useState("OBS Virtual Cam");
+  const [selectedCamera, setSelectedCamera] = useState(() => localStorage.getItem("snap.selectedCamera") || "");
+  const [selectedMic, setSelectedMic] = useState(() => localStorage.getItem("snap.selectedMic") || "");
+  const [selectedSpeaker, setSelectedSpeaker] = useState(() => localStorage.getItem("snap.selectedSpeaker") || "");
 
   // Settings (persisted)
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
-    } catch {
-      return DEFAULT_SETTINGS;
-    }
-  });
-  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(readAppSettings);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>("idle");
+  const [updateVersion, setUpdateVersion] = useState("");
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
+  const pendingUpdateRef = useRef<Awaited<ReturnType<typeof check>>>(null);
+  const updateCheckRef = useRef(false);
 
   // Navigation / Views
   const [activeView, setActiveView] = useState<"launcher" | "device">("launcher");
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showWindowPicker, setShowWindowPicker] = useState(false);
+  const [windowSearch, setWindowSearch] = useState("");
   const [showRegionSelector, setShowRegionSelector] = useState(false);
+  const [regionScreen, setRegionScreen] = useState({ x: 0, y: 0, scale: 1 });
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [fileList, setFileList] = useState<{ name: string; path: string }[]>([]);
 
@@ -81,7 +92,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const [recording, setRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [micMuted, setMicMuted] = useState(false);
-  const [recordStatus, setRecordStatus] = useState("");
+  const [, setRecordStatus] = useState("");
   const [elapsed, setElapsed] = useState(0);
   
   const lastVideoRef = useRef(localStorage.getItem("snap.lastVideo") || "");
@@ -93,7 +104,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const pausedRef = useRef(false);
-  const appWindow = getCurrentWindow();
 
   // Keep the ref in sync so the elapsed interval can pause without re-creating.
   useEffect(() => {
@@ -103,17 +113,98 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   // Persist settings
   useEffect(() => {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      writeAppSettings(settings);
     } catch {
       // ignore storage errors
     }
   }, [settings]);
 
+  useEffect(() => {
+    const unlisten = listen<AppSettings>("settings-changed", (event) => setSettings(event.payload));
+    return () => { unlisten.then((stop) => stop()); };
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem("snap.selectedCamera", selectedCamera); } catch {}
+  }, [selectedCamera]);
+
+  useEffect(() => {
+    try { localStorage.setItem("snap.selectedMic", selectedMic); } catch {}
+  }, [selectedMic]);
+
+  useEffect(() => {
+    try { localStorage.setItem("snap.selectedSpeaker", selectedSpeaker); } catch {}
+  }, [selectedSpeaker]);
+
+  const checkForUpdates = async (manual = true) => {
+    if (updateCheckRef.current || updateState === "downloading" || updateState === "installing") return;
+    updateCheckRef.current = true;
+    setUpdateState("checking");
+    try {
+      const update = await check({ timeout: 20_000 });
+      pendingUpdateRef.current = update;
+      if (update) {
+        setUpdateVersion(update.version);
+        setUpdateState("available");
+        if (!manual) setShowUpdatePrompt(true);
+      } else {
+        setUpdateVersion("");
+        setUpdateState("current");
+      }
+    } catch (error) {
+      pendingUpdateRef.current = null;
+      if (manual) {
+        setUpdateState("error");
+      } else {
+        setUpdateState("idle");
+      }
+    } finally {
+      updateCheckRef.current = false;
+    }
+  };
+
+  const downloadAndInstallUpdate = async () => {
+    const update = pendingUpdateRef.current;
+    if (!update) {
+      await checkForUpdates(true);
+      return;
+    }
+
+    let downloaded = 0;
+    let total = 0;
+    setShowUpdatePrompt(false);
+    setUpdateState("downloading");
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength || 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          void total;
+          void downloaded;
+        } else if (event.event === "Finished") {
+          setUpdateState("installing");
+        }
+      });
+      await relaunch();
+    } catch (error) {
+      setUpdateState("error");
+    }
+  };
+
+  useEffect(() => {
+    if (!settings.autoCheckUpdates) return;
+    const timer = setTimeout(() => { void checkForUpdates(false); }, 2500);
+    return () => clearTimeout(timer);
+    // Run only when the persisted preference changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.autoCheckUpdates]);
+
   // Countdown-then-record: shows 3→2→1 then starts actual recording.
   // Respects the "countdown" setting — off starts immediately.
-  const startWithCountdown = (targetId: string) => {
+  const startWithCountdown = (targetId: string, captureRegion: { x: number; y: number; w: number; h: number } | null = null) => {
     if (!settings.countdown) {
-      startRecording(targetId);
+      startRecording(targetId, captureRegion);
       return;
     }
     invoke("set_countdown", { value: 3 }).catch(() => {});
@@ -125,7 +216,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
         countdownRef.current = setTimeout(tick, 1000);
       } else {
         invoke("set_countdown", { value: null }).catch(() => {});
-        startRecording(targetId);
+        startRecording(targetId, captureRegion);
       }
     };
     countdownRef.current = setTimeout(tick, 1000);
@@ -134,6 +225,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   // ── Load devices ───────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
+      try {
+        const cameras = await invoke<CameraDevice[]>("enumerate_video_devices");
+        setCameraDevices(cameras);
+        setSelectedCamera((current) => cameras.some((camera) => camera.id === current) ? current : cameras[0]?.id || "");
+      } catch (e) {
+        console.error("Failed to enumerate cameras:", e);
+      }
       try {
         const t = await invoke<DisplayTarget[]>("enumerate_targets");
         setTargets(t);
@@ -145,6 +243,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       try {
         const d = await invoke<AudioDevice[]>("enumerate_audio_devices");
         setAudioDevices(d);
+        const microphones = d.filter((device) => device.device_type === "microphone");
+        const speakers = d.filter((device) => device.device_type === "speaker");
+        setSelectedMic((current) => microphones.some((device) => device.id === current) ? current : microphones[0]?.id || "");
+        setSelectedSpeaker((current) => speakers.some((device) => device.id === current) ? current : speakers[0]?.id || "");
       } catch (e) {
         console.error("Failed to enumerate audio devices:", e);
       }
@@ -154,7 +256,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   const [shutterFlash, setShutterFlash] = useState(false);
 
   // ── Recording Actions ──────────────────────────────────────────────────
-  const startRecording = async (targetId: string) => {
+  const startRecording = async (targetId: string, captureRegion: { x: number; y: number; w: number; h: number } | null = null) => {
     try {
       const videosDir = await invoke<string>("get_videos_dir");
       const stamp = Date.now();
@@ -172,9 +274,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       } catch {}
 
       setRecordStatus("Starting...");
-      await invoke("start_recording", { targetId, outputPath: videoPath });
       let region: { x: number; y: number; w: number; h: number } | null = null;
-      try {
+      if (captureRegion) {
+        region = captureRegion;
+      } else try {
         region = await invoke<{ x: number; y: number; w: number; h: number }>("get_target_bounds", { targetId });
       } catch {
         // region unknown — editor falls back to full-desktop mapping
@@ -189,7 +292,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
         regionH: region?.h,
       });
       try {
-        await invoke("start_audio_capture", { micDeviceId: selectedMic, outputDir: audioDir });
+        await invoke("start_recording", { targetId, outputPath: videoPath, region: captureRegion });
+      } catch (error) {
+        await invoke("stop_input_logging").catch(() => {});
+        throw error;
+      }
+      try {
+        await invoke("start_audio_capture", { micDeviceId: selectedMic, speakerDeviceId: selectedSpeaker, outputDir: audioDir });
       } catch (e) {
         console.error("Audio capture failed:", e);
       }
@@ -208,8 +317,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       );
       setRecordStatus("Recording");
 
-      // Minimize launcher window out of the way while recording
-      appWindow.minimize().catch(() => {});
+      // Optionally move the launcher out of the way while recording.
+      if (settings.minimizeWhileRecording) getCurrentWindow().minimize().catch(() => {});
 
       // Show the floating dock on the desktop (its own small window).
       invoke("set_dock_visible", { visible: true }).catch(() => {});
@@ -254,7 +363,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     // Open the recording in its own editor window
     const targetVideo = lastVideoRef.current || lastVideo;
     const targetLog = lastLogRef.current || lastLog;
-    if (targetVideo && targetLog) {
+    if (settings.autoOpenEditor && targetVideo && targetLog) {
       onOpenEditor(targetVideo, targetLog);
     }
   };
@@ -267,6 +376,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   };
 
   const handleWindow = () => {
+    setWindowSearch("");
     setShowWindowPicker(true);
   };
 
@@ -276,17 +386,46 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
     startWithCountdown(id);
   };
 
-  const handleCustom = () => {
-    setShowRegionSelector(true);
+  const handleCustom = async () => {
+    try {
+      const bounds = await invoke<{ x: number; y: number; w: number; h: number }>("begin_region_selection");
+      setRegionScreen({ x: bounds.x, y: bounds.y, scale: window.devicePixelRatio || 1 });
+      setShowRegionSelector(true);
+    } catch (e) {
+      setRecordStatus(`Cannot open region selector: ${e}`);
+    }
   };
 
-  const handleRegionSelect = (region: { x: number; y: number; w: number; h: number }) => {
+  const handleRegionSelect = async (region: { x: number; y: number; w: number; h: number }) => {
     setShowRegionSelector(false);
-    const monitor = targets.find((t) => t.target_type === "monitor");
+    await invoke("end_region_selection").catch(() => {});
+    const selectedRegion = {
+      x: Math.round(regionScreen.x + region.x * regionScreen.scale),
+      y: Math.round(regionScreen.y + region.y * regionScreen.scale),
+      w: Math.max(2, Math.round(region.w * regionScreen.scale)),
+      h: Math.max(2, Math.round(region.h * regionScreen.scale)),
+    };
+    if (selectedRegion.w < 256 || selectedRegion.h < 144) {
+      setRecordStatus("Region must be at least 256 x 144 pixels");
+      return;
+    }
+    const monitors = targets.filter((t) => t.target_type === "monitor");
+    let monitor = monitors[0];
+    const cx = selectedRegion.x + selectedRegion.w / 2;
+    const cy = selectedRegion.y + selectedRegion.h / 2;
+    for (const candidate of monitors) {
+      try {
+        const bounds = await invoke<{ x: number; y: number; w: number; h: number }>("get_target_bounds", { targetId: candidate.id });
+        if (cx >= bounds.x && cx < bounds.x + bounds.w && cy >= bounds.y && cy < bounds.y + bounds.h) {
+          monitor = candidate;
+          break;
+        }
+      } catch {}
+    }
     if (!monitor) return;
     setSelectedTarget(monitor.id);
-    setRecordStatus(`Recording region ${region.w}x${region.h}`);
-    startWithCountdown(monitor.id);
+    setRecordStatus(`Recording region ${selectedRegion.w}x${selectedRegion.h}`);
+    startWithCountdown(monitor.id, selectedRegion);
   };
 
   const handleDevice = () => {
@@ -354,7 +493,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       } else if (e.payload === "pause") {
         actionHandlersRef.current.pause();
       } else if (e.payload === "mic") {
-        setMicMuted((m) => !m);
+        setMicMuted((m) => {
+          const next = !m;
+          invoke("set_microphone_muted", { muted: next }).catch(() => {});
+          return next;
+        });
       }
     });
     return () => {
@@ -377,38 +520,42 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
   }
 
   return (
-    <div className={`app-layout ${shutterFlash ? "shutter-flash-active" : ""}`}>
+    <div className={`app-layout ${shutterFlash ? "shutter-flash-active" : ""}`} onClick={() => { if (showFileMenu) setShowFileMenu(false); }}>
       {/* ── Topbar ────────────────────────── */}
       <header className="titlebar" data-tauri-drag-region>
         <div className="titlebar-drag-area" data-tauri-drag-region />
         <div className="titlebar-left">
           <div className="brand-logo-area">
-            <span className="brand-logo-text">S</span>
+            <span className="brand-logo-text" aria-hidden="true"><i /><i /><i /></span>
             <span className="app-name">Snap</span>
           </div>
 
           <div className="menu-wrap">
-            <span
-              className="menu-item"
+            <button
+              className={`menu-item ${showFileMenu ? "open" : ""}`}
               onClick={(e) => { e.stopPropagation(); setShowFileMenu(!showFileMenu); }}
+              aria-expanded={showFileMenu}
+              aria-haspopup="menu"
             >
-              <Folder size={14} />
+              <Folder size={17} />
               File
-            </span>
+              <MorphIcon icon={showFileMenu ? ChevronUpIcon : ChevronDownIcon} spring="snappy" size={14} />
+            </button>
             {showFileMenu && (
-              <div className="dropdown-menu" onClick={(e) => e.stopPropagation()}>
+              <div className="dropdown-menu" role="menu" onClick={(e) => e.stopPropagation()}>
                 <button className="dropdown-item" onClick={handleOpenRecording}>
-                  Open Recording...
+                  <FileVideo2 size={16} /><span>Open recording…</span>
                 </button>
                 <button className="dropdown-item" onClick={async () => {
+                  setShowFileMenu(false);
                   const dir = await invoke<string>("get_videos_dir");
                   await invoke("open_explorer", { path: dir });
                 }}>
-                  Output Folder
+                  <FolderOpen size={16} /><span>Output folder</span>
                 </button>
                 <div className="dropdown-divider" />
-                <button className="dropdown-item danger" onClick={() => appWindow.close()}>
-                  Exit
+                <button className="dropdown-item danger" onClick={() => getCurrentWindow().close()}>
+                  <LogOut size={16} /><span>Exit Snap</span>
                 </button>
               </div>
             )}
@@ -416,16 +563,22 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
         </div>
 
         <div className="titlebar-right">
-          <button className="titlebar-icon-btn" title="Settings" onClick={() => setShowSettings(true)}>
-            <Settings size={15} />
+          <button className="titlebar-icon-btn" title="Settings" onClick={onOpenSettings}>
+            <Settings size={18} />
           </button>
 
           <div className="window-controls">
-            <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
-              <Minus size={12} />
+            <button className="window-btn" title="Minimize" onClick={() => getCurrentWindow().minimize()}>
+              <Minus size={15} />
             </button>
-            <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
-              <X size={12} />
+            <button className="window-btn" title={isMaximized ? "Restore" : "Maximize"} onClick={async () => {
+              await getCurrentWindow().toggleMaximize();
+              setIsMaximized(await getCurrentWindow().isMaximized());
+            }}>
+              <MorphIcon icon={isMaximized ? RestoreIcon : SquareIcon} spring="snappy" size={15} />
+            </button>
+            <button className="window-btn close-btn" title="Close" onClick={() => getCurrentWindow().close()}>
+              <X size={15} />
             </button>
           </div>
         </div>
@@ -435,17 +588,19 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       <div className="main-content">
         {/* Left: Recording Modes Grid */}
         <div className="recording-modes-area">
-          <h2 className="section-heading">Pick a mode to start recording</h2>
+          <div className="recording-mode-stack">
+            <div className="recording-modes-heading">
+              <h2 className="section-heading">Select a recording mode</h2>
+              <p className="section-subheading">Choose the part of your screen you want to capture</p>
+            </div>
 
-          <div className="focusee-mode-cards-grid">
+            <div className="focusee-mode-cards-grid">
             {/* Card 1: Full Screen */}
             <div className="focusee-card" onClick={handleFullScreen} title="Record Full Screen">
               <div className="card-thumb-frame">
-                <div className="wallpaper-preview full-screen-preview">
-                  <MonitorCheck size={28} className="card-preview-icon" />
-                </div>
+                <div className="wallpaper-preview full-screen-preview" />
               </div>
-              <span className="card-title-text">Full Screen</span>
+              <span className="card-title-text"><strong>Full Screen</strong></span>
             </div>
 
             {/* Card 2: Custom Region */}
@@ -455,7 +610,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
                   <div className="cyan-crop-box" />
                 </div>
               </div>
-              <span className="card-title-text">Custom</span>
+              <span className="card-title-text"><strong>Custom</strong></span>
             </div>
 
             {/* Card 3: Window */}
@@ -469,84 +624,39 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
                   </div>
                 </div>
               </div>
-              <span className="card-title-text">Window</span>
+              <span className="card-title-text"><strong>Window</strong></span>
             </div>
 
             {/* Card 4: Device */}
             <div className="focusee-card" onClick={handleDevice} title="Record a Mobile Device">
               <div className="card-thumb-frame">
                 <div className="wallpaper-preview device-preview">
-                  <div className="phone-illustration-icon" />
+                  <Smartphone className="phone-illustration-icon" size={34} strokeWidth={1.8} />
                 </div>
               </div>
-              <span className="card-title-text">Device</span>
+              <span className="card-title-text"><strong>Device</strong></span>
+            </div>
             </div>
           </div>
-
-          {recordStatus && (
-            <p className="launcher-status-text">{recordStatus}</p>
-          )}
-
-          {editorError && (
-            <p className="launcher-status-text" style={{ color: "var(--danger)" }}>
-              Editor error: {editorError}
-            </p>
-          )}
-
-          {((lastVideo || lastVideoRef.current) && (lastLog || lastLogRef.current)) && !recording && (
-            <button
-              className="open-last-btn"
-              onClick={() => onOpenEditor(lastVideoRef.current || lastVideo, lastLogRef.current || lastLog)}
-            >
-              Open Last Recording
-            </button>
-          )}
         </div>
 
         {/* Right Sidebar: Device & Tool Panel */}
         <aside className="focusee-sidebar">
-          <h3 className="sidebar-heading">Device &amp; Tool</h3>
-
           {/* Camera Dropdown */}
-          <Dropdown
-            value={selectedCamera}
-            onChange={setSelectedCamera}
-            icon={<Video size={16} />}
-            options={[
-              { value: "OBS Virtual Cam", label: "OBS Virtual Cam..." },
-              { value: "Integrated Webcam", label: "Integrated Webcam" },
-              { value: "Disabled", label: "No Camera" },
-            ]}
-          />
+          <div className="setup-field"><label>Camera</label>{cameraDevices.length > 0 ? <Dropdown value={selectedCamera} onChange={setSelectedCamera} icon={<Video size={18} />} options={cameraDevices.map((camera) => ({ value: camera.id, label: camera.name }))} /> : <div className="device-unavailable-row"><Video size={18} /><span>Connect a camera</span></div>}</div>
 
           {/* Microphone Dropdown */}
-          <Dropdown
-            value={selectedMic}
-            onChange={setSelectedMic}
-            icon={<Mic size={16} />}
-            options={[
-              { value: "default", label: "Microphone (Default)" },
-              ...microphones.map((m) => ({ value: m.id, label: m.name })),
-            ]}
-          />
+          <div className="setup-field"><label>Microphone</label>{microphones.length > 0 ? <Dropdown value={selectedMic} onChange={setSelectedMic} icon={<Mic size={18} />} options={microphones.map((microphone) => ({ value: microphone.id, label: microphone.name }))} /> : <div className="device-unavailable-row"><Mic size={18} /><span>Connect a microphone</span></div>}</div>
 
           {/* Speaker Dropdown */}
-          <Dropdown
-            value={selectedSpeaker}
-            onChange={setSelectedSpeaker}
-            icon={<Volume2 size={16} />}
-            options={[
-              { value: "default", label: "Headphones (System)" },
-              ...speakers.map((s) => ({ value: s.id, label: s.name })),
-            ]}
-          />
+          <div className="setup-field"><label>Desktop audio</label>{speakers.length > 0 ? <Dropdown value={selectedSpeaker} onChange={setSelectedSpeaker} icon={<Volume2 size={18} />} options={speakers.map((speaker) => ({ value: speaker.id, label: speaker.name }))} /> : <div className="device-unavailable-row"><Volume2 size={18} /><span>Connect an output</span></div>}</div>
 
           {/* Teleprompter Button */}
           <button
             className="teleprompter-sidebar-btn"
             onClick={() => onOpenTeleprompter()}
           >
-            <FileText size={15} />
+            <FileText size={18} />
             Teleprompter
           </button>
         </aside>
@@ -555,26 +665,38 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       {/* ── Window Picker Modal ────────────────────────────────────── */}
       {showWindowPicker && (
         <div className="modal-overlay" onClick={() => setShowWindowPicker(false)}>
-          <div className="focusee-modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3>Select Window to Record</h3>
-            <p className="modal-sub">Pick an open application, game, or browser window</p>
+          <div className="focusee-modal-card window-picker-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-heading-row">
+              <div className="modal-title-icon"><AppWindow size={18} /></div>
+              <div className="modal-title-copy">
+                <h3>Select a window</h3>
+                <p className="modal-sub">Choose an application to capture</p>
+              </div>
+              <button className="settings-close-btn" title="Close" onClick={() => setShowWindowPicker(false)}><X size={14} /></button>
+            </div>
+            <label className="window-search-field">
+              <Search size={15} />
+              <input value={windowSearch} onChange={(event) => setWindowSearch(event.target.value)} placeholder="Search open windows" autoFocus />
+            </label>
             <div className="modal-window-list">
               {targets
-                .filter((t) => t.target_type === "window")
+                .filter((t) => t.target_type === "window" && t.name.toLowerCase().includes(windowSearch.trim().toLowerCase()))
                 .map((t) => (
                   <button
                     key={t.id}
                     className="window-option-btn"
                     onClick={() => handlePickWindow(t.id)}
                   >
-                    <AppWindow size={16} />
-                    <span>{t.name}</span>
+                    <span className="window-option-icon"><AppWindow size={15} /></span>
+                    <span className="window-option-copy"><strong>{t.name}</strong><small>Application window</small></span>
+                    <ChevronRight size={15} className="window-option-arrow" />
                   </button>
                 ))}
+              {targets.filter((t) => t.target_type === "window" && t.name.toLowerCase().includes(windowSearch.trim().toLowerCase())).length === 0 && (
+                <div className="window-empty-state"><Search size={20} /><span>No matching windows</span></div>
+              )}
             </div>
-            <button className="modal-close-btn" onClick={() => setShowWindowPicker(false)}>
-              Cancel
-            </button>
+            <div className="modal-footer-row"><span>{targets.filter((t) => t.target_type === "window").length} windows available</span><button className="modal-close-btn" onClick={() => setShowWindowPicker(false)}>Cancel</button></div>
           </div>
         </div>
       )}
@@ -583,47 +705,19 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, edi
       {showRegionSelector && (
         <RegionSelector
           onSelect={handleRegionSelect}
-          onCancel={() => setShowRegionSelector(false)}
+          onCancel={() => {
+            setShowRegionSelector(false);
+            invoke("end_region_selection").catch(() => {});
+          }}
         />
       )}
 
-      {/* ── Settings Modal ──────────────────────────────────────── */}
-      {showSettings && (
-        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="focusee-modal-card settings-card" onClick={(e) => e.stopPropagation()}>
-            <div className="settings-modal-header">
-              <h3>Settings</h3>
-              <button className="settings-close-btn" title="Close" onClick={() => setShowSettings(false)}>
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="settings-section">
-              <span className="settings-label">Recording Border</span>
-              <div className="segmented-control">
-                {(["off", "red", "dashed"] as BorderStyle[]).map((s) => (
-                  <button
-                    key={s}
-                    className={`segment ${settings.borderStyle === s ? "active" : ""}`}
-                    onClick={() => setSettings({ ...settings, borderStyle: s })}
-                  >
-                    {s === "off" ? "Off" : s === "red" ? "Red" : "Dashed White"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="settings-section toggle-row">
-              <span className="settings-label">3-2-1 Countdown</span>
-              <div
-                className={`toggle-switch ${settings.countdown ? "on" : ""}`}
-                onClick={() => setSettings({ ...settings, countdown: !settings.countdown })}
-                title={settings.countdown ? "Countdown on — disable to start instantly" : "Countdown off — starts immediately"}
-              >
-                <div className="toggle-knob" />
-              </div>
-            </div>
-          </div>
+      {showUpdatePrompt && updateState === "available" && (
+        <div className="update-available-popup" role="dialog" aria-label="Snap update available">
+          <span className="update-popup-icon"><Download size={19} /></span>
+          <div className="update-popup-copy"><strong>Snap {updateVersion} is available</strong><small>Download and install it without leaving the app.</small></div>
+          <button className="update-popup-install" onClick={() => void downloadAndInstallUpdate()}>Update now</button>
+          <button className="update-popup-dismiss" title="Remind me later" onClick={() => setShowUpdatePrompt(false)}><X size={13} /></button>
         </div>
       )}
 

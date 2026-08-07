@@ -109,6 +109,13 @@ export interface MovementConfig {
   durationMs: number;
 }
 
+export interface AudioMixConfig {
+  systemVolume: number;
+  micVolume: number;
+  systemMuted: boolean;
+  micMuted: boolean;
+}
+
 export interface EditorConfig {
   backgroundColor: string;
   bgType: "wallpaper" | "gradient" | "color" | "image";
@@ -135,6 +142,7 @@ export interface EditorConfig {
   motionBlur: MotionBlurConfig;
   cursorMovement: MovementConfig;
   zoomMovement: MovementConfig;
+  audio: AudioMixConfig;
 }
 
 export interface ExportSettings {
@@ -200,6 +208,12 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     enabled: false,
     speed: "slow",
     durationMs: 800,
+  },
+  audio: {
+    systemVolume: 100,
+    micVolume: 100,
+    systemMuted: false,
+    micMuted: false,
   },
 };
 

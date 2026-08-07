@@ -310,6 +310,66 @@ pub struct CanvasExportRequest {
     pub input_video: String,
     #[serde(rename = "exportSettings")]
     pub export_settings: ExportSettings,
+    #[serde(rename = "clickTimesMs", default)]
+    pub click_times_ms: Vec<f64>,
+    #[serde(rename = "audioMix", default)]
+    pub audio_mix: CanvasAudioMix,
+    #[serde(rename = "trimStartSeconds", default)]
+    pub trim_start_seconds: f64,
+    #[serde(rename = "exportDurationSeconds", default)]
+    pub export_duration_seconds: f64,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CanvasAudioMix {
+    pub system_volume: f64,
+    pub mic_volume: f64,
+    pub system_muted: bool,
+    pub mic_muted: bool,
+}
+
+impl Default for CanvasAudioMix {
+    fn default() -> Self {
+        Self { system_volume: 100.0, mic_volume: 100.0, system_muted: false, mic_muted: false }
+    }
+}
+
+fn write_click_track(path: &std::path::Path, click_times_ms: &[f64], duration_seconds: f64) -> std::result::Result<(), String> {
+    const RATE: u32 = 44_100;
+    let end_ms = (duration_seconds * 1000.0).max(click_times_ms.iter().copied().fold(0.0_f64, f64::max) + 180.0);
+    let samples = ((end_ms / 1000.0) * RATE as f64).ceil() as usize;
+    let mut pcm = vec![0i16; samples.max(1)];
+    for (click_index, click_ms) in click_times_ms.iter().enumerate() {
+        let start = ((*click_ms / 1000.0) * RATE as f64).round() as usize;
+        let click_len = (RATE as f64 * 0.095) as usize;
+        for i in 0..click_len {
+            let dst = start + i;
+            if dst >= pcm.len() { break; }
+            let t = i as f64 / RATE as f64;
+            let envelope = (-48.0 * t).exp();
+            let tone = (std::f64::consts::TAU * (1050.0 - 4200.0 * t) * t).sin();
+            let noise_seed = ((i as u64 * 1_103_515_245 + click_index as u64 * 12_345) & 0xffff) as f64 / 32768.0 - 1.0;
+            let value = ((tone * 0.8 + noise_seed * 0.2) * envelope * 7000.0) as i32;
+            pcm[dst] = (pcm[dst] as i32 + value).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        }
+    }
+    let data_size = (pcm.len() * 2) as u32;
+    let mut out = BufWriter::new(File::create(path).map_err(|e| format!("Cannot create click track: {e}"))?);
+    out.write_all(b"RIFF").map_err(|e| e.to_string())?;
+    out.write_all(&(36 + data_size).to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(b"WAVEfmt ").map_err(|e| e.to_string())?;
+    out.write_all(&16u32.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&RATE.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&(RATE * 2).to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&2u16.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&16u16.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(b"data").map_err(|e| e.to_string())?;
+    out.write_all(&data_size.to_le_bytes()).map_err(|e| e.to_string())?;
+    for sample in pcm { out.write_all(&sample.to_le_bytes()).map_err(|e| e.to_string())?; }
+    out.flush().map_err(|e| e.to_string())
 }
 
 /// Mux the recorded-canvas WebM (already has every visual baked in —
@@ -329,6 +389,11 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
     let mic_wav = audio_dir.join("mic_audio.wav");
     let has_sys = sys_wav.exists() && std::fs::metadata(&sys_wav).map(|m| m.len() > 0).unwrap_or(false);
     let has_mic = mic_wav.exists() && std::fs::metadata(&mic_wav).map(|m| m.len() > 0).unwrap_or(false);
+    let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
+    let has_clicks = !request.click_times_ms.is_empty();
+    if has_clicks {
+        write_click_track(&click_wav, &request.click_times_ms, request.export_duration_seconds)?;
+    }
 
     let crf = match settings.quality.as_str() {
         "high" => "18",
@@ -345,21 +410,37 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
         args.push("-f".into());
         args.push("gif".into());
     } else {
-        let mut audio_inputs = 0;
-        if has_sys {
+        let mut audio_sources: Vec<(usize, f64)> = Vec::new();
+        let mut input_index = 1usize;
+        if has_sys && !request.audio_mix.system_muted {
+            if request.trim_start_seconds > 0.0 { args.push("-ss".into()); args.push(format!("{:.6}", request.trim_start_seconds)); }
             args.push("-i".into());
             args.push(sys_wav.to_string_lossy().to_string());
-            audio_inputs += 1;
+            audio_sources.push((input_index, request.audio_mix.system_volume / 100.0));
+            input_index += 1;
         }
-        if has_mic {
+        if has_mic && !request.audio_mix.mic_muted {
+            if request.trim_start_seconds > 0.0 { args.push("-ss".into()); args.push(format!("{:.6}", request.trim_start_seconds)); }
             args.push("-i".into());
             args.push(mic_wav.to_string_lossy().to_string());
-            audio_inputs += 1;
+            audio_sources.push((input_index, request.audio_mix.mic_volume / 100.0));
+            input_index += 1;
+        }
+        if has_clicks {
+            args.push("-i".into());
+            args.push(click_wav.to_string_lossy().to_string());
+            audio_sources.push((input_index, 1.0));
         }
 
-        if audio_inputs == 2 {
+        if audio_sources.len() > 1 {
+            let mut filter = String::new();
+            for (slot, (idx, volume)) in audio_sources.iter().enumerate() {
+                filter.push_str(&format!("[{idx}:a]volume={volume:.3}[a{slot}];"));
+            }
+            for slot in 0..audio_sources.len() { filter.push_str(&format!("[a{slot}]")); }
+            filter.push_str(&format!("amix=inputs={}:duration=longest,apad[a]", audio_sources.len()));
             args.push("-filter_complex".into());
-            args.push("[1:a][2:a]amix=inputs=2:duration=first[a]".into());
+            args.push(filter);
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-map".into());
@@ -368,11 +449,13 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
             args.push("aac".into());
             args.push("-b:a".into());
             args.push("192k".into());
-        } else if audio_inputs == 1 {
+        } else if let Some((idx, volume)) = audio_sources.first() {
+            args.push("-filter_complex".into());
+            args.push(format!("[{idx}:a]volume={volume:.3},apad[a]"));
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-map".into());
-            args.push("1:a".into());
+            args.push("[a]".into());
             args.push("-c:a".into());
             args.push("aac".into());
             args.push("-b:a".into());
@@ -388,6 +471,7 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
             "-preset".into(), "medium".into(),
             "-crf".into(), crf.into(),
             "-pix_fmt".into(), "yuv420p".into(),
+            "-shortest".into(),
         ]);
     }
 
@@ -417,6 +501,7 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
 
     // Clean up the intermediate WebM now that the final file is encoded.
     let _ = std::fs::remove_file(&request.temp_webm_path);
+    if has_clicks { let _ = std::fs::remove_file(&click_wav); }
 
     let output = request.export_settings.output_path.clone();
     let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
@@ -428,4 +513,33 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
     );
 
     Ok(format!("Exported: {} ({:.1} MB)", output, meta.len() as f64 / 1_048_576.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_track_is_valid_pcm_wav_with_requested_duration() {
+        let path = std::env::temp_dir().join(format!("snap_click_test_{}.wav", std::process::id()));
+        write_click_track(&path, &[100.0, 450.0], 1.0).expect("click track");
+        let bytes = std::fs::read(&path).expect("read wav");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert!(bytes.len() >= 44 + 44_100 * 2);
+        assert!(bytes[44..].iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn zoom_expression_contains_each_segment() {
+        let keyframes = vec![
+            ExportKeyframe { time: 0.0, x: 0.5, y: 0.5, scale: 1.0, duration: 0.0 },
+            ExportKeyframe { time: 1000.0, x: 0.25, y: 0.75, scale: 2.0, duration: 400.0 },
+        ];
+        let filter = build_zoompan_expr(&keyframes, 60, 1280, 720);
+        assert!(filter.contains("zoompan"));
+        assert!(filter.contains("2.00000"));
+        assert!(filter.contains("fps=60"));
+    }
 }

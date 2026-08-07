@@ -7,6 +7,7 @@ import RecordingDock from "./components/RecorderLauncher/RecordingDock";
 import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
 import Editor from "./components/Editor/Editor";
 import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
+import SettingsWindow from "./components/Settings/SettingsWindow";
 import "./App.css";
 
 interface ErrorBoundaryState {
@@ -75,6 +76,7 @@ function App() {
   const isDockWindow = windowLabel === "dock";
   const isOverlayWindow = windowLabel === "recorder-overlay";
   const isTeleprompterWindow = windowLabel === "teleprompter";
+  const isSettingsWindow = windowLabel === "settings";
 
   const [editorVideo, setEditorVideo] = useState("");
   const [editorLog, setEditorLog] = useState("");
@@ -134,6 +136,18 @@ function App() {
     getCurrentWindow().close();
   }, []);
 
+  const openSettingsWindow = useCallback(() => {
+    invoke("open_settings_window").catch((error) => {
+      console.error("open_settings_window failed:", error);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isEditorWindow || isTeleprompterWindow || isSettingsWindow) {
+      invoke("window_ready").catch(() => {});
+    }
+  }, [isEditorWindow, isTeleprompterWindow, isSettingsWindow]);
+
   if (isDockWindow) {
     return (
       <ErrorBoundary onReset={closeEditorWindow}>
@@ -158,11 +172,13 @@ function App() {
     );
   }
 
-  useEffect(() => {
-    if (isEditorWindow || isTeleprompterWindow) {
-      invoke("window_ready").catch(() => {});
-    }
-  }, [isEditorWindow, isTeleprompterWindow]);
+  if (isSettingsWindow) {
+    return (
+      <ErrorBoundary onReset={closeTeleprompterWindow}>
+        <SettingsWindow />
+      </ErrorBoundary>
+    );
+  }
 
   if (isEditorWindow) {
     if (editorVideo) {
@@ -210,7 +226,7 @@ function App() {
 
   return (
     <ErrorBoundary onReset={() => {}}>
-      <RecorderLauncher onOpenEditor={openInEditorWindow} onOpenTeleprompter={openTeleprompterWindow} editorError={editorError} />
+      <RecorderLauncher onOpenEditor={openInEditorWindow} onOpenTeleprompter={openTeleprompterWindow} onOpenSettings={openSettingsWindow} editorError={editorError} />
     </ErrorBoundary>
   );
 }

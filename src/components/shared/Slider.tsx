@@ -16,8 +16,11 @@ interface SliderProps {
 }
 
 export default function Slider({ label, value, min, max, step = 1, unit = "", onChange, onReset, defaultValue, disabled, compact }: SliderProps) {
-  const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const percent = max > min ? Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)) : 0;
   const isDifferent = defaultValue !== undefined && value !== defaultValue;
+  const decimals = step >= 1 ? 0 : Math.min(4, Math.max(0, (step.toString().split(".")[1] ?? "").length));
+  const snapped = step > 0 ? Math.round(value / step) * step : value;
+  const displayValue = snapped.toFixed(decimals).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
 
   return (
     <div className={`slider-row${compact ? " compact" : ""}${disabled ? " disabled" : ""}`}>
@@ -38,7 +41,7 @@ export default function Slider({ label, value, min, max, step = 1, unit = "", on
         <div className="slider-fill" style={{ width: `${percent}%`, opacity: disabled ? 0.3 : 1 }} />
         <div className="slider-thumb" style={{ left: `${percent}%` }} />
       </div>
-      <span className="slider-value">{value}{unit}</span>
+      <span className="slider-value" title={`${displayValue}${unit}`}>{displayValue}{unit}</span>
       {onReset && isDifferent && (
         <button className="slider-reset-btn" onClick={onReset} type="button">Reset</button>
       )}

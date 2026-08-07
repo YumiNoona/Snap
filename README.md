@@ -58,7 +58,7 @@ Two-part architecture: a **lightweight native recorder** running during capture,
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| Capture | `src-tauri/src/capture/` | `Windows.Graphics.Capture` via `windows-rs`, GPU hardware encoding (NVENC → libx264 fallback), 60 FPS |
+| Capture | `src-tauri/src/capture/` | `Windows.Graphics.Capture` via `windows-rs`, mandatory GPU H.264 encoding (NVENC / AMF / Quick Sync), 60 FPS |
 | Audio | `src-tauri/src/audio/` | WASAPI dual-track capture (system loopback + microphone), streaming WAV to disk |
 | Input Hook | `src-tauri/src/input_hook/` | Low-level Windows input hook via `rdev`, timestamped JSONL sidecar |
 | AutoZoom | `src/lib/autoZoom.ts` | Cluster detection & keyframe interpolation |

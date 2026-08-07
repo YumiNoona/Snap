@@ -17,6 +17,12 @@ export interface ColorPreset {
   color: string;
 }
 
+export interface WallpaperPreset {
+  id: string;
+  name: string;
+  url: string;
+}
+
 // ── 10 curated gradients (warm / cool / vivid) ────────────────────────────────
 
 export const GRADIENT_PRESETS: GradientPreset[] = [
@@ -56,6 +62,24 @@ export const COLOR_PRESETS: ColorPreset[] = [
   { id: "color-emerald", name: "Emerald", color: "#10b981" },
   { id: "color-forest", name: "Forest Green", color: "#14532d" },
 ];
+
+export const WALLPAPER_PRESETS: WallpaperPreset[] = [
+  { id: "wallpaper-abstract", name: "Abstract", url: "/Wallpapers/Abstract.jpg" },
+  { id: "wallpaper-blue-waves", name: "Blue Waves", url: "/Wallpapers/BlueWaves.jpg" },
+  { id: "wallpaper-candle", name: "Candle", url: "/Wallpapers/Candle.png" },
+  { id: "wallpaper-color-wave", name: "Color Wave", url: "/Wallpapers/ColorWave.jpg" },
+  { id: "wallpaper-graffiti-wave", name: "Graffiti Wave", url: "/Wallpapers/GrafitiWave.jpg" },
+  { id: "wallpaper-kawaii", name: "Kawaii", url: "/Wallpapers/Kawaii.jpg" },
+  { id: "wallpaper-kuromi", name: "Kuromi", url: "/Wallpapers/Kuromi.png" },
+  { id: "wallpaper-modern-blue", name: "Modern Blue", url: "/Wallpapers/ModernBlueWave.jpg" },
+  { id: "wallpaper-pink-wave", name: "Pink Wave", url: "/Wallpapers/PinkWave.png" },
+  { id: "wallpaper-somi", name: "Somi", url: "/Wallpapers/Somi.png" },
+  { id: "wallpaper-windows-11", name: "Windows 11", url: "/Wallpapers/Win11.jpg" },
+];
+
+export function getWallpaperPreset(idOrUrl: string): WallpaperPreset | undefined {
+  return WALLPAPER_PRESETS.find((p) => p.id === idOrUrl || p.url === idOrUrl);
+}
 
 export function getGradientPreset(id: string): GradientPreset | undefined {
   return GRADIENT_PRESETS.find((p) => p.id === id);

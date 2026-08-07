@@ -16,6 +16,9 @@ static IS_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Set to true while the recording is paused — events are dropped so the log
 /// timeline matches the video timeline (which omits the paused segment).
 static IS_PAUSED: AtomicBool = AtomicBool::new(false);
+static PAUSE_STARTED: Mutex<Option<Instant>> = Mutex::new(None);
+static PAUSED_ACCUM_MS: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_START_MS: AtomicU64 = AtomicU64::new(0);
 
 /// The single shared writer. None when not logging, Some when logging.
 static ACTIVE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
@@ -83,7 +86,8 @@ fn ensure_hook_started() {
                     Some(start) => start,
                     None => return,
                 };
-                let ts = session_start.elapsed().as_millis() as u64;
+                let ts = (session_start.elapsed().as_millis() as u64)
+                    .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed));
 
                 let log_event = match event.event_type {
                     EventType::MouseMove { x, y } => {
@@ -207,6 +211,10 @@ pub async fn start_input_logging(
 
     // Reset session start time so timestamps begin from 0 for this recording
     *SESSION_START.lock().map_err(|e| e.to_string())? = Some(Instant::now());
+    PAUSED_ACCUM_MS.store(0, Ordering::SeqCst);
+    CAPTURE_START_MS.store(0, Ordering::SeqCst);
+    *PAUSE_STARTED.lock().map_err(|e| e.to_string())? = None;
+    IS_PAUSED.store(false, Ordering::SeqCst);
 
     // Reset last mouse position
     *LAST_POSITION.lock().map_err(|e| e.to_string())? = (0.0, 0.0);
@@ -250,12 +258,35 @@ pub fn mark_capture_start() {
         return;
     }
     let ts = match *SESSION_START.lock().unwrap() {
-        Some(start) => start.elapsed().as_millis() as u64,
+        Some(start) => (start.elapsed().as_millis() as u64)
+            .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed)),
         None => return,
     };
+    CAPTURE_START_MS.store(ts, Ordering::SeqCst);
     if let Ok(mut guard) = ACTIVE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
             let _ = writeln!(w, "{{\"type\":\"meta\",\"captureStartMs\":{ts}}}");
+        }
+    }
+}
+
+/// Record the relationship between wall-clock capture time and the encoded
+/// video's frame clock. WGC occasionally delivers fewer than 60 frames/sec;
+/// FFmpeg still timestamps every submitted frame at 60 FPS, so without this
+/// correction input events gradually fall behind the actual video.
+pub fn mark_capture_end(frames_sent: u64) {
+    if !IS_ACTIVE.load(Ordering::Relaxed) { return; }
+    let now_ms = match *SESSION_START.lock().unwrap() {
+        Some(start) => (start.elapsed().as_millis() as u64)
+            .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed)),
+        None => return,
+    };
+    let start_ms = CAPTURE_START_MS.load(Ordering::Relaxed);
+    let capture_elapsed_ms = now_ms.saturating_sub(start_ms);
+    let video_duration_ms = frames_sent.saturating_mul(1000) / 60;
+    if let Ok(mut guard) = ACTIVE_WRITER.lock() {
+        if let Some(ref mut writer) = *guard {
+            let _ = writeln!(writer, "{{\"type\":\"meta\",\"captureElapsedMs\":{capture_elapsed_ms},\"videoDurationMs\":{video_duration_ms}}}");
         }
     }
 }
@@ -264,7 +295,16 @@ pub fn mark_capture_start() {
 /// so no events are written during the omitted segment.
 #[tauri::command]
 pub fn set_input_paused(paused: bool) -> std::result::Result<(), String> {
-    IS_PAUSED.store(paused, Ordering::SeqCst);
+    let was_paused = IS_PAUSED.load(Ordering::SeqCst);
+    if paused && !was_paused {
+        IS_PAUSED.store(true, Ordering::SeqCst);
+        *PAUSE_STARTED.lock().map_err(|e| e.to_string())? = Some(Instant::now());
+    } else if !paused && was_paused {
+        if let Some(start) = PAUSE_STARTED.lock().map_err(|e| e.to_string())?.take() {
+            PAUSED_ACCUM_MS.fetch_add(start.elapsed().as_millis() as u64, Ordering::SeqCst);
+        }
+        IS_PAUSED.store(false, Ordering::SeqCst);
+    }
     eprintln!("[Snap Input] Logging {}", if paused { "paused" } else { "resumed" });
     Ok(())
 }

@@ -9,6 +9,13 @@ use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::webview::Color;
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+
+fn exclude_from_capture(window: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe { let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE); }
+    }
+}
 
 /// Pending video/log paths handed to the dedicated editor window.
 struct EditorPaths(Mutex<Option<(String, String)>>);
@@ -16,7 +23,7 @@ struct EditorPaths(Mutex<Option<(String, String)>>);
 /// Live state mirrored to the floating recording dock window.
 struct DockState(Mutex<DockStateSnapshot>);
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct DockStateSnapshot {
     recording: bool,
     elapsed: u64,
@@ -24,15 +31,48 @@ struct DockStateSnapshot {
     mic_muted: bool,
 }
 
-impl Default for DockStateSnapshot {
-    fn default() -> Self {
-        Self {
-            recording: false,
-            elapsed: 0,
-            paused: false,
-            mic_muted: false,
+#[derive(Clone, Serialize)]
+struct VideoDevice {
+    id: String,
+    name: String,
+}
+
+/// Enumerate installed Windows camera devices natively. Browser media-device
+/// enumeration hides friendly names until camera permission is granted, which
+/// is why the launcher previously fell back to labels such as "Camera 1".
+#[tauri::command]
+async fn enumerate_video_devices() -> Result<Vec<VideoDevice>, String> {
+    use windows::Devices::Enumeration::{DeviceClass, DeviceInformation};
+
+    let operation = DeviceInformation::FindAllAsyncDeviceClass(DeviceClass::VideoCapture)
+        .map_err(|error| format!("Unable to start camera discovery: {error}"))?;
+    let collection = operation
+        .await
+        .map_err(|error| format!("Unable to discover cameras: {error}"))?;
+    let count = collection
+        .Size()
+        .map_err(|error| format!("Unable to read camera list: {error}"))?;
+    let mut devices = Vec::with_capacity(count as usize);
+
+    for index in 0..count {
+        let device = collection
+            .GetAt(index)
+            .map_err(|error| format!("Unable to read camera {index}: {error}"))?;
+        let id = device
+            .Id()
+            .map_err(|error| format!("Unable to read camera id: {error}"))?
+            .to_string_lossy();
+        let name = device
+            .Name()
+            .map_err(|error| format!("Unable to read camera name: {error}"))?
+            .to_string_lossy();
+        if !id.is_empty() && !name.is_empty() {
+            devices.push(VideoDevice { id, name });
         }
     }
+
+    devices.sort_by_key(|device| device.name.to_lowercase());
+    Ok(devices)
 }
 
 /// Open the editor window, hand it the recording, and focus it.
@@ -137,8 +177,8 @@ async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
             tauri::WebviewUrl::App("index.html?window=teleprompter".into()),
         )
         .title("Snap Teleprompter")
-        .inner_size(620.0, 480.0)
-        .min_inner_size(420.0, 320.0)
+        .inner_size(720.0, 520.0)
+        .min_inner_size(460.0, 360.0)
         .center()
         .decorations(false)
         .visible(false)
@@ -156,6 +196,42 @@ async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
     rx.recv().map_err(|e| format!("Teleprompter window creation thread died: {e}"))?
 }
 
+/// Open Settings as a dedicated OS-level module, matching the standalone
+/// Teleprompter behavior instead of covering the recorder with an overlay.
+#[tauri::command]
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_handle,
+            "settings",
+            tauri::WebviewUrl::App("index.html?window=settings".into()),
+        )
+        .title("Snap Settings")
+        .inner_size(540.0, 620.0)
+        .min_inner_size(480.0, 540.0)
+        .center()
+        .decorations(false)
+        .resizable(true)
+        .visible(false)
+        .background_color(Color(11, 13, 18, 255))
+        .devtools(true)
+        .build()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to create settings window: {error}"));
+        let _ = tx.send(result);
+    });
+
+    rx.recv().map_err(|error| format!("Settings window creation thread died: {error}"))?
+}
+
 #[tauri::command]
 fn get_pending_editor_paths(state: tauri::State<EditorPaths>) -> Result<(String, String), String> {
     state
@@ -164,6 +240,31 @@ fn get_pending_editor_paths(state: tauri::State<EditorPaths>) -> Result<(String,
         .map_err(|e| e.to_string())?
         .clone()
         .ok_or_else(|| "No editor paths pending".to_string())
+}
+
+#[tauri::command]
+fn begin_region_selection(app: tauri::AppHandle) -> Result<capture::TargetBounds, String> {
+    let window = app.get_webview_window("main").ok_or("Main window not found")?;
+    let monitor = window.current_monitor().map_err(|e| e.to_string())?
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or("No monitor available")?;
+    let position = *monitor.position();
+    let size = *monitor.size();
+    window.set_always_on_top(true).map_err(|e| e.to_string())?;
+    window.set_position(tauri::PhysicalPosition::new(position.x, position.y)).map_err(|e| e.to_string())?;
+    window.set_size(tauri::PhysicalSize::new(size.width, size.height)).map_err(|e| e.to_string())?;
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(capture::TargetBounds { x: position.x, y: position.y, w: size.width as i32, h: size.height as i32 })
+}
+
+#[tauri::command]
+fn end_region_selection(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("Main window not found")?;
+    window.set_always_on_top(false).map_err(|e| e.to_string())?;
+    window.set_size(tauri::LogicalSize::new(1180.0, 440.0)).map_err(|e| e.to_string())?;
+    window.center().map_err(|e| e.to_string())
 }
 
 /// Show/hide the floating dock window, centered near the bottom of the
@@ -176,6 +277,7 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
         .ok_or_else(|| "Dock window not found".to_string())?;
 
     if visible {
+        exclude_from_capture(&win);
         // Center above the bottom edge of the main window's monitor.
         if let Some(mon) = app
             .get_webview_window("main")
@@ -272,6 +374,7 @@ fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String
     let _ = win.emit("countdown-state", payload);
 
     if value.is_some() {
+        exclude_from_capture(&win);
         let _ = win.set_ignore_cursor_events(true);
         let _ = win.set_always_on_top(true);
         let _ = win.show();
@@ -313,6 +416,7 @@ fn set_recording_overlay(
         .and_then(|m| m.current_monitor().ok())
         .flatten()
         .ok_or_else(|| "No monitor available".to_string())?;
+    exclude_from_capture(&win);
 
     let scale = monitor.scale_factor();
     let logical_w = monitor.size().width as f64 / scale;
@@ -324,8 +428,8 @@ fn set_recording_overlay(
     let _ = win.set_position(tauri::LogicalPosition::new(logical_x, logical_y));
 
     let logical_region = region.map(|r| OverlayRegion {
-        x: (r.x as f64 / scale).round() as i32,
-        y: (r.y as f64 / scale).round() as i32,
+        x: ((r.x - monitor.position().x) as f64 / scale).round() as i32,
+        y: ((r.y - monitor.position().y) as f64 / scale).round() as i32,
         w: (r.w as f64 / scale).round() as i32,
         h: (r.h as f64 / scale).round() as i32,
     });
@@ -468,7 +572,7 @@ fn list_wallpaper_images() -> std::result::Result<Vec<WallpaperEntry>, String> {
         });
     }
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries.sort_by_key(|a| a.name.to_lowercase());
     Ok(entries)
 }
 
@@ -552,7 +656,7 @@ fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
         });
     }
 
-    packs.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+    packs.sort_by_key(|a| a.label.to_lowercase());
     Ok(packs)
 }
 
@@ -561,16 +665,14 @@ fn list_directory(path: String) -> std::result::Result<Vec<FileEntry>, String> {
     let mut entries = Vec::new();
     let dir = std::fs::read_dir(&path)
         .map_err(|e| format!("Cannot read directory {path}: {e}"))?;
-    for entry in dir {
-        if let Ok(entry) = entry {
-            let meta = entry.metadata().ok();
-            entries.push(FileEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
-                path: entry.path().to_string_lossy().to_string(),
-                is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
-                size: meta.map(|m| m.len()).unwrap_or(0),
-            });
-        }
+    for entry in dir.flatten() {
+        let meta = entry.metadata().ok();
+        entries.push(FileEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
+            size: meta.map(|m| m.len()).unwrap_or(0),
+        });
     }
     entries.sort_by(|a, b| {
         b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
@@ -582,6 +684,8 @@ fn list_directory(path: String) -> std::result::Result<Vec<FileEntry>, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
         .invoke_handler(tauri::generate_handler![
@@ -592,9 +696,11 @@ pub fn run() {
             capture::set_paused,
             capture::get_videos_dir,
             audio::enumerate_audio_devices,
+            enumerate_video_devices,
             audio::start_audio_capture,
             audio::stop_audio_capture,
             audio::set_audio_paused,
+            audio::set_microphone_muted,
             input_hook::start_input_logging,
             input_hook::stop_input_logging,
             input_hook::set_input_paused,
@@ -605,8 +711,11 @@ pub fn run() {
             export::finalize_canvas_export,
             open_editor_window,
             open_teleprompter_window,
+            open_settings_window,
             window_ready,
             get_pending_editor_paths,
+            begin_region_selection,
+            end_region_selection,
             set_dock_visible,
             update_dock_state,
             get_dock_state,

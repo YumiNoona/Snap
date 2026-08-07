@@ -24,12 +24,16 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
     .map((l) => JSON.parse(l));
 
   let captureStartMs = 0;
+  let captureElapsedMs = 0;
+  let videoDurationMs = 0;
   let region: { x: number; y: number; w: number; h: number } | null = null;
   for (const e of raw) {
     if (e.type === "meta") {
       if (typeof e.captureStartMs === "number" && e.captureStartMs > 0) {
         captureStartMs = e.captureStartMs;
       }
+      if (typeof e.captureElapsedMs === "number" && e.captureElapsedMs > 0) captureElapsedMs = e.captureElapsedMs;
+      if (typeof e.videoDurationMs === "number" && e.videoDurationMs > 0) videoDurationMs = e.videoDurationMs;
       if (typeof e.w === "number" && e.w > 0) {
         region = { x: e.x, y: e.y, w: e.w, h: e.h };
       }
@@ -38,10 +42,18 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
 
   const aligned: InputEvent[] = raw
     .filter((e) => e.type !== "meta")
-    .map((e) => ({ ...e, ts: Math.max(0, e.ts - captureStartMs) }));
+    .map((e) => {
+      const relativeTs = Math.max(0, e.ts - captureStartMs);
+      const clockScale = captureElapsedMs > 0 && videoDurationMs > 0
+        ? videoDurationMs / captureElapsedMs
+        : 1;
+      return { ...e, ts: relativeTs * clockScale };
+    });
 
   const mouseMoveEvents = aligned
-    .filter((e) => e.type === "mousemove" && e.x != null && e.y != null)
+    // Click events are authoritative cursor anchors. Including them prevents
+    // sparse/throttled move samples from visually trailing the real click.
+    .filter((e) => (e.type === "mousemove" || e.type === "mousedown") && e.x != null && e.y != null)
     .sort((a, b) => a.ts - b.ts);
   const clickEvents = aligned
     .filter((e) => e.type === "mousedown" && e.x != null && e.y != null)
@@ -72,6 +84,17 @@ export function getCursorAt(moves: InputEvent[], timestampMs: number): { x: numb
     };
   }
   return { x: a.x!, y: a.y! };
+}
+
+export function hasClickNear(clicks: InputEvent[], timestampMs: number, windowMs = 70): boolean {
+  let lo = 0, hi = clicks.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const delta = clicks[mid].ts - timestampMs;
+    if (Math.abs(delta) <= windowMs) return true;
+    if (delta < 0) lo = mid + 1; else hi = mid - 1;
+  }
+  return false;
 }
 
 /** Map an absolute screen coordinate onto the video's source pixel space. */

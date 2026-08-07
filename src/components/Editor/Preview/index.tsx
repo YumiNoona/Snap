@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play } from "lucide-react";
-import type { InputEvent, Keyframe, EditorConfig } from "../../../lib/types";
+import type { InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
-import { getGradientPreset } from "../../../lib/wallpapers";
-import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared } from "../../../lib/inputLog";
-import { loadCachedImage, paintGradient, paintImageCover, drawCursor, roundRect, computeCoverRect, resolveZoom, smoothTowards } from "../../../lib/canvasDraw";
+import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
+import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared, hasClickNear } from "../../../lib/inputLog";
+import {
+  loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
+  roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
+  clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
+  drawMaskLayer, drawVideoWithMotionBlur,
+} from "../../../lib/canvasDraw";
 import "./Preview.css";
 
 interface Props {
@@ -23,6 +28,10 @@ interface Props {
   onCropApply?: (crop: { x: number; y: number; w: number; h: number } | null) => void;
   onCropCancel?: () => void;
   selectedLayerId?: string | null;
+  onLayerChange?: (layer: Layer) => void;
+  zoomTargetMode?: boolean;
+  onZoomTargetPick?: (point: { x: number; y: number }) => void;
+  autoZoomRevision?: number;
 }
 
 export default function Preview({
@@ -39,6 +48,10 @@ export default function Preview({
   onCropApply,
   onCropCancel,
   selectedLayerId = null,
+  onLayerChange,
+  zoomTargetMode = false,
+  onZoomTargetPick,
+  autoZoomRevision = 0,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -55,7 +68,7 @@ export default function Preview({
   const clickEvents = useRef<InputEvent[]>([]);
   const clickIdxRef = useRef(0);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
-  const clickRipples = useRef<{ x: number; y: number; t: number; ts: number }[]>([]);
+  const clickRipples = useRef<{ x: number; y: number; ts: number }[]>([]);
   const prevTimeRef = useRef(-1);
   const prevPlayRef = useRef(-1);
   const wallpaperRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
@@ -68,6 +81,17 @@ export default function Preview({
   const [currentZoom, setCurrentZoom] = useState(1.0);
   const videoMetaRef = useRef<{ w: number; h: number; d: number } | null>(null);
   const kfGenerated = useRef(false);
+  const generatedRevision = useRef(-1);
+  const previousZoomRef = useRef<{ x: number; y: number; scale: number; ts: number } | null>(null);
+  const previousCursorDrawRef = useRef<{ x: number; y: number } | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const maskSourceRef = useRef<HTMLCanvasElement | null>(null);
+  const layerDrag = useRef<{
+    mode: "move" | "resize";
+    layer: Layer;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   // Cache resolved CSS variable colors ONCE — never call getComputedStyle inside rAF.
   const colorsRef = useRef({ shadow: "#0f172a", crop: "rgba(0,0,0,0.45)", border: "#ffffff", cursorWhite: "#ffffff" });
@@ -94,6 +118,7 @@ export default function Preview({
     clickIdxRef.current = 0;
     regionRef.current = null;
     clickRipples.current = [];
+    generatedRevision.current = -1;
   }, [inputLogPath]);
 
   // Load input log
@@ -117,10 +142,12 @@ export default function Preview({
 
   // Generate keyframes when ready
   useEffect(() => {
-    if (!videoReady || !eventsReady || kfGenerated.current) return;
+    if (!videoReady || !eventsReady) return;
+    if (kfGenerated.current && generatedRevision.current === autoZoomRevision) return;
     const meta = videoMetaRef.current;
     if (!meta) return;
     kfGenerated.current = true;
+    generatedRevision.current = autoZoomRevision;
     if (allEvents.current.length > 0) {
       const kf = generateKeyframes(
         allEvents.current,
@@ -131,7 +158,29 @@ export default function Preview({
       );
       onKeyframesChange(kf);
     }
-  }, [videoReady, eventsReady, onKeyframesChange]);
+  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement]);
+
+  const playClickSound = useCallback(() => {
+    if (!config.cursorStyle.clickSound || !playing) return;
+    try {
+      const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ac = audioContextRef.current ?? new AudioCtx();
+      audioContextRef.current = ac;
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(1150, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(520, ac.currentTime + 0.07);
+      gain.gain.setValueAtTime(0.12, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.09);
+      osc.connect(gain).connect(ac.destination);
+      osc.start();
+      osc.stop(ac.currentTime + 0.1);
+    } catch {
+      // Audio can be unavailable before WebView's user-gesture unlock.
+    }
+  }, [config.cursorStyle.clickSound, playing]);
 
   const onMetadata = () => {
     const video = videoRef.current;
@@ -197,22 +246,26 @@ export default function Preview({
   // Spawn click ripples for every click the playhead crossed since the last frame.
   const spawnClickRipples = useCallback(
     (prevTs: number, curTs: number, vw: number, vh: number) => {
-      if (!config.cursorStyle.showClickRipples) return;
+      const visualsEnabled = config.cursorStyle.showClickRipples && config.cursorStyle.clickEffect !== "none";
+      if (!visualsEnabled && !config.cursorStyle.clickSound) return;
       const clicks = clickEvents.current;
       let i = clickIdxRef.current;
       while (i < clicks.length && clicks[i].ts <= curTs) {
         const c = clicks[i];
         if (c.ts > prevTs && c.x != null && c.y != null) {
           const p = screenToVideo(c.x, c.y, vw, vh);
-          const ripples = clickRipples.current;
-          ripples.push({ x: p.x, y: p.y, t: performance.now(), ts: c.ts });
-          if (ripples.length > 12) ripples.shift();
+          if (visualsEnabled) {
+            const ripples = clickRipples.current;
+            ripples.push({ x: p.x, y: p.y, ts: c.ts });
+            if (ripples.length > 12) ripples.shift();
+          }
+          playClickSound();
         }
         i++;
       }
       clickIdxRef.current = i;
     },
-    [config.cursorStyle.showClickRipples, screenToVideo]
+    [config.cursorStyle.showClickRipples, config.cursorStyle.clickEffect, config.cursorStyle.clickSound, screenToVideo, playClickSound]
   );
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -370,11 +423,27 @@ export default function Preview({
     const coverX = cover.x, coverY = cover.y, coverW = cover.w, coverH = cover.h;
 
     if (coverW > 0.5 && coverH > 0.5) {
-      ctx.drawImage(
+      const prevZoom = previousZoomRef.current;
+      const zoomDelta = prevZoom && ts >= prevZoom.ts && ts - prevZoom.ts < 100
+        ? { x: (zoomX - prevZoom.x) * videoW, y: (zoomY - prevZoom.y) * videoH, scale: zoomScale - prevZoom.scale }
+        : null;
+      drawVideoWithMotionBlur(
+        ctx,
         video,
-        coverX, coverY, coverW, coverH,
-        offsetX, offsetY, videoW, videoH
+        { x: coverX, y: coverY, w: coverW, h: coverH },
+        { x: offsetX, y: offsetY, w: videoW, h: videoH },
+        config.motionBlur,
+        zoomDelta
       );
+      previousZoomRef.current = { x: zoomX, y: zoomY, scale: zoomScale, ts };
+    }
+
+    if (config.inset > 0) {
+      ctx.save();
+      ctx.strokeStyle = config.insetColor;
+      ctx.lineWidth = config.inset * 2;
+      ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.stroke();
+      ctx.restore();
     }
 
     // Cursor Overlay
@@ -387,105 +456,142 @@ export default function Preview({
       let cursor = rawCursor;
       if (rawCursor && config.cursorMovement.enabled) {
         const durationMs = Math.max(50, getMovementDuration(config.cursorMovement));
-        smoothedCursorRef.current = smoothTowards(smoothedCursorRef.current, rawCursor, ts, durationMs);
+        smoothedCursorRef.current = hasClickNear(clickEvents.current, ts)
+          ? { ...rawCursor, ts }
+          : smoothTowards(smoothedCursorRef.current, rawCursor, ts, durationMs);
         cursor = smoothedCursorRef.current;
       } else {
         smoothedCursorRef.current = null;
       }
-      if (cursor) {
+      const idleAlpha = cursorIdleOpacity(mouseMoveEvents.current, ts, config.cursorStyle.hideWhenIdle);
+      if (cursor && idleAlpha > 0) {
         const c = screenToVideo(cursor.x, cursor.y, vw, vh);
         const zoomedCursorX = (c.x - coverX) / coverW * videoW + offsetX;
         const zoomedCursorY = (c.y - coverY) / coverH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
+          ctx.save();
+          ctx.globalAlpha = idleAlpha;
           const pack = config.cursorStyle.pack;
+          const trailImage = pack ? loadCursorImage(pack.imageUrl, cursorImages.current) : null;
+          const trailHotspot = pack ? (config.cursorHotspots[pack.id] ?? { x: 10, y: 10 }) : null;
+          const prevCursor = previousCursorDrawRef.current;
+          if (config.motionBlur.enabled && config.motionBlur.cursorAmount > 0 && prevCursor) {
+            const dx = zoomedCursorX - prevCursor.x;
+            const dy = zoomedCursorY - prevCursor.y;
+            if (Math.hypot(dx, dy) > 2) {
+              for (let ghost = 3; ghost >= 1; ghost--) {
+                ctx.save(); ctx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
+                if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
+                  drawCursorImage(ctx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
+                } else {
+                  drawCursor(ctx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                }
+                ctx.restore();
+              }
+            }
+          }
+          previousCursorDrawRef.current = { x: zoomedCursorX, y: zoomedCursorY };
           if (pack) {
             const img = loadCursorImage(pack.imageUrl, cursorImages.current);
             if (img && img.complete && img.naturalWidth > 0) {
               lastPackRef.current = { path: pack.imageUrl, img };
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * img.naturalWidth;
-              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * img.naturalHeight;
-              ctx.drawImage(img, drawX, drawY);
+              drawCursorImage(ctx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else if (lastPackRef.current) {
               // New pack image still loading — draw the previous pack image
               // instead of flashing the built-in cursor.
               const prev = lastPackRef.current.img;
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * prev.naturalWidth;
-              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * prev.naturalHeight;
-              ctx.drawImage(prev, drawX, drawY);
+              drawCursorImage(ctx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
               drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
             }
           } else {
             drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
           }
+          ctx.restore();
         }
       }
     }
 
     // Click Ripples
-    const now = performance.now();
     clickRipples.current = clickRipples.current.filter((r) => {
-      const age = (now - r.t) / 1000;
-      if (age > 1.0) return false;
+      const age = (ts - r.ts) / 1000;
+      if (age > clickEffectDuration(config.cursorStyle.clickEffect)) return false;
       const rx = (r.x - coverX) / coverW * videoW + offsetX;
       const ry = (r.y - coverY) / coverH * videoH + offsetY;
-      const alpha = 1 - age;
-      const radius = age * 40 + 4;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = config.cursorStyle.color;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(rx, ry, radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+      drawClickEffect(ctx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
       return true;
     });
 
     ctx.restore();
 
-    // ── Mask Layers (blur, spotlight, magnifier) ──────────────────────────
+    // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
-    for (const layer of config.layers) {
-      if (layer.type !== "mask") continue;
-      const ls = layer.start;
-      const le = layer.end;
-      if (videoTs < ls || videoTs > le) continue;
+    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    const activeMasks = activeLayers.filter((layer) => layer.type === "mask");
+
+    // Masks sample the already-composited preview, not the raw video. This
+    // keeps blur and magnification aligned with crop, pan/zoom, and styling.
+    if (activeMasks.length > 0) {
+      const maskSource = maskSourceRef.current ?? document.createElement("canvas");
+      maskSourceRef.current = maskSource;
+      if (maskSource.width !== cw) maskSource.width = cw;
+      if (maskSource.height !== ch) maskSource.height = ch;
+      const maskCtx = maskSource.getContext("2d");
+      if (maskCtx) {
+        maskCtx.clearRect(0, 0, cw, ch);
+        maskCtx.drawImage(canvas, 0, 0);
+        for (const layer of activeMasks) {
+          if (layer.type !== "mask") continue;
+          const lx = offsetX + layer.x * videoW;
+          const ly = offsetY + layer.y * videoH;
+          const lw = layer.w * videoW;
+          const lh = layer.h * videoH;
+          drawMaskLayer(
+            ctx, layer, maskSource,
+            { x: 0, y: 0, w: cw, h: ch },
+            { x: 0, y: 0, w: cw, h: ch },
+            { x: lx, y: ly, w: lw, h: lh }
+          );
+        }
+      }
+    }
+
+    // Text and shapes always stay legible above masks.
+    for (const layer of activeLayers) {
+      if (layer.type === "mask") continue;
 
       const lx = offsetX + layer.x * videoW;
       const ly = offsetY + layer.y * videoH;
       const lw = layer.w * videoW;
       const lh = layer.h * videoH;
 
-      if (layer.mask === "blur") {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(lx, ly, lw, lh);
-        ctx.clip();
-        ctx.filter = `blur(${layer.intensity}px)`;
-        ctx.drawImage(video, coverX, coverY, coverW, coverH, offsetX, offsetY, videoW, videoH);
-        ctx.filter = "none";
-        // Dim the blurred region slightly so it reads as obscured
-        ctx.fillStyle = "rgba(0,0,0,0.12)";
-        ctx.fillRect(lx, ly, lw, lh);
-        ctx.restore();
-      } else if (layer.mask === "spotlight") {
-        // TODO: spotlight mask not yet implemented in canvas renderer
-      } else if (layer.mask === "magnifier") {
-        // TODO: magnifier mask not yet implemented in canvas renderer
-      }
+      if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
+      else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+    }
 
+    // Selection affordance is drawn last so every layer type can be moved and
+    // resized even when its effect changes the underlying pixels.
+    for (const layer of activeLayers) {
       // Draw layer border when selected
       if (layer.id === selectedLayerId) {
+        const lx = offsetX + layer.x * videoW;
+        const ly = offsetY + layer.y * videoH;
+        const lw = layer.w * videoW;
+        const lh = layer.h * videoH;
         ctx.save();
-        ctx.strokeStyle = "var(--accent, #3b82f6)";
+        ctx.strokeStyle = "#3b82f6";
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 4]);
         ctx.strokeRect(lx, ly, lw, lh);
         ctx.setLineDash([]);
+        ctx.fillStyle = "#3b82f6";
+        ctx.fillRect(lx + lw - 7, ly + lh - 7, 14, 14);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(lx + lw - 7, ly + lh - 7, 14, 14);
         ctx.restore();
       }
     }
@@ -522,6 +628,13 @@ export default function Preview({
       ctx.restore();
     }
 
+    if (zoomTargetMode) {
+      ctx.save();
+      ctx.strokeStyle = "#a855f7"; ctx.fillStyle = "rgba(168,85,247,0.2)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(offsetX + videoW / 2, offsetY + videoH / 2, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+
     // Spawn click ripples for clicks the playhead crossed since the last frame.
     if (playing) {
       const prev = prevPlayRef.current < 0 ? ts : prevPlayRef.current;
@@ -538,7 +651,7 @@ export default function Preview({
       prevTimeRef.current = ts;
     }
   }, [
-    canvasSize, config, keyframes, playing,
+    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode,
     getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
   ]);
   renderRef.current = render;
@@ -579,26 +692,62 @@ export default function Preview({
 
   const handleCropMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!cropMode) return;
+      if (zoomTargetMode && onZoomTargetPick) {
+        e.preventDefault(); e.stopPropagation();
+        const p = canvasToBacking(e.clientX, e.clientY);
+        const g = geomRef.current;
+        onZoomTargetPick({
+          x: Math.max(0, Math.min(1, (p.x - g.offsetX) / g.videoW)),
+          y: Math.max(0, Math.min(1, (p.y - g.offsetY) / g.videoH)),
+        });
+        return;
+      }
+      if (!cropMode) {
+        const layer = config.layers.find((l) => l.id === selectedLayerId);
+        if (!layer || !onLayerChange) return;
+        const p = canvasToBacking(e.clientX, e.clientY);
+        const g = geomRef.current;
+        const lx = g.offsetX + layer.x * g.videoW, ly = g.offsetY + layer.y * g.videoH;
+        const lw = layer.w * g.videoW, lh = layer.h * g.videoH;
+        if (p.x < lx || p.x > lx + lw || p.y < ly || p.y > ly + lh) return;
+        e.preventDefault(); e.stopPropagation();
+        layerDrag.current = {
+          mode: Math.abs(p.x - (lx + lw)) < 18 && Math.abs(p.y - (ly + lh)) < 18 ? "resize" : "move",
+          layer: { ...layer }, startX: p.x, startY: p.y,
+        };
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       const p = canvasToBacking(e.clientX, e.clientY);
       cropDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     },
-    [cropMode, canvasToBacking]
+    [cropMode, zoomTargetMode, onZoomTargetPick, canvasToBacking, config.layers, selectedLayerId, onLayerChange]
   );
 
   const handleCropMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!cropMode || !cropDrag.current) return;
       const p = canvasToBacking(e.clientX, e.clientY);
+      if (layerDrag.current && onLayerChange) {
+        const g = geomRef.current;
+        const d = layerDrag.current;
+        const dx = (p.x - d.startX) / g.videoW, dy = (p.y - d.startY) / g.videoH;
+        if (d.mode === "move") {
+          onLayerChange({ ...d.layer, x: Math.max(0, Math.min(1 - d.layer.w, d.layer.x + dx)), y: Math.max(0, Math.min(1 - d.layer.h, d.layer.y + dy)) });
+        } else {
+          onLayerChange({ ...d.layer, w: Math.max(0.04, Math.min(1 - d.layer.x, d.layer.w + dx)), h: Math.max(0.04, Math.min(1 - d.layer.y, d.layer.h + dy)) });
+        }
+        return;
+      }
+      if (!cropMode || !cropDrag.current) return;
       cropDrag.current.x1 = p.x;
       cropDrag.current.y1 = p.y;
     },
-    [cropMode, canvasToBacking]
+    [cropMode, canvasToBacking, onLayerChange]
   );
 
   const handleCropMouseUp = useCallback(() => {
+    if (layerDrag.current) { layerDrag.current = null; return; }
     const drag = cropDrag.current;
     cropDrag.current = null;
     if (!drag || !cropMode || !onCropApply) return;
@@ -650,7 +799,7 @@ export default function Preview({
 
   return (
     <div
-      className={`preview-container ${cropMode ? "crop-mode" : ""}`}
+      className={`preview-container ${cropMode ? "crop-mode" : ""} ${zoomTargetMode ? "zoom-target-mode" : ""}`}
       ref={containerRef}
       onMouseDown={handleCropMouseDown}
       onMouseMove={handleCropMouseMove}
@@ -662,9 +811,9 @@ export default function Preview({
         width={canvasSize.w}
         height={canvasSize.h}
         className="preview-canvas"
-        style={{ cursor: cropMode ? "crosshair" : undefined }}
+        style={{ cursor: cropMode || zoomTargetMode ? "crosshair" : undefined }}
       />
-      <div className="preview-controls" onClick={togglePlay}>
+      <div className="preview-controls" onClick={cropMode || zoomTargetMode || selectedLayerId ? undefined : togglePlay}>
         <div className={`play-overlay ${playing ? "hidden" : ""}`}>
           <Play size={44} fill="currentColor" />
         </div>
@@ -674,6 +823,7 @@ export default function Preview({
           Drag to crop region • Esc to cancel • tiny click to reset
         </div>
       )}
+      {zoomTargetMode && <div className="crop-hint">Click the point you want to zoom toward • Esc to cancel</div>}
       {config.zoomEnabled && keyframes.length > 0 && currentZoom > 1.02 && (
         <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}
@@ -722,5 +872,5 @@ function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HT
 }
 
 function getWallpaperImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
-  return loadCachedImage(path, cache);
+  return loadCachedImage(getWallpaperPreset(path)?.url ?? path, cache);
 }

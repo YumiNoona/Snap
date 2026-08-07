@@ -1,9 +1,9 @@
-import { useRef, useCallback, useState, useEffect } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { PlayCircle, PauseCircle, ChevronDown, ChevronUp } from "lucide";
+import { PlayCircle, PauseCircle, ChevronDown, ChevronUp, Volume2 as Volume2Icon, VolumeX as VolumeXIcon, Mic as MicIcon, MicOff as MicOffIcon } from "lucide";
 import { MorphIcon } from "morphicons/react";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2 } from "lucide-react";
 import type { Keyframe, EditorConfig } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import "./Timeline.css";
@@ -23,6 +23,22 @@ interface Props {
   onAspectChange: (ar: { width: number; height: number } | null) => void;
   onToggleCrop: () => void;
   cropActive: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onKeyframesChange: (keyframes: Keyframe[]) => void;
+  onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
+}
+
+interface ZoomSegment {
+  start: number;
+  end: number;
+  scale: number;
+  firstIndex: number;
+  lastZoomIndex: number;
+  resetIndex: number | null;
+  memberIndices: number[];
 }
 
 export default function Timeline({
@@ -40,15 +56,23 @@ export default function Timeline({
   onAspectChange,
   onToggleCrop,
   cropActive,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onKeyframesChange,
+  onAudioMuteChange,
 }: Props) {
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
   const [waveforms, setWaveforms] = useState<{ sys?: number[]; mic?: number[] }>({});
   const [contentWidth, setContentWidth] = useState(600);
+  const [timelineHeight, setTimelineHeight] = useState(230);
 
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const timeAreaRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Clean up drag listeners on unmount
   useEffect(() => {
@@ -68,7 +92,7 @@ export default function Timeline({
         const fileName = lastSlash >= 0 ? videoPath.substring(lastSlash + 1) : videoPath;
         const baseName = fileName.replace(/\.[^.]+$/, "");
         const audioDir = `${dir}\\${baseName}`;
-        const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: dir });
+        const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: audioDir });
 
         const sysPath = `${audioDir}\\system_audio.wav`;
         const micPath = `${audioDir}\\mic_audio.wav`;
@@ -92,7 +116,7 @@ export default function Timeline({
 
   // Track the timeline width once so px-per-second stays stable
   useEffect(() => {
-    const el = timeAreaRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     const measure = () => setContentWidth(Math.max(0, el.clientWidth));
     measure();
@@ -100,6 +124,176 @@ export default function Timeline({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  const effectiveWidth = Math.max(1, contentWidth * zoomScale);
+
+  const zoomSegments = useMemo(() => {
+    const sorted = keyframes
+      .map((frame, index) => ({ frame, index }))
+      .sort((a, b) => a.frame.time - b.frame.time);
+    const segments: ZoomSegment[] = [];
+    let active: ZoomSegment | null = null;
+    for (let i = 0; i < sorted.length; i++) {
+      const { frame, index } = sorted[i];
+      if (frame.scale > 1.02) {
+        const transitionStart = Math.max(0, frame.time - (frame.duration || 0));
+        if (!active) {
+          active = {
+            start: transitionStart / 1000,
+            end: frame.time / 1000,
+            scale: frame.scale,
+            firstIndex: index,
+            lastZoomIndex: index,
+            resetIndex: null,
+            memberIndices: [index],
+          };
+        } else {
+          active.scale = Math.max(active.scale, frame.scale);
+          active.lastZoomIndex = index;
+          active.memberIndices.push(index);
+        }
+      } else if (active) {
+        active.end = Math.max(active.start + 0.1, frame.time / 1000);
+        active.resetIndex = index;
+        active.memberIndices.push(index);
+        segments.push(active);
+        active = null;
+      }
+    }
+    if (active) {
+      active.end = config.trimEnd || duration;
+      segments.push(active);
+    }
+    return segments;
+  }, [keyframes, config.trimEnd, duration]);
+
+  const beginZoomEdit = (event: React.PointerEvent, segment: ZoomSegment, mode: "move" | "start" | "end") => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const initial = keyframes.map((frame) => ({ ...frame }));
+    const editingSegment: ZoomSegment = { ...segment, memberIndices: [...segment.memberIndices] };
+    const minTimeMs = Math.max(0, config.trimStart * 1000);
+    const maxTimeMs = Math.max(minTimeMs + 100, (config.trimEnd || duration) * 1000);
+    const startMs = segment.start * 1000;
+    const endMs = segment.end * 1000;
+    const segmentDurationMs = Math.max(1, endMs - startMs);
+    const minSegmentMs = Math.min(350, segmentDurationMs);
+    const bar = (event.currentTarget as HTMLElement).closest<HTMLElement>(".zoom-segment-bar");
+    if (!bar || duration <= 0) return;
+
+    // A trailing zoom with no explicit reset is normalized into a regular
+    // editable segment the first time it is manipulated.
+    if (editingSegment.resetIndex === null) {
+      editingSegment.resetIndex = initial.length;
+      editingSegment.memberIndices.push(initial.length);
+      initial.push({ time: Math.round(endMs), duration: 400, x: 0.5, y: 0.5, scale: 1, easing: "ease-in-out" });
+    }
+    const previousEndMs = zoomSegments
+      .filter((candidate) => candidate !== segment && candidate.end <= segment.start)
+      .reduce((latest, candidate) => Math.max(latest, candidate.end * 1000 + 50), minTimeMs);
+    const nextStartMs = zoomSegments
+      .filter((candidate) => candidate !== segment && candidate.start >= segment.end)
+      .reduce((earliest, candidate) => Math.min(earliest, candidate.start * 1000 - 50), maxTimeMs);
+
+    let pendingKeyframes: Keyframe[] | null = null;
+    let animationFrame = 0;
+    let visualStartMs = startMs;
+    let visualEndMs = endMs;
+    bar.classList.add("editing");
+
+    const paintBar = () => {
+      animationFrame = 0;
+      bar.style.left = `${x(visualStartMs / 1000)}px`;
+      bar.style.width = `${Math.max(18, w((visualEndMs - visualStartMs) / 1000))}px`;
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const area = timeAreaRef.current;
+      if (!area || duration <= 0) return;
+      const deltaMs = ((moveEvent.clientX - startX) / area.getBoundingClientRect().width) * duration * 1000;
+      const next = initial.map((frame) => ({ ...frame }));
+
+      if (mode === "move") {
+        const boundedDelta = Math.max(previousEndMs - startMs, Math.min(nextStartMs - endMs, deltaMs));
+        editingSegment.memberIndices.forEach((index) => {
+          next[index].time = Math.round(next[index].time + boundedDelta);
+        });
+        visualStartMs = startMs + boundedDelta;
+        visualEndMs = endMs + boundedDelta;
+      } else if (mode === "start") {
+        const latestStart = Math.max(previousEndMs, endMs - minSegmentMs);
+        const desired = Math.max(previousEndMs, Math.min(latestStart, startMs + deltaMs));
+        const ratio = (endMs - desired) / segmentDurationMs;
+        editingSegment.memberIndices.forEach((index) => {
+          const original = initial[index];
+          next[index].time = Math.round(endMs - (endMs - original.time) * ratio);
+          if (original.duration > 0) next[index].duration = Math.max(40, Math.round(original.duration * ratio));
+        });
+        visualStartMs = desired;
+        visualEndMs = endMs;
+      } else {
+        const desired = Math.round(Math.max(startMs + minSegmentMs, Math.min(nextStartMs, endMs + deltaMs)));
+        const ratio = (desired - startMs) / segmentDurationMs;
+        editingSegment.memberIndices.forEach((index) => {
+          const original = initial[index];
+          next[index].time = Math.round(startMs + (original.time - startMs) * ratio);
+          if (original.duration > 0) next[index].duration = Math.max(40, Math.round(original.duration * ratio));
+        });
+        visualStartMs = startMs;
+        visualEndMs = desired;
+      }
+
+      pendingKeyframes = next.sort((a, b) => a.time - b.time);
+      if (!animationFrame) animationFrame = requestAnimationFrame(paintBar);
+    };
+
+    const cleanup = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      bar.classList.remove("editing");
+      dragCleanupRef.current = null;
+    };
+
+    const onUp = () => {
+      cleanup();
+      if (pendingKeyframes) onKeyframesChange(pendingKeyframes);
+    };
+    const onCancel = () => {
+      cleanup();
+      bar.style.left = `${x(startMs / 1000)}px`;
+      bar.style.width = `${Math.max(18, w(segmentDurationMs / 1000))}px`;
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+    dragCleanupRef.current = cleanup;
+  };
+
+  const beginResize = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = timelineHeight;
+    const move = (e: MouseEvent) => setTimelineHeight(Math.max(170, Math.min(430, startHeight - (e.clientY - startY))));
+    const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  };
+
+  useEffect(() => {
+    if (!playing || zoomScale <= 1) return;
+    const scroller = scrollRef.current;
+    if (!scroller || duration <= 0) return;
+    const playheadX = (currentTime / duration) * effectiveWidth;
+    const margin = Math.min(120, scroller.clientWidth * 0.2);
+    if (playheadX < scroller.scrollLeft + margin) {
+      scroller.scrollLeft = Math.max(0, playheadX - margin);
+    } else if (playheadX > scroller.scrollLeft + scroller.clientWidth - margin) {
+      scroller.scrollLeft = playheadX - scroller.clientWidth + margin;
+    }
+  }, [currentTime, duration, effectiveWidth, playing, zoomScale]);
 
   const handleScissorCut = () => {
     if (duration <= 0) return;
@@ -152,8 +346,8 @@ export default function Timeline({
   };
 
   // Position helpers — all measured in the timeline (time) column space
-  const x = (t: number): number => (duration > 0 ? (t / duration) * contentWidth : 0);
-  const w = (t: number): number => (duration > 0 ? (t / duration) * contentWidth : 0);
+  const x = (t: number): number => (duration > 0 ? (t / duration) * effectiveWidth : 0);
+  const w = (t: number): number => (duration > 0 ? (t / duration) * effectiveWidth : 0);
 
   const currentAspectLabel = ASPECT_RATIOS.find((ar) =>
     (config.aspectRatio === null && ar.width === 0) ||
@@ -161,7 +355,8 @@ export default function Timeline({
   )?.label || "Wide 16:9";
 
   return (
-    <div className="ss-timeline-container">
+    <div className="ss-timeline-container" style={{ height: `${timelineHeight}px`, "--track-scale": Math.max(1, (timelineHeight - 95) / 135) } as React.CSSProperties}>
+      <div className="timeline-resize-edge" onMouseDown={beginResize} title="Drag the timeline edge to resize" />
       {/* ── Screen Studio Toolbar ──────────────────────────────────── */}
       <div className="ss-timeline-toolbar">
         <div className="tb-left-group">
@@ -170,9 +365,9 @@ export default function Timeline({
               className="ss-tb-btn aspect-btn"
               onClick={() => setShowAspectMenu(!showAspectMenu)}
             >
-              <RectangleHorizontal size={14} />
+              <RectangleHorizontal size={16} />
               <span>{currentAspectLabel}</span>
-              <MorphIcon icon={showAspectMenu ? ChevronUp : ChevronDown} spring="snappy" size={12} />
+              <MorphIcon icon={showAspectMenu ? ChevronUp : ChevronDown} spring="snappy" size={14} />
             </button>
 
             {showAspectMenu && (
@@ -198,7 +393,7 @@ export default function Timeline({
             onClick={onToggleCrop}
             title={cropActive ? "Finish crop" : "Crop Canvas Region"}
           >
-            <Crop size={14} />
+            <Crop size={16} />
             <span>Crop</span>
           </button>
         </div>
@@ -209,15 +404,15 @@ export default function Timeline({
 
           <div className="tb-transport-buttons">
             <button className="tb-transport-btn" onClick={() => onSeek(0)} title="Jump to Start">
-              <SkipBack size={14} fill="currentColor" />
+              <SkipBack size={16} fill="currentColor" />
             </button>
 
             <button className="tb-play-circle-btn" onClick={onTogglePlay} title={playing ? "Pause" : "Play"}>
-              <MorphIcon icon={playing ? PauseCircle : PlayCircle} spring="snappy" size={18} />
+              <MorphIcon icon={playing ? PauseCircle : PlayCircle} spring="snappy" size={21} />
             </button>
 
             <button className="tb-transport-btn" onClick={() => onSeek(duration)} title="Jump to End">
-              <SkipForward size={14} fill="currentColor" />
+              <SkipForward size={16} fill="currentColor" />
             </button>
           </div>
 
@@ -227,12 +422,15 @@ export default function Timeline({
         {/* Right Tools (Scissor cut & Zoom scale) */}
         <div className="tb-right-group">
           <button className="ss-tb-btn primary-scissor-btn" onClick={handleScissorCut} title="Split Clip at Playhead (C)">
-            <Scissors size={14} />
+            <Scissors size={16} />
           </button>
+
+          <button className="zoom-step-btn history-btn" onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)"><Undo2 size={16} /></button>
+          <button className="zoom-step-btn history-btn" onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)"><Redo2 size={16} /></button>
 
           <div className="timeline-zoom-slider-wrap">
             <button className="zoom-step-btn" onClick={() => setZoomScale(Math.max(1, zoomScale - 0.5))} title="Zoom Out">
-              <ZoomOut size={13} />
+              <ZoomOut size={15} />
             </button>
             <input
               type="range"
@@ -243,7 +441,7 @@ export default function Timeline({
               onChange={(e) => setZoomScale(Number(e.target.value))}
             />
             <button className="zoom-step-btn" onClick={() => setZoomScale(Math.min(4, zoomScale + 0.5))} title="Zoom In">
-              <ZoomIn size={13} />
+              <ZoomIn size={15} />
             </button>
           </div>
         </div>
@@ -254,13 +452,32 @@ export default function Timeline({
         {/* Left label rail */}
         <div className="ss-labels-col">
           <div className="track-label">Video</div>
-          {hasSys && <div className="track-label">System</div>}
-          {hasMic && <div className="track-label">Mic</div>}
+          <div className="track-label audio-label">
+            <button
+              className={`track-mute-btn ${config.audio.systemMuted ? "muted" : ""}`}
+              onClick={() => onAudioMuteChange("system", !config.audio.systemMuted)}
+              title={config.audio.systemMuted ? "Unmute desktop audio" : "Mute desktop audio"}
+            >
+              <MorphIcon icon={config.audio.systemMuted ? VolumeXIcon : Volume2Icon} spring="snappy" size={15} />
+            </button>
+            <span>Desktop</span>
+          </div>
+          <div className="track-label audio-label">
+            <button
+              className={`track-mute-btn ${config.audio.micMuted ? "muted" : ""}`}
+              onClick={() => onAudioMuteChange("mic", !config.audio.micMuted)}
+              title={config.audio.micMuted ? "Unmute microphone" : "Mute microphone"}
+            >
+              <MorphIcon icon={config.audio.micMuted ? MicOffIcon : MicIcon} spring="snappy" size={15} />
+            </button>
+            <span>Microphone</span>
+          </div>
           <div className="track-label">Zoom</div>
         </div>
 
         {/* Shared timeline columns */}
-        <div className="ss-timeline-col" ref={timeAreaRef} onClick={(e) => getTimeFromEvent(e) && onSeek(getTimeFromEvent(e))}>
+        <div className="ss-timeline-scroll" ref={scrollRef}>
+        <div className="ss-timeline-col" ref={timeAreaRef} style={{ width: `${effectiveWidth}px` }} onClick={(e) => onSeek(getTimeFromEvent(e))}>
           {/* Video layer */}
           <div className="ss-track-row video-track">
             <div
@@ -285,29 +502,31 @@ export default function Timeline({
           </div>
 
           {/* System Audio layer */}
-          {hasSys && (
-            <div className="ss-track-row audio-track sys-audio">
-              <WaveRow data={waveforms.sys ?? pseudoWaveform()} />
-            </div>
-          )}
+          <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? "Desktop audio" : "No desktop audio was recorded"}>
+            {hasSys ? <WaveRow data={waveforms.sys ?? pseudoWaveform()} /> : <span className="empty-track-label">No desktop audio</span>}
+          </div>
 
           {/* Mic Audio layer */}
-          {hasMic && (
-            <div className="ss-track-row audio-track mic-audio">
-              <WaveRow data={waveforms.mic ?? pseudoWaveform()} />
-            </div>
-          )}
+          <div className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`} title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}>
+            {hasMic ? <WaveRow data={waveforms.mic ?? pseudoWaveform()} /> : <span className="empty-track-label">No microphone audio</span>}
+          </div>
 
           {/* Zoom / Animation layer */}
           <div className="ss-track-row zoom-track">
             <div className="zoom-connecting-line" />
-            {keyframes.map((kf, idx) => (
+            {zoomSegments.map((segment, index) => (
               <div
-                key={idx}
-                className={`diamond-keyframe-marker ${kf.scale > 1.05 ? "zoomed" : ""}`}
-                style={{ left: x(kf.time / 1000) }}
-                title={`Zoom ${kf.scale.toFixed(1)}x at ${formatTimecode(kf.time / 1000)}`}
-              />
+                key={`zoom-${index}`}
+                className="zoom-segment-bar"
+                style={{ left: x(segment.start), width: Math.max(18, w(segment.end - segment.start)) }}
+                onPointerDown={(event) => beginZoomEdit(event, segment, "move")}
+                onClick={(event) => event.stopPropagation()}
+                title="Drag to move · drag either edge to change duration"
+              >
+                <button className="zoom-bar-handle left" onPointerDown={(event) => beginZoomEdit(event, segment, "start")} aria-label="Change zoom start" />
+                <span>Zoom {segment.scale.toFixed(1)}×</span>
+                <button className="zoom-bar-handle right" onPointerDown={(event) => beginZoomEdit(event, segment, "end")} aria-label="Change zoom end" />
+              </div>
             ))}
           </div>
 
@@ -330,6 +549,7 @@ export default function Timeline({
             <div className="playhead-purple-cap" />
             <div className="playhead-line" />
           </div>
+        </div>
         </div>
       </div>
     </div>

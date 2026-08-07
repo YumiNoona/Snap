@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Grip, X, RotateCcw } from "lucide-react";
@@ -23,8 +23,7 @@ Features built for seamless recording:
 Type your script in Edit mode, then press Start Prompt to begin reading!`;
 
 export default function TeleprompterWindow({ onClose }: Props) {
-  const appWindow = getCurrentWindow();
-  const isStandalone = appWindow.label === "teleprompter";
+  const isStandalone = new URLSearchParams(window.location.search).get("window") === "teleprompter";
 
   const [mode, setMode] = useState<"edit" | "prompt">("prompt");
   const [script, setScript] = useState(DEFAULT_SCRIPT);
@@ -36,10 +35,12 @@ export default function TeleprompterWindow({ onClose }: Props) {
   const [isFlipped, setIsFlipped] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const words = script.split(/(\s+)/);
-  const [currentWordIdx, setCurrentWordIdx] = useState(0);
-
-  const actualWordCount = words.filter((w) => w.trim().length > 0).length;
+  const scrollAnimationRef = useRef<number | null>(null);
+  const words = useMemo(() => script.split(/(\s+)/), [script]);
+  const wordIndices = useMemo(() => words.map((word, index) => word.trim() ? index : -1).filter((index) => index >= 0), [words]);
+  const [currentWordPosition, setCurrentWordPosition] = useState(0);
+  const currentWordIdx = wordIndices[Math.min(currentWordPosition, Math.max(0, wordIndices.length - 1))] ?? -1;
+  const actualWordCount = wordIndices.length;
 
   useEffect(() => {
     console.log("[Snap Teleprompter] mounted OK, standalone:", isStandalone);
@@ -64,46 +65,72 @@ export default function TeleprompterWindow({ onClose }: Props) {
     if (onClose) {
       onClose();
     } else if (isStandalone) {
-      appWindow.close();
+      getCurrentWindow().close();
     }
-  }, [onClose, isStandalone, appWindow]);
+  }, [onClose, isStandalone]);
+
+  const animateScrollTo = useCallback((targetTop: number, duration = 320) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    if (scrollAnimationRef.current !== null) cancelAnimationFrame(scrollAnimationRef.current);
+    const startTop = container.scrollTop;
+    const boundedTarget = Math.max(0, Math.min(targetTop, container.scrollHeight - container.clientHeight));
+    const distance = boundedTarget - startTop;
+    if (Math.abs(distance) < 1) return;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      container.scrollTop = startTop + distance * eased;
+      if (progress < 1) scrollAnimationRef.current = requestAnimationFrame(tick);
+      else scrollAnimationRef.current = null;
+    };
+    scrollAnimationRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollAnimationRef.current !== null) cancelAnimationFrame(scrollAnimationRef.current);
+  }, []);
 
 
-  // Word-by-word reveal & auto scroll timer
+  // Advance by actual words only. Whitespace stays in the rendered script but
+  // no longer consumes a timing tick, so the configured WPM is accurate.
   useEffect(() => {
     if (!isPlaying || mode !== "prompt") return;
 
     const msPerWord = (60 / Math.max(30, wpm)) * 1000;
 
-    const interval = setInterval(() => {
-      setCurrentWordIdx((prev) => {
-        const next = prev + 1;
-        if (next >= words.length) {
+    const timer = setTimeout(() => {
+      setCurrentWordPosition((previous) => {
+        const next = previous + 1;
+        if (next >= wordIndices.length) {
           setIsPlaying(false);
-          return prev;
+          return previous;
         }
-
-        const wordEl = document.getElementById(`tp-word-${next}`);
-        if (wordEl && scrollRef.current) {
-          const container = scrollRef.current;
-          const wordTop = wordEl.offsetTop - container.offsetTop;
-          const targetScroll = wordTop - container.clientHeight / 2 + 40;
-          container.scrollTo({ top: targetScroll, behavior: "smooth" });
-        }
-
         return next;
       });
     }, msPerWord);
 
-    return () => clearInterval(interval);
-  }, [isPlaying, mode, wpm, words.length]);
+    return () => clearTimeout(timer);
+  }, [isPlaying, mode, wpm, currentWordPosition, wordIndices.length]);
+
+  useEffect(() => {
+    if (mode !== "prompt" || currentWordIdx < 0) return;
+    const wordEl = document.getElementById(`tp-word-${currentWordIdx}`);
+    const container = scrollRef.current;
+    if (!wordEl || !container) return;
+    const targetScroll = wordEl.offsetTop - container.clientHeight / 2 + wordEl.clientHeight / 2;
+    animateScrollTo(targetScroll, Math.min(380, Math.max(180, 48000 / Math.max(60, wpm))));
+  }, [currentWordIdx, mode, wpm, animateScrollTo]);
+
+  useEffect(() => {
+    if (currentWordPosition >= wordIndices.length) setCurrentWordPosition(0);
+  }, [currentWordPosition, wordIndices.length]);
 
   const resetPrompt = () => {
     setIsPlaying(false);
-    setCurrentWordIdx(0);
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    setCurrentWordPosition(0);
+    animateScrollTo(0, 260);
   };
 
   return (
@@ -140,7 +167,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
 
       {/* Main Body */}
       {mode === "edit" ? (
-        <div className="tp-edit-body">
+        <div className="tp-edit-body tp-mode-panel">
           <textarea
             className="tp-script-textarea"
             value={script}
@@ -155,7 +182,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
           </div>
         </div>
       ) : (
-        <div className="tp-prompt-body">
+        <div className="tp-prompt-body tp-mode-panel">
           <div className="tp-reading-marker" />
 
           <div
@@ -179,14 +206,8 @@ export default function TeleprompterWindow({ onClose }: Props) {
                     key={idx}
                     className={`tp-word ${isCurrent ? "current" : ""} ${isPast ? "past" : ""}`}
                     onClick={() => {
-                      setCurrentWordIdx(idx);
-                      const wordEl = document.getElementById(`tp-word-${idx}`);
-                      if (wordEl && scrollRef.current) {
-                        scrollRef.current.scrollTo({
-                          top: wordEl.offsetTop - scrollRef.current.clientHeight / 2,
-                          behavior: "smooth",
-                        });
-                      }
+                      const position = wordIndices.indexOf(idx);
+                      if (position >= 0) setCurrentWordPosition(position);
                     }}
                   >
                     {word}
@@ -198,20 +219,17 @@ export default function TeleprompterWindow({ onClose }: Props) {
 
           {/* Floating Control Toolbar */}
           <div className="teleprompter-controls">
-            <button
-              className={`tp-play-btn ${isPlaying ? "playing" : ""}`}
-              onClick={() => setIsPlaying(!isPlaying)}
-            >
-              <MorphIcon icon={isPlaying ? Pause : Play} spring="snappy" size={14} />
-              {isPlaying ? "Pause" : "Start"}
-            </button>
+            <div className="tp-primary-actions">
+              <button className={`tp-play-btn ${isPlaying ? "playing" : ""}`} onClick={() => setIsPlaying(!isPlaying)}>
+                <MorphIcon icon={isPlaying ? Pause : Play} spring="snappy" size={14} />
+                {isPlaying ? "Pause" : "Start"}
+              </button>
+              <button className="tp-icon-btn reset" onClick={resetPrompt} title="Reset to top"><RotateCcw size={14} /></button>
+            </div>
 
-            <button className="tp-icon-btn" onClick={resetPrompt} title="Reset to Top">
-              <RotateCcw size={14} />
-            </button>
-
+            <div className="tp-controls-grid">
             <div className="tp-control-item">
-              <label>Speed</label>
+              <div className="tp-control-meta"><label>Speed</label><span className="tp-val">{wpm} WPM</span></div>
               <input
                 type="range"
                 min={60}
@@ -220,11 +238,10 @@ export default function TeleprompterWindow({ onClose }: Props) {
                 value={wpm}
                 onChange={(e) => setWpm(Number(e.target.value))}
               />
-              <span className="tp-val">{wpm} WPM</span>
             </div>
 
             <div className="tp-control-item">
-              <label>Font</label>
+              <div className="tp-control-meta"><label>Font</label><span className="tp-val">{fontSize}px</span></div>
               <input
                 type="range"
                 min={18}
@@ -233,11 +250,10 @@ export default function TeleprompterWindow({ onClose }: Props) {
                 value={fontSize}
                 onChange={(e) => setFontSize(Number(e.target.value))}
               />
-              <span className="tp-val">{fontSize}px</span>
             </div>
 
             <div className="tp-control-item">
-              <label>Opacity</label>
+              <div className="tp-control-meta"><label>Opacity</label><span className="tp-val">{Math.round(opacity * 100)}%</span></div>
               <input
                 type="range"
                 min={0.3}
@@ -247,9 +263,10 @@ export default function TeleprompterWindow({ onClose }: Props) {
                 onChange={(e) => setOpacity(Number(e.target.value))}
               />
             </div>
+            </div>
 
             <button
-              className={`tp-icon-btn ${isFlipped ? "active" : ""}`}
+              className={`tp-icon-btn flip ${isFlipped ? "active" : ""}`}
               onClick={() => setIsFlipped(!isFlipped)}
               title="Flip / Mirror Text for Glass Teleprompter"
             >

@@ -1,16 +1,18 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { EditorConfig, Keyframe } from "./types";
 import { getMovementDuration } from "./types";
-import { getGradientPreset } from "./wallpapers";
-import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw } from "./inputLog";
+import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
+import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import {
-  loadCachedImage, paintGradient, paintImageCover, drawCursor, roundRect,
-  computeCoverRect, resolveZoom, smoothTowards,
+  loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
+  computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
+  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur,
 } from "./canvasDraw";
 
 export interface ExportCompositor {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
+  clickTimesMs: number[];
   destroy: () => void;
 }
 
@@ -58,6 +60,10 @@ export async function createExportCompositor(
   // Re-bind to a definitely-non-null const — TS doesn't retain the null
   // check's narrowing across the `drawFrame` closure defined below.
   const ctx: CanvasRenderingContext2D = ctx2d;
+  const maskSource = document.createElement("canvas");
+  maskSource.width = outputW;
+  maskSource.height = outputH;
+  const maskSourceCtx = maskSource.getContext("2d");
 
   const { mouseMoveEvents, clickEvents, region } = await loadInputLog(inputLogPath);
 
@@ -77,17 +83,19 @@ export async function createExportCompositor(
   let lastPack: { path: string; img: HTMLImageElement } | null = null;
   let smoothedCursor: { x: number; y: number; ts: number } | null = null;
   let clickIdx = 0;
-  let clickRipples: { x: number; y: number; t: number; ts: number }[] = [];
+  let clickRipples: { x: number; y: number; ts: number }[] = [];
   let prevTs = -1;
+  let previousZoom: { x: number; y: number; scale: number; ts: number } | null = null;
+  let previousCursorDraw: { x: number; y: number } | null = null;
 
   function spawnClickRipples(prevMs: number, curMs: number, vw: number, vh: number) {
-    if (!config.cursorStyle.showClickRipples) return;
+    if (!config.cursorStyle.showClickRipples || config.cursorStyle.clickEffect === "none") return;
     let i = clickIdx;
     while (i < clickEvents.length && clickEvents[i].ts <= curMs) {
       const c = clickEvents[i];
       if (c.ts > prevMs && c.x != null && c.y != null) {
         const p = screenToVideo(c.x, c.y, vw, vh);
-        clickRipples.push({ x: p.x, y: p.y, t: performance.now(), ts: c.ts });
+        clickRipples.push({ x: p.x, y: p.y, ts: c.ts });
         if (clickRipples.length > 12) clickRipples.shift();
       }
       i++;
@@ -151,7 +159,7 @@ export async function createExportCompositor(
       ctx.filter = `blur(${Math.min(config.bgBlur, 100)}px)`;
     }
     if (bgIsImage) {
-      const img = loadCachedImage(config.wallpaperUrl, wallpaperImages);
+      const img = loadCachedImage(getWallpaperPreset(config.wallpaperUrl)?.url ?? config.wallpaperUrl, wallpaperImages);
       const imgReady = img && img.complete && img.naturalWidth > 0;
       const last = wallpaperState;
       if (imgReady) {
@@ -213,7 +221,21 @@ export async function createExportCompositor(
     const coverX = cover.x, coverY = cover.y, coverW = cover.w, coverH = cover.h;
 
     if (coverW > 0.5 && coverH > 0.5) {
-      ctx.drawImage(video, coverX, coverY, coverW, coverH, offsetX, offsetY, videoW, videoH);
+      const zoomDelta = previousZoom && ts >= previousZoom.ts && ts - previousZoom.ts < 100
+        ? { x: (zoomX - previousZoom.x) * videoW, y: (zoomY - previousZoom.y) * videoH, scale: zoomScale - previousZoom.scale }
+        : null;
+      drawVideoWithMotionBlur(
+        ctx, video,
+        { x: coverX, y: coverY, w: coverW, h: coverH },
+        { x: offsetX, y: offsetY, w: videoW, h: videoH },
+        config.motionBlur, zoomDelta
+      );
+      previousZoom = { x: zoomX, y: zoomY, scale: zoomScale, ts };
+    }
+
+    if (config.inset > 0) {
+      ctx.save(); ctx.strokeStyle = config.insetColor; ctx.lineWidth = config.inset * 2;
+      ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.stroke(); ctx.restore();
     }
 
     // Cursor overlay — custom pack, default styled cursor, or none, exactly
@@ -223,87 +245,102 @@ export async function createExportCompositor(
       let cursor = rawCursor;
       if (rawCursor && config.cursorMovement.enabled) {
         const durationMs = Math.max(50, getMovementDuration(config.cursorMovement));
-        smoothedCursor = smoothTowards(smoothedCursor, rawCursor, ts, durationMs);
+        smoothedCursor = hasClickNear(clickEvents, ts)
+          ? { ...rawCursor, ts }
+          : smoothTowards(smoothedCursor, rawCursor, ts, durationMs);
         cursor = smoothedCursor;
       } else {
         smoothedCursor = null;
       }
-      if (cursor) {
+      const idleAlpha = cursorIdleOpacity(mouseMoveEvents, ts, config.cursorStyle.hideWhenIdle);
+      if (cursor && idleAlpha > 0) {
         const c = screenToVideo(cursor.x, cursor.y, vw, vh);
         const zoomedCursorX = (c.x - coverX) / coverW * videoW + offsetX;
         const zoomedCursorY = (c.y - coverY) / coverH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
+          ctx.save(); ctx.globalAlpha = idleAlpha;
           const pack = config.cursorStyle.pack;
+          const trailImage = pack ? loadCachedImage(pack.imageUrl, cursorImages) : null;
+          const trailHotspot = pack ? (config.cursorHotspots[pack.id] ?? { x: 10, y: 10 }) : null;
+          const prevCursor = previousCursorDraw;
+          if (config.motionBlur.enabled && config.motionBlur.cursorAmount > 0 && prevCursor) {
+            const dx = zoomedCursorX - prevCursor.x, dy = zoomedCursorY - prevCursor.y;
+            if (Math.hypot(dx, dy) > 2) {
+              for (let ghost = 3; ghost >= 1; ghost--) {
+                ctx.save(); ctx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
+                if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
+                  drawCursorImage(ctx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
+                } else {
+                  drawCursor(ctx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                }
+                ctx.restore();
+              }
+            }
+          }
+          previousCursorDraw = { x: zoomedCursorX, y: zoomedCursorY };
           if (pack) {
             const img = loadCachedImage(pack.imageUrl, cursorImages);
             if (img && img.complete && img.naturalWidth > 0) {
               lastPack = { path: pack.imageUrl, img };
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * img.naturalWidth;
-              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * img.naturalHeight;
-              ctx.drawImage(img, drawX, drawY);
+              drawCursorImage(ctx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else if (lastPack) {
               const prev = lastPack.img;
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              const drawX = zoomedCursorX - (Math.min(100, Math.max(0, hs.x)) / 100) * prev.naturalWidth;
-              const drawY = zoomedCursorY - (Math.min(100, Math.max(0, hs.y)) / 100) * prev.naturalHeight;
-              ctx.drawImage(prev, drawX, drawY);
+              drawCursorImage(ctx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
               drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
             }
           } else {
             drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
           }
+          ctx.restore();
         }
       }
     }
 
     // Click ripples
-    const now = performance.now();
     clickRipples = clickRipples.filter((r) => {
-      const age = (now - r.t) / 1000;
-      if (age > 1.0) return false;
+      const age = (ts - r.ts) / 1000;
+      if (age > clickEffectDuration(config.cursorStyle.clickEffect)) return false;
       const rx = (r.x - coverX) / coverW * videoW + offsetX;
       const ry = (r.y - coverY) / coverH * videoH + offsetY;
-      const alpha = 1 - age;
-      const radius = age * 40 + 4;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = config.cursorStyle.color;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(rx, ry, radius, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
+      drawClickEffect(ctx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
       return true;
     });
 
     ctx.restore();
 
-    // Mask layers (blur)
+    // Timed annotation and mask layers. Masks sample the fully composited
+    // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
-    for (const layer of config.layers) {
-      if (layer.type !== "mask") continue;
-      if (videoTs < layer.start || videoTs > layer.end) continue;
+    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    if (maskSourceCtx && activeLayers.some((layer) => layer.type === "mask")) {
+      maskSourceCtx.clearRect(0, 0, outputW, outputH);
+      maskSourceCtx.drawImage(canvas, 0, 0);
+      for (const layer of activeLayers) {
+        if (layer.type !== "mask") continue;
+        const lx = offsetX + layer.x * videoW;
+        const ly = offsetY + layer.y * videoH;
+        const lw = layer.w * videoW;
+        const lh = layer.h * videoH;
+        drawMaskLayer(
+          ctx, layer, maskSource,
+          { x: 0, y: 0, w: outputW, h: outputH },
+          { x: 0, y: 0, w: outputW, h: outputH },
+          { x: lx, y: ly, w: lw, h: lh }
+        );
+      }
+    }
+    for (const layer of activeLayers) {
+      if (layer.type === "mask") continue;
       const lx = offsetX + layer.x * videoW;
       const ly = offsetY + layer.y * videoH;
       const lw = layer.w * videoW;
       const lh = layer.h * videoH;
-      if (layer.mask === "blur") {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(lx, ly, lw, lh);
-        ctx.clip();
-        ctx.filter = `blur(${layer.intensity}px)`;
-        ctx.drawImage(video, coverX, coverY, coverW, coverH, offsetX, offsetY, videoW, videoH);
-        ctx.filter = "none";
-        ctx.fillStyle = "rgba(0,0,0,0.12)";
-        ctx.fillRect(lx, ly, lw, lh);
-        ctx.restore();
-      }
-      // Spotlight / magnifier masks aren't implemented in the canvas
-      // renderer yet (Preview doesn't draw them either), so export matches.
+      if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
+      else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
     }
 
     // Click-ripple spawning — export always plays forward in real time, so
@@ -321,6 +358,7 @@ export async function createExportCompositor(
   return {
     video,
     canvas,
+    clickTimesMs: clickEvents.map((event) => event.ts),
     destroy() {
       destroyed = true;
       cancelAnimationFrame(rafId);
