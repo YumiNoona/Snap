@@ -9,12 +9,28 @@ use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::webview::Color;
-use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+};
 
-fn exclude_from_capture(window: &tauri::WebviewWindow) {
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe { let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE); }
+fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    unsafe {
+        // Clear any stale affinity first. This matters for transparent WebView2
+        // windows whose DWM surface may be recreated when the window is shown.
+        SetWindowDisplayAffinity(hwnd, WDA_NONE)
+            .map_err(|error| format!("Unable to reset capture affinity: {error}"))?;
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+            .map_err(|error| format!("Unable to exclude window from capture: {error}"))?;
+
+        let mut applied = 0u32;
+        GetWindowDisplayAffinity(hwnd, &mut applied)
+            .map_err(|error| format!("Unable to verify capture affinity: {error}"))?;
+        if applied != WDA_EXCLUDEFROMCAPTURE.0 {
+            return Err(format!("Windows applied capture affinity {applied:#x} instead of WDA_EXCLUDEFROMCAPTURE"));
+        }
     }
+    Ok(())
 }
 
 /// Pending video/log paths handed to the dedicated editor window.
@@ -277,7 +293,6 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
         .ok_or_else(|| "Dock window not found".to_string())?;
 
     if visible {
-        exclude_from_capture(&win);
         // Center above the bottom edge of the main window's monitor.
         if let Some(mon) = app
             .get_webview_window("main")
@@ -294,14 +309,54 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
             let _ = win.set_position(tauri::LogicalPosition::new(x0 as f64, y0 as f64));
         }
         let _ = win.show();
+        // Apply exclusion after the transparent window has a live DWM surface.
+        // Applying it before show can be downgraded to a black WDA_MONITOR mask.
+        if let Err(error) = exclude_from_capture(&win) {
+            eprintln!("[Snap] Dock capture exclusion failed: {error}");
+        }
+        // WebView2 may recreate its compositor surface immediately after first
+        // show, so verify/reapply once more after that initialization settles.
+        let delayed_dock = win.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            if let Err(error) = exclude_from_capture(&delayed_dock) {
+                eprintln!("[Snap] Delayed dock capture exclusion failed: {error}");
+            }
+        });
     } else {
         let _ = win.hide();
+        let _ = win.set_size(tauri::LogicalSize::new(460.0, 74.0));
+        let _ = win.emit("dock-compact", false);
     }
 
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.emit("dock-visibility", visible);
     }
     Ok(())
+}
+
+/// Resize the recorder dock between its full controls and a small restorable
+/// pill while preserving the window's visual center on screen.
+#[tauri::command]
+fn set_dock_compact(app: tauri::AppHandle, compact: bool) -> Result<(), String> {
+    let win = app
+        .get_webview_window("dock")
+        .ok_or_else(|| "Dock window not found".to_string())?;
+    let scale = win.scale_factor().map_err(|error| error.to_string())?;
+    let old_size = win.outer_size().map_err(|error| error.to_string())?;
+    let old_position = win.outer_position().map_err(|error| error.to_string())?;
+    let (logical_width, logical_height) = if compact { (196.0, 60.0) } else { (460.0, 74.0) };
+    let new_width = (logical_width * scale).round() as i32;
+    let new_height = (logical_height * scale).round() as i32;
+    let centered_x = old_position.x + (old_size.width as i32 - new_width) / 2;
+    let centered_y = old_position.y + (old_size.height as i32 - new_height) / 2;
+
+    win.set_size(tauri::LogicalSize::new(logical_width, logical_height))
+        .map_err(|error| error.to_string())?;
+    win.set_position(tauri::PhysicalPosition::new(centered_x, centered_y))
+        .map_err(|error| error.to_string())?;
+    // Resizing can recreate the transparent compositor surface as well.
+    exclude_from_capture(&win)
 }
 
 /// Mirror the latest recording state to the dock window.
@@ -374,7 +429,7 @@ fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String
     let _ = win.emit("countdown-state", payload);
 
     if value.is_some() {
-        exclude_from_capture(&win);
+        let _ = exclude_from_capture(&win);
         let _ = win.set_ignore_cursor_events(true);
         let _ = win.set_always_on_top(true);
         let _ = win.show();
@@ -416,7 +471,7 @@ fn set_recording_overlay(
         .and_then(|m| m.current_monitor().ok())
         .flatten()
         .ok_or_else(|| "No monitor available".to_string())?;
-    exclude_from_capture(&win);
+    let _ = exclude_from_capture(&win);
 
     let scale = monitor.scale_factor();
     let logical_w = monitor.size().width as f64 / scale;
@@ -717,6 +772,7 @@ pub fn run() {
             begin_region_selection,
             end_region_selection,
             set_dock_visible,
+            set_dock_compact,
             update_dock_state,
             get_dock_state,
             dock_action,

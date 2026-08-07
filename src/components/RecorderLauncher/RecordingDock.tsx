@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Play, Pause, Mic, MicOff } from "lucide";
-import { Square } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Play, Pause, Mic, MicOff, Minimize2, Maximize2 } from "lucide";
+import { GripVertical, Square } from "lucide-react";
 import { MorphIcon } from "morphicons/react";
 import "./FloatingToolbar.css";
 
@@ -20,6 +21,7 @@ export default function RecordingDock() {
     paused: false,
     mic_muted: false,
   });
+  const [compact, setCompact] = useState(false);
 
   // Transparent window — clear the app-level dark body background.
   useEffect(() => {
@@ -49,9 +51,28 @@ export default function RecordingDock() {
     };
   }, []);
 
+  useEffect(() => {
+    const un = listen<boolean>("dock-compact", (event) => setCompact(event.payload));
+    return () => { un.then((stop) => stop()); };
+  }, []);
+
   const send = useCallback((action: "stop" | "pause" | "mic") => {
     invoke("dock_action", { action }).catch(() => {});
   }, []);
+
+  const toggleCompact = useCallback(() => {
+    const next = !compact;
+    setCompact(next);
+    invoke("set_dock_compact", { compact: next }).catch(() => setCompact(!next));
+  }, [compact]);
+
+  const stopRecording = useCallback(() => {
+    if (compact) {
+      setCompact(false);
+      invoke("set_dock_compact", { compact: false }).catch(() => {});
+    }
+    send("stop");
+  }, [compact, send]);
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
@@ -60,8 +81,18 @@ export default function RecordingDock() {
   };
 
   return (
-    <div className="dock-window-root">
-      <div className="floating-dock-container">
+    <div className={`dock-window-root ${compact ? "compact" : ""}`}>
+      <div className={`floating-dock-container ${compact ? "compact" : ""}`}>
+        <button
+          className="dock-drag-handle"
+          title="Drag recording controls"
+          aria-label="Drag recording controls"
+          data-tauri-drag-region
+          onMouseDown={() => getCurrentWindow().startDragging().catch(() => {})}
+        >
+          <GripVertical size={15} />
+        </button>
+
         <div className="floating-rec-badge">
           <span className={`rec-dot-animated ${state.paused ? "paused" : ""}`} />
           <span className="rec-timer-text">{formatTime(state.elapsed)}</span>
@@ -69,25 +100,29 @@ export default function RecordingDock() {
 
         <div className="floating-dock-divider" />
 
-        <button
+        {!compact && <button
           className="dock-action-btn"
           onClick={() => send("pause")}
           title={state.paused ? "Resume Recording" : "Pause Recording"}
         >
           <MorphIcon icon={state.paused ? Play : Pause} spring="snappy" size={16} />
-        </button>
+        </button>}
 
-        <button
+        {!compact && <button
           className={`dock-action-btn ${state.mic_muted ? "muted" : ""}`}
           onClick={() => send("mic")}
           title={state.mic_muted ? "Unmute Microphone" : "Mute Microphone"}
         >
           <MorphIcon icon={state.mic_muted ? MicOff : Mic} spring="snappy" size={16} />
+        </button>}
+
+        <button className="dock-action-btn dock-compact-btn" onClick={toggleCompact} title={compact ? "Expand controls" : "Minimize controls"}>
+          <MorphIcon icon={compact ? Maximize2 : Minimize2} spring="snappy" size={16} />
         </button>
 
-        <button className="dock-stop-btn" onClick={() => send("stop")} title="Stop & Open Editor">
+        <button className={`dock-stop-btn ${compact ? "icon-only" : ""}`} onClick={stopRecording} title="Stop & Open Editor">
           <Square size={13} fill="currentColor" />
-          Stop & Edit
+          {!compact && "Stop & Edit"}
         </button>
       </div>
     </div>

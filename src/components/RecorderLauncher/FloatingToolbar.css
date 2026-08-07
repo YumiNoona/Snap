@@ -60,6 +60,12 @@
   bottom: auto;
 }
 
+.dock-window-root.compact .floating-dock-container {
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 12px;
+}
+
 .countdown-number {
   font-size: 140px;
   font-weight: 900;
@@ -92,6 +98,34 @@
   z-index: 999;
   animation: dock-rise var(--dur-slow) var(--ease-out-back) both;
   pointer-events: auto;
+}
+
+.dock-drag-handle {
+  width: 20px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: grab;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+
+.dock-drag-handle:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dock-drag-handle:active {
+  cursor: grabbing;
+}
+
+.dock-drag-handle svg {
+  pointer-events: none;
 }
 
 .floating-rec-badge {
@@ -153,6 +187,10 @@
   border-color: rgba(239, 68, 68, 0.3);
 }
 
+.dock-compact-btn {
+  color: var(--text-tertiary);
+}
+
 .dock-stop-btn {
   display: flex;
   align-items: center;
@@ -174,4 +212,11 @@
 
 .dock-stop-btn:active {
   transform: scale(0.97);
+}
+
+.dock-stop-btn.icon-only {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
 }

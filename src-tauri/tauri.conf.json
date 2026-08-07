@@ -34,7 +34,7 @@
         "skipTaskbar": true,
         "resizable": false,
         "maximizable": false,
-        "minimizable": false,
+        "minimizable": true,
         "shadow": false,
         "focus": false,
         "visible": false
