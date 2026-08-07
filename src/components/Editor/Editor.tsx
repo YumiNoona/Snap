@@ -7,6 +7,7 @@ import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import type { EditorConfig, Keyframe, ExportSettings, Layer } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG } from "../../lib/types";
+import { runCanvasExport } from "../../lib/canvasExport";
 import "./Editor.css";
 
 interface Props {
@@ -148,16 +149,24 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const handleExport = async (settings: ExportSettings) => {
     setExportStatus("Exporting...");
     try {
-      await invoke("export_video", {
-        inputVideo: videoPath,
-        inputLog: inputLogPath,
-        config: {
-          ...config,
-          keyframes,
-        },
-        exportSettings: settings,
-      });
+      const result = await runCanvasExport(
+        videoPath,
+        inputLogPath,
+        keyframes,
+        config,
+        settings,
+        config.trimStart,
+        config.trimEnd > 0 ? config.trimEnd : duration,
+        (p) => {
+          if (p.phase === "recording") {
+            setExportStatus(`Exporting... ${Math.round(p.progress * 100)}%`);
+          } else if (p.phase === "finalizing") {
+            setExportStatus("Finalizing...");
+          }
+        }
+      );
       setExportStatus(`Done: ${settings.outputPath}`);
+      void result;
     } catch (e) {
       setExportStatus(`Export failed: ${e}`);
     }

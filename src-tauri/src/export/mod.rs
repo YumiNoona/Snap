@@ -1,5 +1,8 @@
 use std::process::{Command, Stdio};
 use std::io::Read;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use serde::Deserialize;
 
 #[derive(Deserialize, Clone)]
@@ -43,6 +46,13 @@ pub struct ExportRequest {
     pub export_settings: ExportSettings,
 }
 
+/// Legacy export path: re-renders pan/zoom via FFmpeg's `zoompan` filter
+/// directly on the raw recording. Kept for reference / as a fast fallback,
+/// but it can never fully match the editor: FFmpeg has no equivalent for
+/// the custom cursor overlay, click effects, gradient/color backgrounds,
+/// padding, shadow, or rounded corners drawn in the canvas preview.
+/// The editor now uses `finalize_canvas_export` (below) instead, which
+/// encodes the exact frames the canvas preview draws — true WYSIWYG.
 #[tauri::command]
 pub async fn export_video(request: ExportRequest) -> std::result::Result<String, String> {
     eprintln!("[Snap Export] Starting export...");
@@ -239,4 +249,183 @@ fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) ->
         "zoompan=z='{z}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={fps}",
         z = z_expr, x = x_expr, y = y_expr, w = w, h = h, fps = fps
     )
+}
+
+// ── Canvas export pipeline ───────────────────────────────────────────────
+//
+// The editor renders every frame of the export the exact same way the
+// canvas preview does (background, cover-cropped pan/zoom, custom cursor
+// overlay, click ripples, mask layers) by playing the recording in real
+// time and capturing the on-screen canvas via `canvas.captureStream()` +
+// `MediaRecorder`. The resulting WebM bytes are streamed to disk here in
+// chunks (there's no bundled `fs` plugin, so this direct sink avoids
+// adding one), then muxed with the original audio and transcoded to the
+// user's chosen format by `finalize_canvas_export`.
+
+static EXPORT_SINK: OnceLock<StdMutex<Option<BufWriter<File>>>> = OnceLock::new();
+
+fn export_sink() -> &'static StdMutex<Option<BufWriter<File>>> {
+    EXPORT_SINK.get_or_init(|| StdMutex::new(None))
+}
+
+/// Open (create/truncate) the temp file that streamed WebM chunks are
+/// written into. Must be called before any `write_export_chunk` calls.
+#[tauri::command]
+pub fn open_export_sink(path: String) -> std::result::Result<(), String> {
+    let file = File::create(&path).map_err(|e| format!("Cannot create export temp file: {e}"))?;
+    let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
+    *guard = Some(BufWriter::new(file));
+    Ok(())
+}
+
+/// Append one chunk of the recorded canvas stream to the open sink.
+/// Callers must await each call before sending the next chunk — chunks
+/// are written in the order they arrive with no reordering.
+#[tauri::command]
+pub fn write_export_chunk(bytes: Vec<u8>) -> std::result::Result<(), String> {
+    let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
+    match guard.as_mut() {
+        Some(w) => w.write_all(&bytes).map_err(|e| format!("Export write failed: {e}")),
+        None => Err("Export sink not open".to_string()),
+    }
+}
+
+/// Flush and close the sink once recording has finished.
+#[tauri::command]
+pub fn close_export_sink() -> std::result::Result<(), String> {
+    let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
+    if let Some(mut w) = guard.take() {
+        w.flush().map_err(|e| format!("Export flush failed: {e}"))?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct CanvasExportRequest {
+    #[serde(rename = "tempWebmPath")]
+    pub temp_webm_path: String,
+    /// Original recorded video — used only to locate the sidecar audio
+    /// files (same directory convention as the legacy export path).
+    #[serde(rename = "inputVideo")]
+    pub input_video: String,
+    #[serde(rename = "exportSettings")]
+    pub export_settings: ExportSettings,
+}
+
+/// Mux the recorded-canvas WebM (already has every visual baked in —
+/// cursor, background, pan/zoom, styling) with the original system/mic
+/// audio and transcode to the user's chosen output format.
+#[tauri::command]
+pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result::Result<String, String> {
+    let settings = &request.export_settings;
+
+    eprintln!("[Snap Export] Finalizing canvas export -> {}", settings.output_path);
+
+    let input_path = std::path::Path::new(&request.input_video);
+    let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
+    let parent = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let audio_dir = parent.join(stem.as_ref());
+    let sys_wav = audio_dir.join("system_audio.wav");
+    let mic_wav = audio_dir.join("mic_audio.wav");
+    let has_sys = sys_wav.exists() && std::fs::metadata(&sys_wav).map(|m| m.len() > 0).unwrap_or(false);
+    let has_mic = mic_wav.exists() && std::fs::metadata(&mic_wav).map(|m| m.len() > 0).unwrap_or(false);
+
+    let crf = match settings.quality.as_str() {
+        "high" => "18",
+        "medium" => "23",
+        _ => "28",
+    };
+
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), request.temp_webm_path.clone()];
+
+    if settings.format == "gif" {
+        // GIF export: no audio track. Downsample fps for reasonable file size.
+        args.push("-vf".into());
+        args.push("fps=15,scale=iw:-1:flags=lanczos".into());
+        args.push("-f".into());
+        args.push("gif".into());
+    } else {
+        let mut audio_inputs = 0;
+        if has_sys {
+            args.push("-i".into());
+            args.push(sys_wav.to_string_lossy().to_string());
+            audio_inputs += 1;
+        }
+        if has_mic {
+            args.push("-i".into());
+            args.push(mic_wav.to_string_lossy().to_string());
+            audio_inputs += 1;
+        }
+
+        if audio_inputs == 2 {
+            args.push("-filter_complex".into());
+            args.push("[1:a][2:a]amix=inputs=2:duration=first[a]".into());
+            args.push("-map".into());
+            args.push("0:v".into());
+            args.push("-map".into());
+            args.push("[a]".into());
+            args.push("-c:a".into());
+            args.push("aac".into());
+            args.push("-b:a".into());
+            args.push("192k".into());
+        } else if audio_inputs == 1 {
+            args.push("-map".into());
+            args.push("0:v".into());
+            args.push("-map".into());
+            args.push("1:a".into());
+            args.push("-c:a".into());
+            args.push("aac".into());
+            args.push("-b:a".into());
+            args.push("192k".into());
+        } else {
+            args.push("-map".into());
+            args.push("0:v".into());
+            args.push("-an".into());
+        }
+
+        args.extend_from_slice(&[
+            "-c:v".into(), "libx264".into(),
+            "-preset".into(), "medium".into(),
+            "-crf".into(), crf.into(),
+            "-pix_fmt".into(), "yuv420p".into(),
+        ]);
+    }
+
+    args.push(settings.output_path.clone());
+
+    eprintln!("[Snap Export] Finalize FFmpeg command: ffmpeg {}", args.join(" "));
+
+    let mut child = Command::new("ffmpeg")
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
+
+    let status = child.wait().map_err(|e| format!("FFmpeg wait error: {e}"))?;
+
+    let mut stderr = String::new();
+    if let Some(mut s) = child.stderr {
+        let _ = s.read_to_string(&mut stderr);
+    }
+
+    if !status.success() {
+        eprintln!("[Snap Export] FFmpeg stderr:\n{stderr}");
+        return Err(format!("FFmpeg exited with error: {status}\n{stderr}"));
+    }
+
+    // Clean up the intermediate WebM now that the final file is encoded.
+    let _ = std::fs::remove_file(&request.temp_webm_path);
+
+    let output = request.export_settings.output_path.clone();
+    let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
+
+    eprintln!(
+        "[Snap Export] Canvas export done — {} bytes written to {}",
+        meta.len(),
+        output
+    );
+
+    Ok(format!("Exported: {} ({:.1} MB)", output, meta.len() as f64 / 1_048_576.0))
 }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play } from "lucide-react";
-import type { InputEvent, Keyframe, EditorConfig, CursorStyle } from "../../../lib/types";
+import type { InputEvent, Keyframe, EditorConfig } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset } from "../../../lib/wallpapers";
+import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared } from "../../../lib/inputLog";
+import { loadCachedImage, paintGradient, paintImageCover, drawCursor, roundRect, computeCoverRect, resolveZoom, smoothTowards } from "../../../lib/canvasDraw";
 import "./Preview.css";
 
 interface Props {
@@ -60,6 +61,7 @@ export default function Preview({
   const wallpaperRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
   const fadeRef = useRef<{ start: number }>({ start: 0 });
   const lastPackRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
+  const smoothedCursorRef = useRef<{ x: number; y: number; ts: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
   const [eventsReady, setEventsReady] = useState(false);
@@ -98,37 +100,12 @@ export default function Preview({
   useEffect(() => {
     (async () => {
       try {
-        const text = await invoke<string>("read_text_file", { path: inputLogPath });
-        const raw: any[] = text
-          .split("\n")
-          .filter((l) => l.trim())
-          .map((l) => JSON.parse(l));
-
-        // Parse meta lines: recording region (screen px) + video time-0 marker.
-        let captureStartMs = 0;
-        for (const e of raw) {
-          if (e.type === "meta") {
-            if (typeof e.captureStartMs === "number" && e.captureStartMs > 0) {
-              captureStartMs = e.captureStartMs;
-            }
-            if (typeof e.w === "number" && e.w > 0) {
-              regionRef.current = { x: e.x, y: e.y, w: e.w, h: e.h };
-            }
-          }
-        }
-
-        // Align input timestamps to video time (video time 0 == first frame).
-        const aligned: InputEvent[] = raw
-          .filter((e) => e.type !== "meta")
-          .map((e) => ({ ...e, ts: Math.max(0, e.ts - captureStartMs) }));
-
+        const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region } =
+          await loadInputLog(inputLogPath);
         allEvents.current = aligned;
-        mouseMoveEvents.current = aligned
-          .filter((e) => e.type === "mousemove" && e.x != null && e.y != null)
-          .sort((a, b) => a.ts - b.ts);
-        clickEvents.current = aligned
-          .filter((e) => e.type === "mousedown" && e.x != null && e.y != null)
-          .sort((a, b) => a.ts - b.ts);
+        mouseMoveEvents.current = moves;
+        clickEvents.current = clicks;
+        regionRef.current = region;
         clickIdxRef.current = 0;
         clickRipples.current = [];
         setEventsReady(true);
@@ -207,41 +184,14 @@ export default function Preview({
     }
   }, [config.aspectRatio, videoReady, computeCanvasSize]);
 
-  // Cursor interpolation
+  // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {
-    const moves = mouseMoveEvents.current;
-    if (moves.length === 0) return null;
-
-    let lo = 0, hi = moves.length - 1, idx = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >>> 1;
-      if (moves[mid].ts <= timestampMs) { idx = mid; lo = mid + 1; }
-      else { hi = mid - 1; }
-    }
-    if (idx < 0) return null;
-
-    const a = moves[idx];
-    const b = idx + 1 < moves.length ? moves[idx + 1] : null;
-    if (b && b.ts > a.ts) {
-      const t = (timestampMs - a.ts) / (b.ts - a.ts);
-      return {
-        x: a.x! + (b.x! - a.x!) * Math.min(t, 1),
-        y: a.y! + (b.y! - a.y!) * Math.min(t, 1),
-      };
-    }
-    return { x: a.x!, y: a.y! };
+    return getCursorAtShared(mouseMoveEvents.current, timestampMs);
   }, []);
 
   // Map an absolute screen coordinate onto the video's source pixel space.
   const screenToVideo = useCallback((sx: number, sy: number, vw: number, vh: number) => {
-    const reg = regionRef.current;
-    if (reg && reg.w > 0 && reg.h > 0) {
-      return {
-        x: ((sx - reg.x) / reg.w) * vw,
-        y: ((sy - reg.y) / reg.h) * vh,
-      };
-    }
-    return { x: sx, y: sy };
+    return screenToVideoShared(regionRef.current, sx, sy, vw, vh);
   }, []);
 
   // Spawn click ripples for every click the playhead crossed since the last frame.
@@ -315,40 +265,15 @@ export default function Preview({
     const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
     // ── Interpolate Zoom ──────────────────────────────────────────────────
-    // Semantics: each keyframe's `duration` is the length of the transition
-    // INTO it (from the previously held value), ending at its `time`. Between
-    // transitions the camera holds the previous keyframe's values — so camera
-    // moves only during their designated windows, never drifting.
-    let zoomX = 0.5, zoomY = 0.5, zoomScale = 1.0;
+    // Shared with the export renderer via lib/canvasDraw.resolveZoom so both
+    // compute the exact same pan/zoom for a given timestamp.
+    const zoomResult = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart);
+    const zoomX = zoomResult.x, zoomY = zoomResult.y, zoomScale = zoomResult.scale;
     if (config.zoomEnabled && keyframes.length > 0) {
-      let idx = 0;
-      for (let i = keyframes.length - 1; i >= 0; i--) {
-        if (keyframes[i].time <= ts) { idx = i; break; }
-      }
-      const kf = keyframes[idx];
-      const next = idx + 1 < keyframes.length ? keyframes[idx + 1] : null;
-      if (next && next.time > kf.time) {
-        const segEnd = next.time;
-        const transStart = segEnd - Math.max(0, next.duration || 0);
-        const from = Math.max(kf.time, transStart);
-        const span = Math.max(1, segEnd - from);
-        let eased: number;
-        if (ts < from) {
-          eased = 0; // hold the current keyframe's values until the move starts
-        } else {
-          eased = easeInOut(Math.min(1, Math.max(0, (ts - from) / span)));
-        }
-        zoomX = kf.x + (next.x - kf.x) * eased;
-        zoomY = kf.y + (next.y - kf.y) * eased;
-        zoomScale = kf.scale + (next.scale - kf.scale) * eased;
-      } else {
-        zoomX = kf.x;
-        zoomY = kf.y;
-        zoomScale = kf.scale;
-      }
       const z = Math.round(zoomScale * 100) / 100;
       if (Math.abs(currentZoom - z) > 0.01) setCurrentZoom(z);
     }
+
 
     // ── Draw Background ────────────────────────────────────────────────────
     ctx.clearRect(0, 0, cw, ch);
@@ -441,18 +366,8 @@ export default function Preview({
     // differed (e.g. picking 9:16 on a 16:9 recording). Instead, crop the
     // source further, centered, to match the destination aspect exactly,
     // so the frame fills without distorting.
-    let coverX = effX, coverY = effY, coverW = effW, coverH = effH;
-    if (effW > 0.5 && effH > 0.5 && videoW > 0.5 && videoH > 0.5) {
-      const destAr = videoW / videoH;
-      const srcAr = effW / effH;
-      if (srcAr > destAr) {
-        coverW = effH * destAr;
-        coverX = effX + (effW - coverW) / 2;
-      } else if (srcAr < destAr) {
-        coverH = effW / destAr;
-        coverY = effY + (effH - coverH) / 2;
-      }
-    }
+    const cover = computeCoverRect(effX, effY, effW, effH, videoW, videoH);
+    const coverX = cover.x, coverY = cover.y, coverW = cover.w, coverH = cover.h;
 
     if (coverW > 0.5 && coverH > 0.5) {
       ctx.drawImage(
@@ -464,7 +379,19 @@ export default function Preview({
 
     // Cursor Overlay
     if (config.showCursor) {
-      const cursor = getCursorAt(ts);
+      const rawCursor = getCursorAt(ts);
+      // Cursor Movement smoothing: when enabled, ease the cursor toward its
+      // raw sampled position over `durationMs` for a fluid, cinematic feel.
+      // When disabled (default), the raw 250Hz-sampled position is used
+      // directly — exact 1:1 tracking, no added delay.
+      let cursor = rawCursor;
+      if (rawCursor && config.cursorMovement.enabled) {
+        const durationMs = Math.max(50, getMovementDuration(config.cursorMovement));
+        smoothedCursorRef.current = smoothTowards(smoothedCursorRef.current, rawCursor, ts, durationMs);
+        cursor = smoothedCursorRef.current;
+      } else {
+        smoothedCursorRef.current = null;
+      }
       if (cursor) {
         const c = screenToVideo(cursor.x, cursor.y, vw, vh);
         const zoomedCursorX = (c.x - coverX) / coverW * videoW + offsetX;
@@ -768,13 +695,6 @@ export default function Preview({
 }
 
 // Helpers
-function assetSrc(path: string): string {
-  // Web-root-relative paths (/Wallpapers/.., /Cursors/..) are served by Vite /
-  // the bundled frontend — no asset protocol needed. Absolute filesystem paths
-  // (e.g. recorded video) go through the Tauri asset protocol.
-  return path.startsWith("/") ? path : convertFileSrc(path);
-}
-
 function clampRect(
   x0: number,
   y0: number,
@@ -798,140 +718,9 @@ function clampRect(
 }
 
 function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
-  const cached = cache.get(path);
-  if (cached) return cached;
-  // Evict oldest entries if cache grows too large
-  if (cache.size > 20) {
-    const first = cache.keys().next().value;
-    if (first) cache.delete(first);
-  }
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = assetSrc(path);
-  cache.set(path, img);
-  return img;
+  return loadCachedImage(path, cache);
 }
 
 function getWallpaperImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
-  const cached = cache.get(path);
-  if (cached) return cached;
-  if (cache.size > 20) {
-    const first = cache.keys().next().value;
-    if (first) cache.delete(first);
-  }
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = assetSrc(path);
-  cache.set(path, img);
-  return img;
-}
-
-function paintGradient(
-  ctx: CanvasRenderingContext2D,
-  preset: { type: "linear" | "radial"; angle: number; colors: { color: string; offset: number }[] },
-  w: number,
-  h: number
-) {
-  if (preset.type === "radial") {
-    const radius = Math.max(w, h) / 2;
-    const grad = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, radius);
-    preset.colors.forEach((c) => grad.addColorStop(Math.min(1, Math.max(0, c.offset / 100)), c.color));
-    ctx.fillStyle = grad;
-  } else {
-    const rad = (preset.angle * Math.PI) / 180;
-    const len = Math.abs(w * Math.sin(rad)) + Math.abs(h * Math.cos(rad));
-    const dx = (Math.cos(rad) * len) / 2;
-    const dy = (Math.sin(rad) * len) / 2;
-    const grad = ctx.createLinearGradient(w / 2 - dx, h / 2 - dy, w / 2 + dx, h / 2 + dy);
-    preset.colors.forEach((c) => grad.addColorStop(Math.min(1, Math.max(0, c.offset / 100)), c.color));
-    ctx.fillStyle = grad;
-  }
-  ctx.fillRect(0, 0, w, h);
-}
-
-function paintImageCover(
-  ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
-  w: number,
-  h: number
-) {
-  const iw = img.naturalWidth;
-  const ih = img.naturalHeight;
-  if (iw === 0 || ih === 0) return;
-  const scale = Math.max(w / iw, h / ih);
-  const dw = iw * scale;
-  const dh = ih * scale;
-  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
-}
-
-function drawCursor(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  style: CursorStyle
-) {
-  const r = style.size;
-  ctx.save();
-  if (style.shape === "circle") {
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle = style.color;
-    ctx.globalAlpha = 0.35;
-    ctx.fill();
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.4, 0, Math.PI * 2);
-    ctx.fillStyle = style.color;
-    ctx.fill();
-    ctx.globalAlpha = 0.8;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  } else {
-    ctx.translate(x, y);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(-r * 1.4, -r);
-    ctx.lineTo(-r * 1.2, -r * 0.3);
-    ctx.lineTo(-r * 1.8, -r * 0.2);
-    ctx.lineTo(-r * 1.6, -r * 0.7);
-    ctx.lineTo(-r * 2.2, -r * 0.9);
-    ctx.closePath();
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    ctx.strokeStyle = style.color;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  if (r <= 0) {
-    ctx.rect(x, y, w, h);
-    return;
-  }
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h);
-  ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r);
-  ctx.arcTo(x, y, x + r, y, r);
-  ctx.closePath();
-}
-
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  return loadCachedImage(path, cache);
 }

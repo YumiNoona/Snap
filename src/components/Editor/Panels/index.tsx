@@ -452,8 +452,8 @@ export default function Panels({
             </div>
           )}
 
-          <button className="pro-render-export-btn" onClick={() => onExport(exportSettings)} disabled={exportStatus === "Exporting..."}>
-            {exportStatus === "Exporting..." ? "Rendering..." : `Render ${exportSettings.format.toUpperCase()}`}
+          <button className="pro-render-export-btn" onClick={() => onExport(exportSettings)} disabled={exportStatus.startsWith("Exporting") || exportStatus === "Finalizing..."}>
+            {exportStatus.startsWith("Exporting") || exportStatus === "Finalizing..." ? "Rendering..." : `Render ${exportSettings.format.toUpperCase()}`}
           </button>
         </div>
       )}
