@@ -1,7 +1,8 @@
 .slider-row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  min-width: 0;
+  gap: 9px;
   min-height: 32px;
 }
 
@@ -10,7 +11,11 @@
   font-weight: 500;
   color: var(--text-secondary);
   flex-shrink: 0;
-  min-width: 72px;
+  min-width: 82px;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .slider-track-wrap {
@@ -20,6 +25,7 @@
   display: flex;
   align-items: center;
   cursor: pointer;
+  min-width: 42px;
 }
 
 /* Native input — visually hidden but fully interactive for a11y */
@@ -93,8 +99,8 @@
 .slider-value {
   flex-shrink: 0;
   width: auto;
-  min-width: 48px;
-  max-width: 72px;
+  min-width: 46px;
+  max-width: 62px;
   overflow: hidden;
   text-align: right;
   text-overflow: ellipsis;

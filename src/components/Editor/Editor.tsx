@@ -1,15 +1,15 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Clock, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform } from "lucide-react";
+import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, Trash2, RotateCcw } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
-import type { EditorConfig, Keyframe, ExportSettings, Layer } from "../../lib/types";
-import { DEFAULT_EDITOR_CONFIG } from "../../lib/types";
+import type { EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
+import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
 import "./Editor.css";
 
@@ -22,6 +22,57 @@ interface Props {
 export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
+const EDITOR_PRESETS_STORAGE_KEY = "snap.editorPresets.v1";
+
+type PresetSettings = Pick<EditorConfig,
+  "backgroundColor" | "bgType" | "wallpaperUrl" | "bgBlur" | "padding" |
+  "borderRadius" | "inset" | "insetColor" | "shadow" | "cursorStyle" |
+  "showCursor" | "zoomEnabled" | "zoomMode" | "zoomLevel" | "fixedZoomPart" |
+  "aspectRatio" | "motionBlur" | "cursorMovement" | "zoomMovement" | "audio"
+>;
+
+interface SavedEditorPreset {
+  id: string;
+  name: string;
+  createdAt: number;
+  settings: PresetSettings;
+}
+
+function snapshotPresetSettings(config: EditorConfig): PresetSettings {
+  return {
+    backgroundColor: config.backgroundColor,
+    bgType: config.bgType,
+    wallpaperUrl: config.wallpaperUrl,
+    bgBlur: config.bgBlur,
+    padding: config.padding,
+    borderRadius: config.borderRadius,
+    inset: config.inset,
+    insetColor: config.insetColor,
+    shadow: { ...config.shadow },
+    cursorStyle: { ...config.cursorStyle },
+    showCursor: config.showCursor,
+    zoomEnabled: config.zoomEnabled,
+    zoomMode: config.zoomMode,
+    zoomLevel: config.zoomLevel,
+    fixedZoomPart: config.fixedZoomPart,
+    aspectRatio: config.aspectRatio ? { ...config.aspectRatio } : null,
+    motionBlur: { ...config.motionBlur },
+    cursorMovement: { ...config.cursorMovement },
+    zoomMovement: { ...config.zoomMovement },
+    audio: { ...config.audio },
+  };
+}
+
+function loadEditorPresets(): SavedEditorPreset[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(EDITOR_PRESETS_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((preset): preset is SavedEditorPreset => !!preset?.id && !!preset?.name && !!preset?.settings)
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   try {
@@ -31,31 +82,182 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
+interface ResolvedZoomRegion extends ZoomRegionSettings {
+  memberIndices: number[];
+  zoomIndices: number[];
+  resetIndex: number | null;
+}
+
+function resolveZoomRegion(
+  frames: Keyframe[],
+  selection: ZoomRegionSelection | null,
+  timelineEndMs: number
+): ResolvedZoomRegion | null {
+  if (!selection) return null;
+  const sorted = frames.map((frame, index) => ({ frame, index })).sort((a, b) => a.frame.time - b.frame.time);
+  const regions: ResolvedZoomRegion[] = [];
+  let active: ResolvedZoomRegion | null = null;
+
+  for (const { frame, index } of sorted) {
+    if (frame.scale > 1.02) {
+      if (!active) {
+        active = {
+          startMs: Math.max(0, frame.time - (frame.duration || 0)),
+          endMs: frame.time,
+          scale: frame.scale,
+          x: frame.x,
+          y: frame.y,
+          transitionMs: frame.duration || 400,
+          memberIndices: [index],
+          zoomIndices: [index],
+          resetIndex: null,
+        };
+      } else {
+        active.endMs = Math.max(active.endMs, frame.time);
+        active.scale = Math.max(active.scale, frame.scale);
+        active.x = frame.x;
+        active.y = frame.y;
+        active.memberIndices.push(index);
+        active.zoomIndices.push(index);
+      }
+    } else if (active) {
+      active.endMs = Math.max(active.startMs + 100, frame.time);
+      active.memberIndices.push(index);
+      active.resetIndex = index;
+      regions.push(active);
+      active = null;
+    }
+  }
+  if (active) {
+    active.endMs = Math.max(active.startMs + 100, timelineEndMs);
+    regions.push(active);
+  }
+
+  return regions.reduce<ResolvedZoomRegion | null>((best, region) => {
+    const score = Math.abs(region.startMs - selection.startMs) + Math.abs(region.endMs - selection.endMs);
+    if (!best) return region;
+    const bestScore = Math.abs(best.startMs - selection.startMs) + Math.abs(best.endMs - selection.endMs);
+    return score < bestScore ? region : best;
+  }, null);
+}
+
+function waitForPlayable(video: HTMLVideoElement, timeoutMs = 1400): Promise<void> {
+  if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      video.removeEventListener("canplay", finish);
+      video.removeEventListener("loadeddata", finish);
+      video.removeEventListener("seeked", finish);
+      video.removeEventListener("error", finish);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    video.addEventListener("canplay", finish, { once: true });
+    video.addEventListener("loadeddata", finish, { once: true });
+    video.addEventListener("seeked", finish, { once: true });
+    video.addEventListener("error", finish, { once: true });
+  });
+}
+
+/**
+ * `play()` resolving only means the media element entered its playing state.
+ * For the editor we need stronger proof: WebView2 must have decoded a newer
+ * frame so the canvas preview can actually advance.
+ */
+function waitForDecodedFrame(
+  video: HTMLVideoElement,
+  afterTime: number,
+  timeoutMs = 1100
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const frameVideo = video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (callback: (now: number, metadata: { mediaTime: number }) => void) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
+    let settled = false;
+    let frameHandle: number | null = null;
+
+    const finish = (advanced: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("error", onError);
+      if (frameHandle !== null) frameVideo.cancelVideoFrameCallback?.(frameHandle);
+      resolve(advanced);
+    };
+    const hasAdvanced = (mediaTime = video.currentTime) => mediaTime > afterTime + 0.012;
+    const onTime = () => {
+      if (hasAdvanced()) finish(true);
+    };
+    const onError = () => finish(false);
+    const watchFrame = (_now: number, metadata: { mediaTime: number }) => {
+      if (hasAdvanced(metadata.mediaTime)) {
+        finish(true);
+      } else if (!settled && frameVideo.requestVideoFrameCallback) {
+        frameHandle = frameVideo.requestVideoFrameCallback(watchFrame);
+      }
+    };
+    const timer = window.setTimeout(() => finish(hasAdvanced()), timeoutMs);
+
+    video.addEventListener("timeupdate", onTime);
+    video.addEventListener("error", onError, { once: true });
+    if (frameVideo.requestVideoFrameCallback) {
+      frameHandle = frameVideo.requestVideoFrameCallback(watchFrame);
+    }
+  });
+}
+
 export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
+  const isBrowserPreview =
+    import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
   const [config, setConfig] = useState<EditorConfig>(() => ({
     ...DEFAULT_EDITOR_CONFIG,
     cursorHotspots: loadCursorHotspots(),
   }));
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
-  const [duration, setDuration] = useState(0);
+  const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
+  const [showPresets, setShowPresets] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [savedPresets, setSavedPresets] = useState<SavedEditorPreset[]>(loadEditorPresets);
   const [exportProgress, setExportProgress] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
   const [, setHistoryVersion] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const appWindow = getCurrentWindow();
+  const appWindow = isBrowserPreview ? null : getCurrentWindow();
   const historyRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
   const futureRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
+  const presetMenuRef = useRef<HTMLDivElement | null>(null);
+  const playbackRequestRef = useRef(0);
+  const desiredPlayingRef = useRef(false);
+  const playbackRecoveryTimerRef = useRef<number | null>(null);
+  const playbackProgressRef = useRef({ mediaTime: 0, changedAt: performance.now() });
+  const playbackStartRequestRef = useRef(0);
+  const playbackRecoveryInFlightRef = useRef(false);
+  const playbackBoundsRef = useRef({ start: config.trimStart, end: config.trimEnd || duration });
+  const manualTargetRangeRef = useRef<{ startMs: number; endMs: number } | null>(null);
   const lastSnapshotRef = useRef({ config, keyframes });
   const applyingHistoryRef = useRef(false);
+
+  playbackBoundsRef.current = {
+    start: config.trimStart,
+    end: config.trimEnd || duration,
+  };
 
   useEffect(() => {
     const current = { config, keyframes };
@@ -112,39 +314,241 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   }, [config.cursorHotspots]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(EDITOR_PRESETS_STORAGE_KEY, JSON.stringify(savedPresets));
+    } catch {
+      // Presets remain available for the current session if storage is unavailable.
+    }
+  }, [savedPresets]);
+
+  useEffect(() => {
+    if (!showPresets) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!presetMenuRef.current?.contains(event.target as Node)) setShowPresets(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => window.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showPresets]);
+
+  const applyPresetSettings = useCallback((settings: PresetSettings) => {
+    setConfig((current) => ({
+      ...current,
+      ...settings,
+      shadow: { ...settings.shadow },
+      cursorStyle: { ...settings.cursorStyle },
+      motionBlur: { ...settings.motionBlur },
+      cursorMovement: { ...settings.cursorMovement },
+      zoomMovement: { ...settings.zoomMovement },
+      audio: { ...settings.audio },
+      // These are recording-specific and must never be overwritten by a look preset.
+      cursorHotspots: current.cursorHotspots,
+      crop: current.crop,
+      trimStart: current.trimStart,
+      trimEnd: current.trimEnd,
+      cuts: current.cuts,
+      layers: current.layers,
+    }));
+    setShowPresets(false);
+  }, []);
+
+  const saveCurrentPreset = useCallback(() => {
+    const name = presetName.trim() || `Preset ${savedPresets.length + 1}`;
+    const next: SavedEditorPreset = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name,
+      createdAt: Date.now(),
+      settings: snapshotPresetSettings(config),
+    };
+    setSavedPresets((presets) => [next, ...presets].slice(0, 20));
+    setPresetName("");
+  }, [config, presetName, savedPresets.length]);
+
+  useEffect(() => {
     invoke("window_ready").catch((e) => {
       console.error("[Snap] window_ready failed — editor window will stay hidden:", e);
     });
   }, []);
 
-  // Sync playing state with video element
+  // Keep both transport buttons synchronized to one media controller. A
+  // guarded recovery path is used only when WebView2 has stopped delivering
+  // decoded frames; ordinary pause/resume never races multiple play() calls.
   useEffect(() => {
-    const el = document.querySelector<HTMLVideoElement>("video#preview-video");
-    if (el) {
-      videoRef.current = el;
-      const onPlay = () => setPlaying(true);
-      const onPause = () => setPlaying(false);
-      el.addEventListener("play", onPlay);
-      el.addEventListener("pause", onPause);
-      return () => {
-        el.removeEventListener("play", onPlay);
-        el.removeEventListener("pause", onPause);
-        videoRef.current = null;
-      };
-    }
-  }, [videoPath]);
-
-  const togglePlay = useCallback(() => {
-    const el = videoRef.current ?? document.querySelector<HTMLVideoElement>("video#preview-video");
+    const el = mediaElement;
     if (!el) return;
-    if (el.paused) {
-      el.play()?.catch(() => {});
-      setPlaying(true);
-    } else {
+    videoRef.current = el;
+
+    const clearRecovery = () => {
+      if (playbackRecoveryTimerRef.current !== null) {
+        window.clearTimeout(playbackRecoveryTimerRef.current);
+        playbackRecoveryTimerRef.current = null;
+      }
+    };
+    const onPlaying = () => {
+      playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
+      if (desiredPlayingRef.current) setPlaying(true);
+    };
+    const onPause = () => {
+      setPlaying(false);
+      // A pause outside an in-flight start/recovery is authoritative. This is
+      // what prevents a stale "wants to play" flag from turning the next Play
+      // click into another Pause command.
+      if (!playbackStartRequestRef.current && !playbackRecoveryInFlightRef.current) {
+        desiredPlayingRef.current = false;
+      }
+    };
+    const onEnded = () => {
+      desiredPlayingRef.current = false;
+      setPlaying(false);
+    };
+    const onProgress = () => {
+      if (Math.abs(el.currentTime - playbackProgressRef.current.mediaTime) >= 0.015) {
+        playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
+      }
+      setCurrentTime(el.currentTime);
+    };
+    const recoverPlayback = () => {
+      if (!desiredPlayingRef.current || playbackRecoveryInFlightRef.current) return;
+      clearRecovery();
+      const request = playbackRequestRef.current;
+      const stalledAt = el.currentTime;
+      playbackRecoveryTimerRef.current = window.setTimeout(async () => {
+        playbackRecoveryTimerRef.current = null;
+        if (!desiredPlayingRef.current || request !== playbackRequestRef.current || el.ended) return;
+        if (Math.abs(el.currentTime - stalledAt) >= 0.015) return;
+
+        playbackRecoveryInFlightRef.current = true;
+        const { start, end: configuredEnd } = playbackBoundsRef.current;
+        const end = configuredEnd || el.duration || Number.POSITIVE_INFINITY;
+        const restartAt = Math.max(start, Math.min(end - 0.04, stalledAt - 0.045));
+        try {
+          // A short backward seek makes the decoder produce a fresh frame and
+          // avoids skipping content. It is less disruptive than load(), which
+          // resets the full media resource and rejects pending play promises.
+          el.currentTime = Math.max(start, restartAt);
+          await waitForPlayable(el, 1000);
+          if (!desiredPlayingRef.current || request !== playbackRequestRef.current) return;
+          const beforePlay = el.currentTime;
+          await el.play();
+          const advanced = await waitForDecodedFrame(el, beforePlay, 1200);
+          if (!advanced && desiredPlayingRef.current && request === playbackRequestRef.current) {
+            // Last-resort decoder reset. There is no pending play() at this
+            // point, so load() cannot race an unresolved playback promise.
+            const resumeAt = el.currentTime;
+            el.pause();
+            el.load();
+            await waitForPlayable(el, 1800);
+            el.currentTime = Math.max(start, Math.min(resumeAt, end - 0.04));
+            await waitForPlayable(el, 1200);
+            if (desiredPlayingRef.current && request === playbackRequestRef.current) {
+              await el.play();
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            console.warn("[Snap] Preview decoder recovery failed:", error);
+          }
+        } finally {
+          playbackRecoveryInFlightRef.current = false;
+          if (desiredPlayingRef.current && request === playbackRequestRef.current && !el.paused) {
+            playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
+            setPlaying(true);
+          }
+        }
+      }, 520);
+    };
+
+    el.addEventListener("play", onPlaying);
+    el.addEventListener("playing", onPlaying);
+    el.addEventListener("pause", onPause);
+    el.addEventListener("ended", onEnded);
+    el.addEventListener("timeupdate", onProgress);
+    el.addEventListener("waiting", recoverPlayback);
+    el.addEventListener("stalled", recoverPlayback);
+
+    const watchdog = window.setInterval(() => {
+      if (!desiredPlayingRef.current || el.paused || el.ended) return;
+      const progress = playbackProgressRef.current;
+      if (performance.now() - progress.changedAt > 1500 && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        recoverPlayback();
+      }
+    }, 650);
+
+    return () => {
+      desiredPlayingRef.current = false;
+      clearRecovery();
+      window.clearInterval(watchdog);
+      el.removeEventListener("play", onPlaying);
+      el.removeEventListener("playing", onPlaying);
+      el.removeEventListener("pause", onPause);
+      el.removeEventListener("ended", onEnded);
+      el.removeEventListener("timeupdate", onProgress);
+      el.removeEventListener("waiting", recoverPlayback);
+      el.removeEventListener("stalled", recoverPlayback);
+      videoRef.current = null;
+    };
+  }, [mediaElement, videoPath]);
+
+  const togglePlay = useCallback(async () => {
+    const attachedElement = document.querySelector<HTMLVideoElement>("video#preview-video");
+    const el = attachedElement ?? videoRef.current;
+    if (!el) return;
+    if (videoRef.current !== el) videoRef.current = el;
+
+    const request = ++playbackRequestRef.current;
+    const startIsPending = playbackStartRequestRef.current !== 0;
+    // Decide from the real media state, not an old desired state. A second
+    // click during startup still cancels that pending start immediately.
+    if ((!el.paused && !el.ended) || startIsPending) {
+      desiredPlayingRef.current = false;
+      playbackStartRequestRef.current = 0;
       el.pause();
       setPlaying(false);
+      return;
     }
-  }, []);
+
+    desiredPlayingRef.current = true;
+    playbackStartRequestRef.current = request;
+
+    const start = Math.max(0, config.trimStart);
+    const end = config.trimEnd || el.duration || duration;
+    if (el.ended || (end > start && el.currentTime >= end - 0.025) || el.currentTime < start) {
+      el.currentTime = start;
+      setCurrentTime(start);
+      await waitForPlayable(el);
+    } else if (el.seeking || el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      await waitForPlayable(el);
+    }
+
+    if (playbackRequestRef.current !== request || !desiredPlayingRef.current) return;
+
+    try {
+      const beforePlay = el.currentTime;
+      await el.play();
+      if (playbackRequestRef.current !== request || !desiredPlayingRef.current) {
+        el.pause();
+        return;
+      }
+      playbackStartRequestRef.current = 0;
+      playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
+      setPlaying(!el.paused);
+      const advanced = await waitForDecodedFrame(el, beforePlay);
+      if (!advanced && playbackRequestRef.current === request && desiredPlayingRef.current) {
+        // Let the single watchdog/recovery path repair the decoder. Do not
+        // issue a second play() here and race the first command.
+        playbackProgressRef.current = { mediaTime: beforePlay, changedAt: performance.now() - 2000 };
+        el.dispatchEvent(new Event("stalled"));
+      }
+    } catch (error) {
+      if (playbackRequestRef.current !== request) return;
+      desiredPlayingRef.current = false;
+      setPlaying(false);
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        console.warn("[Snap] Preview playback could not resume:", error);
+      }
+    } finally {
+      if (playbackStartRequestRef.current === request) playbackStartRequestRef.current = 0;
+    }
+  }, [config.trimEnd, config.trimStart, duration]);
 
   // Pause playback at the trim end / keep playhead inside the trim range
   useEffect(() => {
@@ -153,6 +557,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     const onTime = () => {
       const end = config.trimEnd || el.duration || 0;
       if (!el.paused && end > 0 && el.currentTime >= end) {
+        desiredPlayingRef.current = false;
+        playbackRequestRef.current += 1;
         el.pause();
         el.currentTime = end;
         setCurrentTime(end);
@@ -234,21 +640,118 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     }
   };
 
-  const addManualZoomAt = (point: { x: number; y: number }) => {
+  const getOccupiedZoomRanges = useCallback((frames: Keyframe[], timelineEndMs: number) => {
+    const sorted = [...frames].sort((a, b) => a.time - b.time);
+    const ranges: Array<{ startMs: number; endMs: number }> = [];
+    let startMs: number | null = null;
+    for (const frame of sorted) {
+      if (frame.scale > 1.02 && startMs === null) {
+        startMs = Math.max(0, frame.time - (frame.duration || 0));
+      } else if (frame.scale <= 1.02 && startMs !== null) {
+        ranges.push({ startMs, endMs: Math.max(startMs + 100, frame.time) });
+        startMs = null;
+      }
+    }
+    if (startMs !== null) ranges.push({ startMs, endMs: timelineEndMs });
+    return ranges;
+  }, []);
+
+  const resolvedSelectedZoom = useMemo(
+    () => resolveZoomRegion(keyframes, selectedZoomRegion, Math.round((config.trimEnd || duration) * 1000)),
+    [config.trimEnd, duration, keyframes, selectedZoomRegion]
+  );
+
+  const updateSelectedZoom = useCallback((patch: Partial<ZoomRegionSettings>) => {
+    const region = resolvedSelectedZoom;
+    if (!region) return;
+    const timelineStartMs = Math.round(config.trimStart * 1000);
+    const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
+    const startMs = Math.max(timelineStartMs, Math.min(patch.startMs ?? region.startMs, region.endMs - 350));
+    const endMs = Math.min(timelineEndMs, Math.max(patch.endMs ?? region.endMs, startMs + 350));
+    const oldDuration = Math.max(1, region.endMs - region.startMs);
+    const newDuration = Math.max(1, endMs - startMs);
+    const timeRatio = newDuration / oldDuration;
+    const memberSet = new Set(region.memberIndices);
+    const zoomSet = new Set(region.zoomIndices);
+
+    const updated = keyframes.map((frame, index) => {
+      if (!memberSet.has(index)) return frame;
+      const next = { ...frame };
+      next.time = Math.round(startMs + (frame.time - region.startMs) * timeRatio);
+      if (frame.duration > 0) next.duration = Math.max(40, Math.round(frame.duration * timeRatio));
+      if (zoomSet.has(index)) {
+        if (patch.scale !== undefined) next.scale = patch.scale;
+        if (patch.x !== undefined) next.x = patch.x;
+        if (patch.y !== undefined) next.y = patch.y;
+      }
+      if (patch.transitionMs !== undefined && (index === region.zoomIndices[0] || index === region.resetIndex)) {
+        next.duration = Math.min(Math.round(newDuration / 2), Math.max(40, patch.transitionMs));
+      }
+      return next;
+    }).sort((a, b) => a.time - b.time);
+
+    setKeyframes(updated);
+    setSelectedZoomRegion({ startMs, endMs });
+  }, [config.trimEnd, config.trimStart, duration, keyframes, resolvedSelectedZoom]);
+
+  const deleteSelectedZoom = useCallback(() => {
+    if (!resolvedSelectedZoom) return;
+    const memberSet = new Set(resolvedSelectedZoom.memberIndices);
+    setKeyframes(keyframes.filter((_, index) => !memberSet.has(index)));
+    setSelectedZoomRegion(null);
+  }, [keyframes, resolvedSelectedZoom]);
+
+  const handleAddManualZoom = useCallback(() => {
     const videoEndMs = Math.max(0, Math.round((config.trimEnd || duration) * 1000));
     const trimStartMs = Math.round(config.trimStart * 1000);
-    const latestStartMs = Math.max(trimStartMs, videoEndMs - 600);
-    const startMs = Math.min(latestStartMs, Math.max(trimStartMs, Math.round(currentTime * 1000)));
-    const endMs = Math.min(videoEndMs, startMs + 3000);
-    const available = Math.max(300, endMs - startMs);
-    const transitionMs = Math.min(450, Math.max(150, Math.round(available * 0.18)));
+    if (videoEndMs - trimStartMs < 600) return;
+
+    const occupied = getOccupiedZoomRanges(keyframes, videoEndMs);
+    const minRegionMs = 1400;
+    const preferredRegionMs = 4200;
+    let startMs = Math.min(videoEndMs - minRegionMs, Math.max(trimStartMs, Math.round(currentTime * 1000)));
+
+    // Keep every existing auto/manual bar intact. If the playhead is already
+    // inside one, place the new region in the nearest available gap instead.
+    for (const range of occupied) {
+      if (startMs < range.endMs + 80 && startMs + minRegionMs > range.startMs - 80) {
+        startMs = range.endMs + 80;
+      }
+    }
+    if (startMs + minRegionMs > videoEndMs) {
+      let gapStart = trimStartMs;
+      let found = false;
+      for (const range of occupied) {
+        if (range.startMs - gapStart >= minRegionMs) {
+          startMs = gapStart;
+          found = true;
+          break;
+        }
+        gapStart = Math.max(gapStart, range.endMs + 80);
+      }
+      if (!found && videoEndMs - gapStart >= minRegionMs) {
+        startMs = gapStart;
+        found = true;
+      }
+      if (!found) return;
+    }
+
+    const nextOccupied = occupied.find((range) => range.startMs > startMs);
+    const availableEndMs = nextOccupied ? Math.min(videoEndMs, nextOccupied.startMs - 80) : videoEndMs;
+    const endMs = Math.min(availableEndMs, startMs + preferredRegionMs);
+    const available = Math.max(minRegionMs, endMs - startMs);
+    // Manual camera moves use the same speed setting as auto zoom. The old
+    // hard 450ms ceiling made every manual region snap in and out regardless
+    // of the selected movement speed.
+    const requestedTransitionMs = Math.max(600, Math.min(1500, getMovementDuration(config.zoomMovement)));
+    const transitionMs = Math.max(450, Math.min(requestedTransitionMs, Math.floor((available - 500) / 2)));
     const zoomInMs = Math.min(endMs, startMs + transitionMs);
     const holdUntilMs = Math.max(zoomInMs, endMs - transitionMs);
     const zoomKf: Keyframe = {
       time: zoomInMs,
       duration: transitionMs,
-      x: point.x,
-      y: point.y,
+      x: 0.5,
+      y: 0.5,
       scale: config.zoomLevel || 2.0,
       easing: "ease-in-out",
     };
@@ -262,19 +765,40 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       easing: "ease-in-out",
     };
     const base = keyframes.length > 0
-      ? keyframes.filter((frame) => frame.time < startMs || frame.time > endMs)
+      ? keyframes
       : [{ time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1, easing: "ease" as const }];
     const updated = [...base, zoomKf, holdKf, resetKf].sort((a, b) => a.time - b.time);
     setKeyframes(updated);
-    setZoomTargetMode(false);
-  };
+    setConfig((current) => ({ ...current, zoomMode: "manual" }));
+    manualTargetRangeRef.current = { startMs, endMs };
+    setSelectedZoomRegion({ startMs, endMs });
+    // The bar exists immediately. The next preview click only changes its
+    // focus point; Escape keeps the new centered bar.
+    setZoomTargetMode(true);
+  }, [config.trimEnd, config.trimStart, config.zoomLevel, config.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
 
-  const handleAddManualZoom = () => setZoomTargetMode(true);
+  const updateManualZoomTarget = useCallback((point: { x: number; y: number }) => {
+    const range = manualTargetRangeRef.current;
+    if (!range) {
+      setZoomTargetMode(false);
+      return;
+    }
+    setKeyframes((frames) => frames.map((frame) => (
+      frame.scale > 1.02 && frame.time >= range.startMs && frame.time < range.endMs
+        ? { ...frame, x: point.x, y: point.y }
+        : frame
+    )));
+    manualTargetRangeRef.current = null;
+    setZoomTargetMode(false);
+  }, []);
 
   useEffect(() => {
     if (!zoomTargetMode) return;
     const cancel = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setZoomTargetMode(false);
+      if (event.key === "Escape") {
+        manualTargetRangeRef.current = null;
+        setZoomTargetMode(false);
+      }
     };
     window.addEventListener("keydown", cancel);
     return () => window.removeEventListener("keydown", cancel);
@@ -297,11 +821,72 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         </div>
 
         <div className="ss-topbar-center">
-          {/* Quick Presets / Undo */}
-          <div className="ss-presets-pill">
-            <Clock size={16} />
-            <span>Presets</span>
-            <ChevronDown size={14} />
+          <div className="ss-presets-wrap" ref={presetMenuRef}>
+            <button
+              className={`ss-presets-pill ${showPresets ? "active" : ""}`}
+              onClick={() => setShowPresets((open) => !open)}
+              aria-expanded={showPresets}
+              aria-haspopup="dialog"
+            >
+              <Bookmark size={15} />
+              <span>Presets</span>
+              {savedPresets.length > 0 && <span className="preset-count">{savedPresets.length}</span>}
+              <ChevronDown size={14} className={showPresets ? "rotate" : ""} />
+            </button>
+
+            {showPresets && (
+              <div className="presets-popover" role="dialog" aria-label="Editor presets">
+                <div className="presets-popover-head">
+                  <div>
+                    <strong>Saved looks</strong>
+                    <span>Reuse your canvas, cursor, motion and audio settings.</span>
+                  </div>
+                </div>
+
+                <div className="preset-save-row">
+                  <input
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter") saveCurrentPreset(); }}
+                    placeholder={`Preset ${savedPresets.length + 1}`}
+                    maxLength={36}
+                    aria-label="Preset name"
+                  />
+                  <button onClick={saveCurrentPreset} title="Save current settings">
+                    <Save size={15} />
+                    Save
+                  </button>
+                </div>
+
+                <div className="preset-list">
+                  <button className="preset-row built-in" onClick={() => applyPresetSettings(snapshotPresetSettings(DEFAULT_EDITOR_CONFIG))}>
+                    <span className="preset-row-icon"><RotateCcw size={15} /></span>
+                    <span className="preset-row-copy"><strong>Snap Default</strong><small>Restore the default editor look</small></span>
+                  </button>
+
+                  {savedPresets.map((preset) => (
+                    <div className="preset-row" key={preset.id}>
+                      <button className="preset-apply-btn" onClick={() => applyPresetSettings(preset.settings)}>
+                        <span className="preset-row-icon"><Bookmark size={15} /></span>
+                        <span className="preset-row-copy"><strong>{preset.name}</strong><small>Apply saved settings</small></span>
+                      </button>
+                      <button
+                        className="preset-delete-btn"
+                        onClick={() => setSavedPresets((presets) => presets.filter((item) => item.id !== preset.id))}
+                        title={`Delete ${preset.name}`}
+                        aria-label={`Delete ${preset.name}`}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+
+                  {savedPresets.length === 0 && (
+                    <p className="preset-empty">Save your current setup and it will appear here.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -316,16 +901,17 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           </button>
 
           <div className="ss-window-controls">
-            <button className="window-btn" title="Minimize" onClick={() => appWindow.minimize()}>
+            <button className="window-btn" title="Minimize" onClick={() => appWindow?.minimize()}>
               <Minus size={15} />
             </button>
             <button className="window-btn" title={isMaximized ? "Restore" : "Maximize"} onClick={async () => {
+              if (!appWindow) return;
               await appWindow.toggleMaximize();
               setIsMaximized(await appWindow.isMaximized());
             }}>
               <MorphIcon icon={isMaximized ? RestoreIcon : SquareIcon} spring="snappy" size={15} />
             </button>
-            <button className="window-btn close-btn" title="Close" onClick={() => appWindow.close()}>
+            <button className="window-btn close-btn" title="Close" onClick={() => appWindow?.close()}>
               <X size={15} />
             </button>
           </div>
@@ -392,6 +978,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
               setDuration(d);
               setConfig((c) => (c.trimEnd === 0 ? { ...c, trimEnd: d } : c));
             }}
+            onMediaElementChange={setMediaElement}
             onClick={togglePlay}
             cropMode={cropMode}
             onCropApply={handleCropApply}
@@ -402,7 +989,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
               layers: c.layers.map((layer) => layer.id === updated.id ? updated : layer),
             }))}
             zoomTargetMode={zoomTargetMode}
-            onZoomTargetPick={addManualZoomAt}
+            zoomFocusPoint={resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
+            onZoomTargetPick={updateManualZoomTarget}
             autoZoomRevision={autoZoomRevision}
           />
         </div>
@@ -413,7 +1001,6 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           onConfigChange={setConfig}
           duration={duration}
           currentTime={currentTime}
-          keyframesCount={keyframes.length}
           layers={config.layers}
           selectedLayerId={selectedLayerId}
           onAddLayer={(layer: Layer) => setConfig((c) => ({ ...c, layers: [...c.layers, layer] }))}
@@ -422,17 +1009,17 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           onAddManualZoom={handleAddManualZoom}
           onRegenerateAutoZoom={() => {
             setConfig((c) => ({ ...c, zoomMode: "auto" }));
+            setSelectedZoomRegion(null);
             setAutoZoomRevision((value) => value + 1);
           }}
           onZoomModeChange={(mode) => {
             setConfig((c) => ({ ...c, zoomMode: mode }));
             setZoomTargetMode(false);
-            if (mode === "auto") {
-              setAutoZoomRevision((value) => value + 1);
-            } else {
-              setKeyframes([{ time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1, easing: "ease" }]);
-            }
+            manualTargetRangeRef.current = null;
           }}
+          selectedZoomRegion={resolvedSelectedZoom}
+          onSelectedZoomChange={updateSelectedZoom}
+          onDeleteSelectedZoom={deleteSelectedZoom}
         />
       </div>
 
@@ -459,6 +1046,22 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         onUndo={undo}
         onRedo={redo}
         onKeyframesChange={setKeyframes}
+        selectedZoomRegion={selectedZoomRegion}
+        onZoomRegionSelect={(region) => {
+          // Selecting a bar enters focus editing at the beginning of that
+          // camera move. This keeps the source frame stable while the blue
+          // focus marker is repositioned in the preview.
+          desiredPlayingRef.current = false;
+          playbackRequestRef.current += 1;
+          playbackStartRequestRef.current = 0;
+          videoRef.current?.pause();
+          setPlaying(false);
+          setSelectedZoomRegion(region);
+          setActiveTool("motion");
+          manualTargetRangeRef.current = region;
+          setZoomTargetMode(true);
+          seekTo(region.startMs / 1000);
+        }}
         onAudioMuteChange={(track, muted) => setConfig((current) => ({
           ...current,
           audio: {

@@ -8,6 +8,26 @@ export function assetSrc(path: string): string {
   return path.startsWith("/") ? path : convertFileSrc(path);
 }
 
+const sharedImageCache = new Map<string, HTMLImageElement>();
+
+export function preloadImageAsset(path: string): HTMLImageElement {
+  const src = assetSrc(path);
+  const cached = sharedImageCache.get(src);
+  if (cached) return cached;
+
+  if (sharedImageCache.size > 48) {
+    const first = sharedImageCache.keys().next().value;
+    if (first) sharedImageCache.delete(first);
+  }
+
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.decoding = "async";
+  img.src = src;
+  sharedImageCache.set(src, img);
+  return img;
+}
+
 export function loadCachedImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
   const cached = cache.get(path);
   if (cached) return cached;
@@ -16,9 +36,7 @@ export function loadCachedImage(path: string, cache: Map<string, HTMLImageElemen
     const first = cache.keys().next().value;
     if (first) cache.delete(first);
   }
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = assetSrc(path);
+  const img = preloadImageAsset(path);
   cache.set(path, img);
   return img;
 }

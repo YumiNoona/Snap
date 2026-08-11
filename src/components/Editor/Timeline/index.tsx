@@ -1,10 +1,10 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { PlayCircle, PauseCircle, ChevronDown, ChevronUp, Volume2 as Volume2Icon, VolumeX as VolumeXIcon, Mic as MicIcon, MicOff as MicOffIcon } from "lucide";
+import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2 } from "lucide-react";
-import type { Keyframe, EditorConfig } from "../../../lib/types";
+import type { Keyframe, EditorConfig, ZoomRegionSelection } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import "./Timeline.css";
 
@@ -29,6 +29,8 @@ interface Props {
   onRedo: () => void;
   onKeyframesChange: (keyframes: Keyframe[]) => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
+  selectedZoomRegion: ZoomRegionSelection | null;
+  onZoomRegionSelect: (region: ZoomRegionSelection) => void;
 }
 
 interface ZoomSegment {
@@ -62,6 +64,8 @@ export default function Timeline({
   onRedo,
   onKeyframesChange,
   onAudioMuteChange,
+  selectedZoomRegion,
+  onZoomRegionSelect,
 }: Props) {
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -170,6 +174,7 @@ export default function Timeline({
   const beginZoomEdit = (event: React.PointerEvent, segment: ZoomSegment, mode: "move" | "start" | "end") => {
     event.preventDefault();
     event.stopPropagation();
+    onZoomRegionSelect({ startMs: Math.round(segment.start * 1000), endMs: Math.round(segment.end * 1000) });
     const startX = event.clientX;
     const initial = keyframes.map((frame) => ({ ...frame }));
     const editingSegment: ZoomSegment = { ...segment, memberIndices: [...segment.memberIndices] };
@@ -259,7 +264,10 @@ export default function Timeline({
 
     const onUp = () => {
       cleanup();
-      if (pendingKeyframes) onKeyframesChange(pendingKeyframes);
+      if (pendingKeyframes) {
+        onKeyframesChange(pendingKeyframes);
+        onZoomRegionSelect({ startMs: Math.round(visualStartMs), endMs: Math.round(visualEndMs) });
+      }
     };
     const onCancel = () => {
       cleanup();
@@ -407,8 +415,15 @@ export default function Timeline({
               <SkipBack size={16} fill="currentColor" />
             </button>
 
-            <button className="tb-play-circle-btn" onClick={onTogglePlay} title={playing ? "Pause" : "Play"}>
-              <MorphIcon icon={playing ? PauseCircle : PlayCircle} spring="snappy" size={21} />
+            <button
+              className={`tb-play-icon-btn ${playing ? "is-playing" : "is-paused"}`}
+              onClick={onTogglePlay}
+              title={playing ? "Pause" : "Play"}
+              aria-label={playing ? "Pause preview" : "Play preview"}
+            >
+              <span className="tb-play-morph-icon" aria-hidden="true">
+                <MorphIcon icon={playing ? Pause : Play} spring="snappy" size={19} />
+              </span>
             </button>
 
             <button className="tb-transport-btn" onClick={() => onSeek(duration)} title="Jump to End">
@@ -454,23 +469,23 @@ export default function Timeline({
           <div className="track-label">Video</div>
           <div className="track-label audio-label">
             <button
-              className={`track-mute-btn ${config.audio.systemMuted ? "muted" : ""}`}
+              className={`track-label-button ${config.audio.systemMuted ? "muted" : ""}`}
               onClick={() => onAudioMuteChange("system", !config.audio.systemMuted)}
               title={config.audio.systemMuted ? "Unmute desktop audio" : "Mute desktop audio"}
             >
-              <MorphIcon icon={config.audio.systemMuted ? VolumeXIcon : Volume2Icon} spring="snappy" size={15} />
+              <span>Desktop</span>
+              <span className="audio-state-dot" aria-hidden="true" />
             </button>
-            <span>Desktop</span>
           </div>
           <div className="track-label audio-label">
             <button
-              className={`track-mute-btn ${config.audio.micMuted ? "muted" : ""}`}
+              className={`track-label-button ${config.audio.micMuted ? "muted" : ""}`}
               onClick={() => onAudioMuteChange("mic", !config.audio.micMuted)}
               title={config.audio.micMuted ? "Unmute microphone" : "Mute microphone"}
             >
-              <MorphIcon icon={config.audio.micMuted ? MicOffIcon : MicIcon} spring="snappy" size={15} />
+              <span>Mic</span>
+              <span className="audio-state-dot" aria-hidden="true" />
             </button>
-            <span>Microphone</span>
           </div>
           <div className="track-label">Zoom</div>
         </div>
@@ -517,7 +532,7 @@ export default function Timeline({
             {zoomSegments.map((segment, index) => (
               <div
                 key={`zoom-${index}`}
-                className="zoom-segment-bar"
+                className={`zoom-segment-bar ${selectedZoomRegion && Math.abs(selectedZoomRegion.startMs - segment.start * 1000) < 2 && Math.abs(selectedZoomRegion.endMs - segment.end * 1000) < 2 ? "selected" : ""}`}
                 style={{ left: x(segment.start), width: Math.max(18, w(segment.end - segment.start)) }}
                 onPointerDown={(event) => beginZoomEdit(event, segment, "move")}
                 onClick={(event) => event.stopPropagation()}

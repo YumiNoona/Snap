@@ -15,6 +15,19 @@
   max-height: 100%;
 }
 
+/* Keep the decoder attached to a rendered element. WebView2 can throttle a
+   display:none video after pausing, which makes a later play() look successful
+   while frames remain frozen. */
+.preview-media-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  left: -2px;
+  bottom: -2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .preview-error {
   position: absolute;
   top: var(--space-4);
@@ -39,14 +52,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.7);
+  width: 56px;
+  height: 56px;
+  border: 0;
+  background: transparent;
   color: var(--text-primary);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.72));
   transition: opacity var(--dur-base) var(--ease-standard), transform var(--dur-base) var(--ease-standard);
   cursor: pointer;
   pointer-events: auto;
+}
+
+.play-overlay:hover {
+  color: #ffffff;
+  transform: scale(1.08);
 }
 
 .play-overlay.hidden {

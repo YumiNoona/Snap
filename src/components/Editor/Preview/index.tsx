@@ -23,6 +23,7 @@ interface Props {
   playing: boolean;
   onTimeUpdate: (t: number) => void;
   onDuration: (d: number) => void;
+  onMediaElementChange?: (element: HTMLVideoElement | null) => void;
   onClick?: () => void;
   cropMode?: boolean;
   onCropApply?: (crop: { x: number; y: number; w: number; h: number } | null) => void;
@@ -30,6 +31,7 @@ interface Props {
   selectedLayerId?: string | null;
   onLayerChange?: (layer: Layer) => void;
   zoomTargetMode?: boolean;
+  zoomFocusPoint?: { x: number; y: number } | null;
   onZoomTargetPick?: (point: { x: number; y: number }) => void;
   autoZoomRevision?: number;
 }
@@ -43,6 +45,7 @@ export default function Preview({
   playing,
   onTimeUpdate,
   onDuration,
+  onMediaElementChange,
   onClick,
   cropMode = false,
   onCropApply,
@@ -50,6 +53,7 @@ export default function Preview({
   selectedLayerId = null,
   onLayerChange,
   zoomTargetMode = false,
+  zoomFocusPoint = null,
   onZoomTargetPick,
   autoZoomRevision = 0,
 }: Props) {
@@ -62,7 +66,9 @@ export default function Preview({
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
   const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
   const cropDrag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const suppressPlayUntilRef = useRef(0);
   const geomRef = useRef({ offsetX: 0, offsetY: 0, videoW: 1280, videoH: 720, cw: 1280, ch: 720 });
+  const sourceViewRef = useRef({ x: 0, y: 0, w: 1280, h: 720, baseX: 0, baseY: 0, baseW: 1280, baseH: 720 });
   const mouseMoveEvents = useRef<InputEvent[]>([]);
   const allEvents = useRef<InputEvent[]>([]);
   const clickEvents = useRef<InputEvent[]>([]);
@@ -149,8 +155,16 @@ export default function Preview({
     kfGenerated.current = true;
     generatedRevision.current = autoZoomRevision;
     if (allEvents.current.length > 0) {
+      // Input hooks report desktop coordinates. Normalize them into the
+      // captured video's pixel space so region/window recordings focus on the
+      // actual click instead of drifting toward the desktop origin.
+      const zoomEvents = allEvents.current.map((event) => {
+        if (typeof event.x !== "number" || typeof event.y !== "number") return event;
+        const point = screenToVideoShared(regionRef.current, event.x, event.y, meta.w, meta.h);
+        return { ...event, x: point.x, y: point.y };
+      });
       const kf = generateKeyframes(
-        allEvents.current,
+        zoomEvents,
         meta.w,
         meta.h,
         meta.d * 1000,
@@ -421,6 +435,10 @@ export default function Preview({
     // so the frame fills without distorting.
     const cover = computeCoverRect(effX, effY, effW, effH, videoW, videoH);
     const coverX = cover.x, coverY = cover.y, coverW = cover.w, coverH = cover.h;
+    sourceViewRef.current = {
+      x: coverX, y: coverY, w: coverW, h: coverH,
+      baseX, baseY, baseW, baseH,
+    };
 
     if (coverW > 0.5 && coverH > 0.5) {
       const prevZoom = previousZoomRef.current;
@@ -628,9 +646,35 @@ export default function Preview({
       ctx.restore();
     }
 
-    if (zoomTargetMode) {
+    if (zoomFocusPoint) {
+      const focusSourceX = baseX + zoomFocusPoint.x * baseW;
+      const focusSourceY = baseY + zoomFocusPoint.y * baseH;
+      const focusX = offsetX + ((focusSourceX - coverX) / Math.max(1, coverW)) * videoW;
+      const focusY = offsetY + ((focusSourceY - coverY) / Math.max(1, coverH)) * videoH;
+      const isVisible = focusX >= offsetX - 12 && focusX <= offsetX + videoW + 12 &&
+        focusY >= offsetY - 12 && focusY <= offsetY + videoH + 12;
+      if (isVisible) {
+        ctx.save();
+        ctx.shadowColor = "rgba(37, 99, 235, 0.65)";
+        ctx.shadowBlur = 12;
+        ctx.fillStyle = "#3b82f6";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.96)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(focusX, focusY, zoomTargetMode ? 11 : 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(59, 130, 246, 0.72)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(focusX, focusY, zoomTargetMode ? 20 : 15, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    } else if (zoomTargetMode) {
       ctx.save();
-      ctx.strokeStyle = "#a855f7"; ctx.fillStyle = "rgba(168,85,247,0.2)"; ctx.lineWidth = 2;
+      ctx.strokeStyle = "#3b82f6"; ctx.fillStyle = "rgba(59,130,246,0.2)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(offsetX + videoW / 2, offsetY + videoH / 2, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.restore();
     }
@@ -651,7 +695,7 @@ export default function Preview({
       prevTimeRef.current = ts;
     }
   }, [
-    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode,
+    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint,
     getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
   ]);
   renderRef.current = render;
@@ -690,16 +734,30 @@ export default function Preview({
     };
   }, []);
 
+  const handleZoomTargetClick = useCallback((e: React.MouseEvent) => {
+    if (!zoomTargetMode || !onZoomTargetPick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    suppressPlayUntilRef.current = performance.now() + 300;
+    const p = canvasToBacking(e.clientX, e.clientY);
+    const g = geomRef.current;
+    const view = sourceViewRef.current;
+    const sourceX = view.x + ((p.x - g.offsetX) / Math.max(1, g.videoW)) * view.w;
+    const sourceY = view.y + ((p.y - g.offsetY) / Math.max(1, g.videoH)) * view.h;
+    onZoomTargetPick({
+      x: Math.max(0, Math.min(1, (sourceX - view.baseX) / Math.max(1, view.baseW))),
+      y: Math.max(0, Math.min(1, (sourceY - view.baseY) / Math.max(1, view.baseH))),
+    });
+  }, [zoomTargetMode, onZoomTargetPick, canvasToBacking]);
+
   const handleCropMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (zoomTargetMode && onZoomTargetPick) {
-        e.preventDefault(); e.stopPropagation();
-        const p = canvasToBacking(e.clientX, e.clientY);
-        const g = geomRef.current;
-        onZoomTargetPick({
-          x: Math.max(0, Math.min(1, (p.x - g.offsetX) / g.videoW)),
-          y: Math.max(0, Math.min(1, (p.y - g.offsetY) / g.videoH)),
-        });
+        // Keep target mode active through the entire pointer sequence. If it
+        // is cleared on mousedown, the Play overlay appears beneath the same
+        // pointer before mouseup and can accidentally start playback.
+        e.preventDefault();
+        e.stopPropagation();
         return;
       }
       if (!cropMode) {
@@ -794,13 +852,21 @@ export default function Preview({
     return () => window.removeEventListener("resize", onResize);
   }, [videoReady, computeCanvasSize]);
 
-  const togglePlay = () => onClick?.();
-  const videoUrl = convertFileSrc(videoPath);
+  const togglePlay = () => {
+    if (performance.now() < suppressPlayUntilRef.current) return;
+    onClick?.();
+  };
+  const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+    onMediaElementChange?.(element);
+  }, [onMediaElementChange]);
+  const videoUrl = videoPath.startsWith("/") ? videoPath : convertFileSrc(videoPath);
 
   return (
     <div
       className={`preview-container ${cropMode ? "crop-mode" : ""} ${zoomTargetMode ? "zoom-target-mode" : ""}`}
       ref={containerRef}
+      onClick={handleZoomTargetClick}
       onMouseDown={handleCropMouseDown}
       onMouseMove={handleCropMouseMove}
       onMouseUp={handleCropMouseUp}
@@ -814,7 +880,7 @@ export default function Preview({
         style={{ cursor: cropMode || zoomTargetMode ? "crosshair" : undefined }}
       />
       <div className="preview-controls" onClick={cropMode || zoomTargetMode || selectedLayerId ? undefined : togglePlay}>
-        <div className={`play-overlay ${playing ? "hidden" : ""}`}>
+        <div className={`play-overlay ${playing || cropMode || zoomTargetMode || selectedLayerId ? "hidden" : ""}`}>
           <Play size={44} fill="currentColor" />
         </div>
       </div>
@@ -828,10 +894,12 @@ export default function Preview({
         <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}
       <video
-        ref={videoRef}
+        ref={assignVideoElement}
         id="preview-video"
         src={videoUrl}
-        style={{ display: "none" }}
+        preload="auto"
+        playsInline
+        className="preview-media-source"
         onLoadedMetadata={onMetadata}
         onError={(e) => {
           const el = e.currentTarget as HTMLVideoElement;
@@ -872,5 +940,5 @@ function loadCursorImage(path: string, cache: Map<string, HTMLImageElement>): HT
 }
 
 function getWallpaperImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
-  return loadCachedImage(getWallpaperPreset(path)?.url ?? path, cache);
+  return loadCachedImage(getWallpaperPreset(path)?.previewUrl ?? path, cache);
 }

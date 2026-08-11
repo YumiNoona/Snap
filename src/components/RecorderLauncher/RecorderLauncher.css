@@ -525,6 +525,13 @@
 .modal-title-copy h3 { margin: 0; }
 
 .window-picker-card { width: 510px; height: min(390px, calc(100vh - 32px)); }
+.recording-picker-card { width: 500px; height: min(460px, calc(100vh - 32px)); }
+.recording-search-field { margin-top: 16px; }
+.recording-list { gap: 8px; }
+.recording-option-btn { min-height: 58px; padding: 8px 11px; }
+.recording-option-btn .window-option-icon { width: 34px; height: 34px; color: #bfdbfe; background: linear-gradient(145deg, rgba(59,130,246,.18), rgba(99,102,241,.1)); }
+.recording-option-btn .window-option-copy { gap: 3px; }
+.recording-option-btn .window-option-copy strong { font-size: 12.5px; }
 .window-search-field { display: flex; align-items: center; gap: 9px; height: 38px; margin: 15px 0 12px; padding: 0 11px; color: var(--text-tertiary); background: rgba(5,8,14,.58); border: 1px solid var(--border-subtle); border-radius: 9px; transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard); }
 .window-search-field:focus-within { color: var(--text-secondary); border-color: rgba(96,165,250,.7); box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
 .window-search-field input { min-width: 0; flex: 1; color: var(--text-primary); background: transparent; border: 0; outline: 0; font: inherit; font-size: 12px; }

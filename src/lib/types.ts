@@ -16,6 +16,18 @@ export interface Keyframe {
   easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out";
 }
 
+export interface ZoomRegionSelection {
+  startMs: number;
+  endMs: number;
+}
+
+export interface ZoomRegionSettings extends ZoomRegionSelection {
+  scale: number;
+  x: number;
+  y: number;
+  transitionMs: number;
+}
+
 export interface CursorPackState {
   name: string;
   path: string;

@@ -34,6 +34,12 @@ export default function RecordingDock() {
     };
   }, []);
 
+  // Tell Rust that the transparent WebView has mounted. If recording started
+  // before this page finished loading, Rust will immediately show it now.
+  useEffect(() => {
+    invoke("dock_window_ready").catch(() => {});
+  }, []);
+
   // Pull the current snapshot (window may open after recording already started).
   useEffect(() => {
     let alive = true;

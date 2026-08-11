@@ -71,21 +71,24 @@ function App() {
   // window just goes permanently blank, with nothing left to catch or show
   // an error for. Reading the label from the URL is synchronous, available
   // immediately on first paint, and has zero dependency on Tauri's IPC state.
-  const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
+  const windowParams = new URLSearchParams(window.location.search);
+  const windowLabel = windowParams.get("window") ?? "main";
+  const isEditorPreview = import.meta.env.DEV && windowParams.get("preview") === "1";
+  const editorPreviewVideo = windowParams.get("previewVideo") || "/__snap-editor-preview__.mp4";
   const isEditorWindow = windowLabel === "editor";
   const isDockWindow = windowLabel === "dock";
   const isOverlayWindow = windowLabel === "recorder-overlay";
   const isTeleprompterWindow = windowLabel === "teleprompter";
   const isSettingsWindow = windowLabel === "settings";
 
-  const [editorVideo, setEditorVideo] = useState("");
+  const [editorVideo, setEditorVideo] = useState(isEditorPreview ? editorPreviewVideo : "");
   const [editorLog, setEditorLog] = useState("");
   const [editorReady, setEditorReady] = useState(!isEditorWindow);
   const [editorError, setEditorError] = useState<string | null>(null);
 
   // Load the pending recording handed over by the launcher window.
   useEffect(() => {
-    if (!isEditorWindow) return;
+    if (!isEditorWindow || isEditorPreview) return;
     (async () => {
       try {
         const [video, log] = await invoke<[string, string]>("get_pending_editor_paths");
@@ -105,7 +108,7 @@ function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [isEditorWindow]);
+  }, [isEditorPreview, isEditorWindow]);
 
   const openInEditorWindow = useCallback(
     (video: string, log: string) => {
@@ -143,10 +146,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (isEditorWindow || isTeleprompterWindow || isSettingsWindow) {
+    if (!isEditorPreview && (isEditorWindow || isTeleprompterWindow || isSettingsWindow)) {
       invoke("window_ready").catch(() => {});
     }
-  }, [isEditorWindow, isTeleprompterWindow, isSettingsWindow]);
+  }, [isEditorPreview, isEditorWindow, isTeleprompterWindow, isSettingsWindow]);
 
   if (isDockWindow) {
     return (

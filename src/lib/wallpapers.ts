@@ -21,6 +21,8 @@ export interface WallpaperPreset {
   id: string;
   name: string;
   url: string;
+  previewUrl: string;
+  thumbnailUrl: string;
 }
 
 // ── 10 curated gradients (warm / cool / vivid) ────────────────────────────────
@@ -46,6 +48,14 @@ export const GRADIENT_PRESETS: GradientPreset[] = [
     { color: "#020617", offset: 0 }, { color: "#1e1b4b", offset: 55 }, { color: "#6d28d9", offset: 100 } ] },
   { id: "gradient-sunrise", name: "Golden Sunrise", type: "linear", angle: 110, colors: [
     { color: "#fef3c7", offset: 0 }, { color: "#f59e0b", offset: 55 }, { color: "#ef4444", offset: 100 } ] },
+  { id: "gradient-arctic", name: "Arctic Glass", type: "linear", angle: 145, colors: [
+    { color: "#ecfeff", offset: 0 }, { color: "#22d3ee", offset: 48 }, { color: "#2563eb", offset: 100 } ] },
+  { id: "gradient-rose-gold", name: "Rose Gold", type: "linear", angle: 125, colors: [
+    { color: "#fed7aa", offset: 0 }, { color: "#fb7185", offset: 52 }, { color: "#9f1239", offset: 100 } ] },
+  { id: "gradient-electric-lime", name: "Electric Lime", type: "linear", angle: 120, colors: [
+    { color: "#d9f99d", offset: 0 }, { color: "#22c55e", offset: 48 }, { color: "#115e59", offset: 100 } ] },
+  { id: "gradient-steel", name: "Steel Light", type: "radial", angle: 0, colors: [
+    { color: "#f8fafc", offset: 0 }, { color: "#94a3b8", offset: 54 }, { color: "#1e293b", offset: 100 } ] },
 ];
 
 // ── 10 curated solid colors ─────────────────────────────────────────────────
@@ -61,20 +71,24 @@ export const COLOR_PRESETS: ColorPreset[] = [
   { id: "color-amber", name: "Amber", color: "#f59e0b" },
   { id: "color-emerald", name: "Emerald", color: "#10b981" },
   { id: "color-forest", name: "Forest Green", color: "#14532d" },
+  { id: "color-indigo", name: "Royal Indigo", color: "#4338ca" },
+  { id: "color-coral", name: "Soft Coral", color: "#fb7185" },
+  { id: "color-cyan", name: "Bright Cyan", color: "#06b6d4" },
+  { id: "color-sand", name: "Warm Sand", color: "#d6a85f" },
 ];
 
 export const WALLPAPER_PRESETS: WallpaperPreset[] = [
-  { id: "wallpaper-abstract", name: "Abstract", url: "/Wallpapers/Abstract.jpg" },
-  { id: "wallpaper-blue-waves", name: "Blue Waves", url: "/Wallpapers/BlueWaves.jpg" },
-  { id: "wallpaper-candle", name: "Candle", url: "/Wallpapers/Candle.png" },
-  { id: "wallpaper-color-wave", name: "Color Wave", url: "/Wallpapers/ColorWave.jpg" },
-  { id: "wallpaper-graffiti-wave", name: "Graffiti Wave", url: "/Wallpapers/GrafitiWave.jpg" },
-  { id: "wallpaper-kawaii", name: "Kawaii", url: "/Wallpapers/Kawaii.jpg" },
-  { id: "wallpaper-kuromi", name: "Kuromi", url: "/Wallpapers/Kuromi.png" },
-  { id: "wallpaper-modern-blue", name: "Modern Blue", url: "/Wallpapers/ModernBlueWave.jpg" },
-  { id: "wallpaper-pink-wave", name: "Pink Wave", url: "/Wallpapers/PinkWave.png" },
-  { id: "wallpaper-somi", name: "Somi", url: "/Wallpapers/Somi.png" },
-  { id: "wallpaper-windows-11", name: "Windows 11", url: "/Wallpapers/Win11.jpg" },
+  { id: "wallpaper-abstract", name: "Abstract", url: "/Wallpapers/Abstract.jpg", previewUrl: "/Wallpapers/previews/Abstract.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Abstract.jpg" },
+  { id: "wallpaper-blue-waves", name: "Blue Waves", url: "/Wallpapers/BlueWaves.jpg", previewUrl: "/Wallpapers/previews/BlueWaves.jpg", thumbnailUrl: "/Wallpapers/thumbnails/BlueWaves.jpg" },
+  { id: "wallpaper-candle", name: "Candle", url: "/Wallpapers/Candle.png", previewUrl: "/Wallpapers/previews/Candle.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Candle.jpg" },
+  { id: "wallpaper-color-wave", name: "Color Wave", url: "/Wallpapers/ColorWave.jpg", previewUrl: "/Wallpapers/previews/ColorWave.jpg", thumbnailUrl: "/Wallpapers/thumbnails/ColorWave.jpg" },
+  { id: "wallpaper-graffiti-wave", name: "Graffiti Wave", url: "/Wallpapers/GrafitiWave.jpg", previewUrl: "/Wallpapers/previews/GrafitiWave.jpg", thumbnailUrl: "/Wallpapers/thumbnails/GrafitiWave.jpg" },
+  { id: "wallpaper-kawaii", name: "Kawaii", url: "/Wallpapers/Kawaii.jpg", previewUrl: "/Wallpapers/previews/Kawaii.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Kawaii.jpg" },
+  { id: "wallpaper-kuromi", name: "Kuromi", url: "/Wallpapers/Kuromi.png", previewUrl: "/Wallpapers/previews/Kuromi.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Kuromi.jpg" },
+  { id: "wallpaper-modern-blue", name: "Modern Blue", url: "/Wallpapers/ModernBlueWave.jpg", previewUrl: "/Wallpapers/previews/ModernBlueWave.jpg", thumbnailUrl: "/Wallpapers/thumbnails/ModernBlueWave.jpg" },
+  { id: "wallpaper-pink-wave", name: "Pink Wave", url: "/Wallpapers/PinkWave.png", previewUrl: "/Wallpapers/previews/PinkWave.jpg", thumbnailUrl: "/Wallpapers/thumbnails/PinkWave.jpg" },
+  { id: "wallpaper-somi", name: "Somi", url: "/Wallpapers/Somi.png", previewUrl: "/Wallpapers/previews/Somi.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Somi.jpg" },
+  { id: "wallpaper-windows-11", name: "Windows 11", url: "/Wallpapers/Win11.jpg", previewUrl: "/Wallpapers/previews/Win11.jpg", thumbnailUrl: "/Wallpapers/thumbnails/Win11.jpg" },
 ];
 
 export function getWallpaperPreset(idOrUrl: string): WallpaperPreset | undefined {

@@ -58,6 +58,12 @@ interface Props {
 
 type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "installing" | "error";
 
+function formatRecordingSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "MP4 recording";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB · MP4`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB · MP4`;
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onOpenSettings }: Props) {
@@ -83,10 +89,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showWindowPicker, setShowWindowPicker] = useState(false);
   const [windowSearch, setWindowSearch] = useState("");
+  const [recordingSearch, setRecordingSearch] = useState("");
   const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [regionScreen, setRegionScreen] = useState({ x: 0, y: 0, scale: 1 });
   const [showFileBrowser, setShowFileBrowser] = useState(false);
-  const [fileList, setFileList] = useState<{ name: string; path: string }[]>([]);
+  const [fileList, setFileList] = useState<{ name: string; path: string; size: number }[]>([]);
 
   // Recording
   const [recording, setRecording] = useState(false);
@@ -439,8 +446,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: dir });
       const recordings = files
         .filter((f) => !f.is_dir && f.name.endsWith(".mp4"))
-        .map((f) => ({ name: f.name, path: f.path }));
+        .map((f) => ({ name: f.name, path: f.path, size: f.size }))
+        .sort((a, b) => b.name.localeCompare(a.name));
       setFileList(recordings);
+      setRecordingSearch("");
       setShowFileBrowser(true);
     } catch (e) {
       setRecordStatus(`Cannot browse: ${e}`);
@@ -465,6 +474,9 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     invoke("set_paused", { paused: next }).catch(() => {});
     invoke("set_input_paused", { paused: next }).catch(() => {});
     invoke("set_audio_paused", { paused: next }).catch(() => {});
+    // Update the capture border immediately instead of waiting for the next
+    // elapsed-time dock sync tick.
+    invoke("set_overlay_paused", { paused: next }).catch(() => {});
     setRecordStatus(next ? "Paused" : "Recording");
   };
 
@@ -505,10 +517,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     };
   }, []); // mount once, ref accessed via actionHandlersRef
 
-  // Safety: never leave the dock floating, clear all timers on unmount.
+  // Clear local timers on unmount. Dock visibility is owned by the recording
+  // lifecycle in Rust; hiding it here races React StrictMode/HMR remounts and
+  // can make the controls disappear during an active recording.
   useEffect(() => {
     return () => {
-      invoke("set_dock_visible", { visible: false }).catch(() => {});
       if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
       if (countdownRef.current) { clearTimeout(countdownRef.current); countdownRef.current = null; }
     };
@@ -724,23 +737,36 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       {/* ── File Browser Modal ─────────────────────────────────────── */}
       {showFileBrowser && (
         <div className="modal-overlay" onClick={() => setShowFileBrowser(false)}>
-          <div className="focusee-modal-card" onClick={(e) => e.stopPropagation()}>
-            <h3>Open Recording</h3>
-            <div className="modal-window-list">
-              {fileList.map((f) => (
+          <div className="focusee-modal-card recording-picker-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-heading-row">
+              <div className="modal-title-icon"><FolderOpen size={18} /></div>
+              <div className="modal-title-copy">
+                <h3>Open recording</h3>
+                <p className="modal-sub">Choose a recent Snap project to edit</p>
+              </div>
+              <button className="settings-close-btn" title="Close" onClick={() => setShowFileBrowser(false)}><X size={14} /></button>
+            </div>
+            <label className="window-search-field recording-search-field">
+              <Search size={15} />
+              <input value={recordingSearch} onChange={(event) => setRecordingSearch(event.target.value)} placeholder="Search recordings" autoFocus />
+            </label>
+            <div className="modal-window-list recording-list">
+              {fileList.filter((file) => file.name.toLowerCase().includes(recordingSearch.trim().toLowerCase())).map((f) => (
                 <button
                   key={f.path}
-                  className="window-option-btn"
+                  className="window-option-btn recording-option-btn"
                   onClick={() => openRecording(f.path)}
                 >
-                  <AppWindow size={16} />
-                  <span>{f.name}</span>
+                  <span className="window-option-icon"><FileVideo2 size={16} /></span>
+                  <span className="window-option-copy"><strong>{f.name.replace(/\.mp4$/i, "")}</strong><small>{formatRecordingSize(f.size)}</small></span>
+                  <ChevronRight size={15} className="window-option-arrow" />
                 </button>
               ))}
+              {fileList.filter((file) => file.name.toLowerCase().includes(recordingSearch.trim().toLowerCase())).length === 0 && (
+                <div className="window-empty-state"><FileVideo2 size={22} /><span>No matching recordings</span></div>
+              )}
             </div>
-            <button className="modal-close-btn" onClick={() => setShowFileBrowser(false)}>
-              Cancel
-            </button>
+            <div className="modal-footer-row"><span>{fileList.length} recording{fileList.length === 1 ? "" : "s"}</span><button className="modal-close-btn" onClick={() => setShowFileBrowser(false)}>Cancel</button></div>
           </div>
         </div>
       )}

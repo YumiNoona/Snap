@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MousePointer, MousePointer2, Check, Type, Square, Circle, Minus, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, type LucideIcon } from "lucide-react";
-import type { EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed } from "../../../lib/types";
+import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, type LucideIcon } from "lucide-react";
+import type { EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
+import { preloadImageAsset } from "../../../lib/canvasDraw";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
@@ -12,7 +13,6 @@ interface Props {
   onConfigChange: (cfg: EditorConfig) => void;
   duration: number;
   currentTime: number;
-  keyframesCount: number;
   layers: Layer[];
   selectedLayerId: string | null;
   onAddLayer: (layer: Layer) => void;
@@ -21,6 +21,9 @@ interface Props {
   onAddManualZoom: () => void;
   onRegenerateAutoZoom: () => void;
   onZoomModeChange: (mode: "auto" | "manual") => void;
+  selectedZoomRegion: ZoomRegionSettings | null;
+  onSelectedZoomChange: (patch: Partial<ZoomRegionSettings>) => void;
+  onDeleteSelectedZoom: () => void;
 }
 
 const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
@@ -48,9 +51,10 @@ const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
 };
 
 export default function Panels({
-  config, onConfigChange, duration, currentTime, keyframesCount,
+  config, onConfigChange, duration, currentTime,
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
+  selectedZoomRegion, onSelectedZoomChange, onDeleteSelectedZoom,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -77,6 +81,19 @@ export default function Panels({
       catch (e) { if (alive) setCursorPacksError(`Failed to load cursor packs: ${e}`); }
     })();
     return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    // The 4K/8K originals remain available to export, while the editor warms
+    // compact preview images after its first paint. This keeps opening Images
+    // and switching backgrounds responsive even on slower disks.
+    const timer = window.setTimeout(() => {
+      WALLPAPER_PRESETS.forEach((preset) => {
+        preloadImageAsset(preset.thumbnailUrl);
+        preloadImageAsset(preset.previewUrl);
+      });
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const packHotspotOrDefault = (packId: string): { x: number; y: number } => {
@@ -152,11 +169,11 @@ export default function Panels({
             <Slider label="Padding" value={config.padding} min={0} max={160} step={4} unit="px" onChange={(v) => update({ padding: v })} defaultValue={48} onReset={() => update({ padding: 48 })} />
             <div className="field-row">
               <label>Inset</label>
-              <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flex: 1 }}>
-                <div style={{ flex: 1 }}>
+              <div className="inset-control-row">
+                <div className="inset-slider-wrap">
                   <Slider value={config.inset} min={0} max={40} step={1} unit="px" onChange={(v) => update({ inset: v })} defaultValue={0} onReset={() => update({ inset: 0 })} compact />
                 </div>
-                <input type="color" value={config.insetColor} onChange={(e) => update({ insetColor: e.target.value })} className="color-swatch" style={{ width: 28, height: 28, padding: 0, border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-sm)", cursor: "pointer" }} />
+                <input type="color" value={config.insetColor} onChange={(e) => update({ insetColor: e.target.value })} className="color-swatch inset-color-swatch" aria-label="Inset color" />
               </div>
             </div>
             <Slider label="Roundness" value={config.borderRadius} min={0} max={60} step={1} unit="px" onChange={(v) => update({ borderRadius: v })} defaultValue={14} onReset={() => update({ borderRadius: 14 })} />
@@ -164,7 +181,7 @@ export default function Panels({
           </Section>
 
           <Section title="Background">
-            <div className="ss-subtab-segmented">
+            <div className="ss-subtab-segmented animated-pills" style={{ "--pill-count": 3, "--pill-index": bgCategory === "gradient" ? 0 : bgCategory === "color" ? 1 : 2 } as CSSProperties}>
               {(["gradient", "color", "image"] as const).map((cat) => (
                 <button key={cat} className={`subtab-btn ${bgCategory === cat ? "active" : ""}`} onClick={() => setBgCategory(cat)}>
                   {cat === "gradient" ? "Gradients" : cat === "color" ? "Colors" : "Images"}
@@ -172,12 +189,13 @@ export default function Panels({
               ))}
             </div>
             {bgCategory === "gradient" && (
-              <div className="ss-wallpaper-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+              <div className="ss-wallpaper-grid swatch-grid">
                 {GRADIENT_PRESETS.map((preset) => (
-                  <div
+                  <button
+                    type="button"
                     key={preset.id}
-                    className={`ss-wallpaper-card ${config.bgType === "gradient" && config.wallpaperUrl === preset.id ? "active" : ""}`}
-                    style={{ background: gradientToCss(preset), width: 32, height: 32, aspectRatio: "unset" }}
+                    className={`ss-wallpaper-card background-swatch ${config.bgType === "gradient" && config.wallpaperUrl === preset.id ? "active" : ""}`}
+                    style={{ background: gradientToCss(preset) }}
                     onClick={() => update({ bgType: "gradient", wallpaperUrl: preset.id })}
                     title={preset.name}
                   />
@@ -185,12 +203,13 @@ export default function Panels({
               </div>
             )}
             {bgCategory === "color" && (
-              <div className="ss-wallpaper-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginTop: "var(--space-2)" }}>
+              <div className="ss-wallpaper-grid swatch-grid">
                 {COLOR_PRESETS.map((preset) => (
-                  <div
+                  <button
+                    type="button"
                     key={preset.id}
-                    className={`ss-wallpaper-card ${config.bgType === "color" && config.backgroundColor === preset.color ? "active" : ""}`}
-                    style={{ background: preset.color, width: 32, height: 32, aspectRatio: "unset", border: "1px solid var(--border-subtle)" }}
+                    className={`ss-wallpaper-card background-swatch color-swatch-card ${config.bgType === "color" && config.backgroundColor === preset.color ? "active" : ""}`}
+                    style={{ background: preset.color }}
                     onClick={() => update({ bgType: "color", backgroundColor: preset.color })}
                     title={preset.name}
                   />
@@ -201,10 +220,12 @@ export default function Panels({
               <>
                 <div className="ss-wallpaper-grid image-grid">
                   {WALLPAPER_PRESETS.map((preset) => (
-                    <div
+                    <button
+                      type="button"
                       key={preset.id}
                       className={`ss-wallpaper-card ${config.bgType === "image" && config.wallpaperUrl === preset.id ? "active" : ""}`}
-                      style={{ backgroundImage: `url(${preset.url})` }}
+                      style={{ backgroundImage: `url(${preset.thumbnailUrl})` }}
+                      onPointerEnter={() => preloadImageAsset(preset.previewUrl)}
                       onClick={() => update({ bgType: "image", wallpaperUrl: preset.id })}
                       title={preset.name}
                     />
@@ -225,20 +246,20 @@ export default function Panels({
             <Slider label="Cursor Size" value={config.cursorStyle.size} min={8} max={40} step={1} unit="px" onChange={(v) => updateCursor({ size: v })} defaultValue={16} onReset={() => updateCursor({ size: 16 })} />
 
             <div className="cursor-pack-grid">
-              <div className={`cursor-pack-card ${!config.cursorStyle.pack ? "active" : ""}`} onClick={clearPack} title="Built-in cursor">
+              <button type="button" className={`cursor-pack-card icon-choice ${!config.cursorStyle.pack ? "active" : ""}`} onClick={clearPack} aria-label="Default cursor" data-tooltip="Default">
                 <div className="cursor-pack-thumb default-thumb"><MousePointer size={16} /></div>
-                <span className="cursor-pack-label">Default</span>
-              </div>
+              </button>
               {cursorPacks.map((pack) => (
-                <div
+                <button
+                  type="button"
                   key={pack.name}
-                  className={`cursor-pack-card ${config.cursorStyle.pack?.id === pack.name ? "active" : ""}`}
+                  className={`cursor-pack-card icon-choice ${config.cursorStyle.pack?.id === pack.name ? "active" : ""}`}
                   onClick={() => selectPack(pack)}
-                  title={pack.label}
+                  aria-label={`${pack.label} cursor`}
+                  data-tooltip={pack.label}
                 >
                   <div className="cursor-pack-thumb"><img src={pack.pointer_url} alt={pack.label} draggable={false} /></div>
-                  <span className="cursor-pack-label">{pack.label}</span>
-                </div>
+                </button>
               ))}
             </div>
             {cursorPacksError && <p className="cursor-pack-error">{cursorPacksError}</p>}
@@ -251,21 +272,24 @@ export default function Panels({
           <Section title="Click Effect">
             <div className="effect-grid">
               {CLICK_EFFECTS.map((eff) => (
-                <div
+                <button
+                  type="button"
                   key={eff.value}
-                  className={`effect-card ${config.cursorStyle.clickEffect === eff.value ? "active" : ""}`}
+                  className={`effect-card icon-choice ${config.cursorStyle.clickEffect === eff.value ? "active" : ""}`}
                   onClick={() => updateCursor({ clickEffect: eff.value })}
-                  title={eff.label}
+                  aria-label={`${eff.label} click effect`}
+                  data-tooltip={eff.label}
                 >
                   <EffectThumbnail effect={eff.value} />
-                  <span className="effect-label">{eff.label}</span>
-                </div>
+                </button>
               ))}
             </div>
           </Section>
 
-          <CheckRow label="Cursor Click Sound" checked={config.cursorStyle.clickSound} onChange={(v) => updateCursor({ clickSound: v })} />
-          <CheckRow label="Hide Cursor When Idle" checked={config.cursorStyle.hideWhenIdle} onChange={(v) => updateCursor({ hideWhenIdle: v })} />
+          <Section title="Cursor Behavior">
+            <CheckRow label="Click Sound" checked={config.cursorStyle.clickSound} onChange={(v) => updateCursor({ clickSound: v })} />
+            <CheckRow label="Hide When Idle" checked={config.cursorStyle.hideWhenIdle} onChange={(v) => updateCursor({ hideWhenIdle: v })} />
+          </Section>
         </div>
       )}
 
@@ -275,12 +299,11 @@ export default function Panels({
           <Section title="Text">
             <div className="annotation-card-grid">
               {(["plain", "boxed", "pill", "badge"] as TextLayer["style"][]).map((style) => (
-                <div key={style} className="annotation-card" onClick={() => addLayer(makeTextLayer(style))}>
-                  <div className="annotation-preview" style={{ background: style === "pill" ? "#7c3aed" : style === "badge" ? "#2563eb" : style === "boxed" ? "#1e293b" : "transparent", border: style === "plain" ? "1px dashed var(--border-default)" : "none" }}>
-                    <Type size={14} color="#fff" />
+                <button type="button" key={style} className="annotation-card icon-choice" onClick={() => addLayer(makeTextLayer(style))} aria-label={`Add ${style} text`} data-tooltip={style.charAt(0).toUpperCase() + style.slice(1)}>
+                  <div className={`annotation-preview text-preview text-preview-${style}`}>
+                    <Type size={20} />
                   </div>
-                  <span className="card-title-text" style={{ fontSize: "var(--text-xs)" }}>{style === "badge" ? "1" : "Text"}</span>
-                </div>
+                </button>
               ))}
             </div>
           </Section>
@@ -288,19 +311,19 @@ export default function Panels({
           <Section title="Shape">
             <div className="annotation-card-grid">
               {([
-                { shape: "line" as const, color: "#ef4444", icon: <Minus size={16} color="#ef4444" /> },
-                { shape: "dashedLine" as const, color: "#ef4444", icon: <PenLine size={16} color="#ef4444" /> },
-                { shape: "arrow" as const, color: "#ef4444", icon: <ArrowRight size={16} color="#ef4444" /> },
-                { shape: "rectangle" as const, color: "#ef4444", icon: <Square size={16} color="#ef4444" /> },
-                { shape: "roundedRect" as const, color: "#eab308", icon: <Square size={16} color="#eab308" /> },
-                { shape: "circle" as const, color: "#8b5cf6", icon: <Circle size={16} color="#8b5cf6" /> },
-                { shape: "blob" as const, color: "#ef4444", icon: <Circle size={16} color="#ef4444" /> },
-                { shape: "downArrow" as const, color: "#ec4899", icon: <ArrowRight size={16} color="#ec4899" style={{ transform: "rotate(90deg)" }} /> },
-                { shape: "pointer" as const, color: "#ec4899", icon: <Hand size={16} color="#ec4899" /> },
-              ]).map(({ shape, color, icon }) => (
-                <div key={shape} className="annotation-card" onClick={() => addLayer(makeShapeLayer(shape, color))}>
+                { shape: "line" as const, label: "Line", color: "#ef4444", icon: <Minus size={16} color="#ef4444" /> },
+                { shape: "dashedLine" as const, label: "Dashed", color: "#ef4444", icon: <PenLine size={16} color="#ef4444" /> },
+                { shape: "arrow" as const, label: "Arrow", color: "#ef4444", icon: <ArrowRight size={16} color="#ef4444" /> },
+                { shape: "rectangle" as const, label: "Rectangle", color: "#ef4444", icon: <Square size={16} color="#ef4444" /> },
+                { shape: "roundedRect" as const, label: "Rounded", color: "#eab308", icon: <Square size={16} color="#eab308" /> },
+                { shape: "circle" as const, label: "Circle", color: "#8b5cf6", icon: <Circle size={16} color="#8b5cf6" /> },
+                { shape: "blob" as const, label: "Ellipse", color: "#ef4444", icon: <Circle size={16} color="#ef4444" /> },
+                { shape: "downArrow" as const, label: "Down", color: "#ec4899", icon: <ArrowRight size={16} color="#ec4899" style={{ transform: "rotate(90deg)" }} /> },
+                { shape: "pointer" as const, label: "Pointer", color: "#ec4899", icon: <Hand size={16} color="#ec4899" /> },
+              ]).map(({ shape, label, color, icon }) => (
+                <button type="button" key={shape} className="annotation-card icon-choice" onClick={() => addLayer(makeShapeLayer(shape, color))} aria-label={`Add ${label}`} data-tooltip={label}>
                   <div className="annotation-preview">{icon}</div>
-                </div>
+                </button>
               ))}
             </div>
           </Section>
@@ -312,12 +335,11 @@ export default function Panels({
                 { mask: "blur" as const, label: "Blur", icon: <Blend size={18} /> },
                 { mask: "magnifier" as const, label: "Magnifier", icon: <Search size={18} /> },
               ]).map(({ mask, label, icon }) => (
-                <div key={mask} className="annotation-card" onClick={() => addLayer(makeMaskLayer(mask))}>
+                <button type="button" key={mask} className="annotation-card icon-choice" onClick={() => addLayer(makeMaskLayer(mask))} aria-label={`Add ${label}`} data-tooltip={label}>
                   <div className={`annotation-preview mask-preview ${mask}`}>
                     {icon}
                   </div>
-                  <span className="card-title-text" style={{ fontSize: "var(--text-xs)" }}>{label}</span>
-                </div>
+                </button>
               ))}
             </div>
           </Section>
@@ -362,7 +384,7 @@ export default function Panels({
               )}
               <Slider label="Start" value={selectedLayer.start} min={0} max={duration} step={0.1} unit="s" onChange={(start) => updateSelectedLayer({ start: Math.min(start, selectedLayer.end) })} />
               <Slider label="End" value={selectedLayer.end} min={0} max={duration} step={0.1} unit="s" onChange={(end) => updateSelectedLayer({ end: Math.max(end, selectedLayer.start) })} />
-              <p className="cursor-pack-error" style={{ margin: 0 }}>Drag the layer in the preview; drag its lower-right corner to resize.</p>
+              <p className="panel-help-text">Drag the layer in the preview; drag its lower-right corner to resize.</p>
             </Section>
           )}
         </div>
@@ -387,33 +409,40 @@ export default function Panels({
           </Section>
 
           <Section title="Zoom & Pan">
-            <div className="toggle-segmented">
+            <div className="toggle-segmented animated-pills" style={{ "--pill-count": 2, "--pill-index": config.zoomMode === "auto" ? 0 : 1 } as CSSProperties}>
               <button className={`seg-btn ${config.zoomMode === "auto" ? "active" : ""}`} onClick={() => onZoomModeChange("auto")}>Auto</button>
               <button className={`seg-btn ${config.zoomMode === "manual" ? "active" : ""}`} onClick={() => onZoomModeChange("manual")}>Manual</button>
             </div>
             <CheckRow label="Zoom Movement" checked={config.zoomMovement.enabled} onChange={(v) => updateZoomMov({ enabled: v })} />
-            <CheckRow label="Lock Focus Point" checked={config.fixedZoomPart} onChange={(v) => update({ fixedZoomPart: v })} />
             <SpeedPills speed={config.zoomMovement.speed} onChange={(speed) => updateZoomMov({ speed })} />
             {config.zoomMovement.speed === "custom" && (
               <Slider label="Duration" value={config.zoomMovement.durationMs} min={100} max={3000} step={100} unit="ms" onChange={(v) => updateZoomMov({ durationMs: v })} />
             )}
-            <div className="section-info-badge" style={{ marginTop: "var(--space-2)" }}>
-              <span>{config.zoomMode === "auto" ? `Auto Mode: ${keyframesCount} keyframes` : `Manual Mode: ${keyframesCount} keyframes`}</span>
-            </div>
             {config.zoomMode === "manual" && (
-              <button className="ss-drawer-action-btn primary" onClick={onAddManualZoom} style={{ marginTop: "var(--space-2)" }}>
+              <button className="ss-drawer-action-btn primary" onClick={onAddManualZoom}>
                 + Add Zoom Region
               </button>
             )}
-            <p className="cursor-pack-error" style={{ margin: "2px 0 0" }}>
-              Zoom regions appear as editable bars in the timeline. Drag a bar to move it or drag its edges to change the duration.
+            <p className="panel-help-text">
+              Add Zoom Region creates a bar at the playhead immediately. Drag it to move, trim either edge, then click the preview to set its focus point.
             </p>
             {config.zoomMode === "auto" && (
-              <button className="ss-drawer-action-btn" onClick={onRegenerateAutoZoom} style={{ marginTop: "var(--space-2)" }}>
+              <button className="ss-drawer-action-btn" onClick={onRegenerateAutoZoom}>
                 Regenerate Auto-Zoom
               </button>
             )}
           </Section>
+          {selectedZoomRegion && (
+            <Section title="Selected Zoom">
+              <Slider label="Zoom" value={selectedZoomRegion.scale} min={1.1} max={4} step={0.1} unit="×" onChange={(scale) => onSelectedZoomChange({ scale })} />
+              <Slider label="Transition" value={selectedZoomRegion.transitionMs} min={40} max={Math.max(80, Math.min(2000, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(transitionMs) => onSelectedZoomChange({ transitionMs })} />
+              <Slider label="Focus X" value={Math.round(selectedZoomRegion.x * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ x: value / 100 })} />
+              <Slider label="Focus Y" value={Math.round(selectedZoomRegion.y * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ y: value / 100 })} />
+              <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
+              <Slider label="End" value={selectedZoomRegion.endMs / 1000} min={selectedZoomRegion.startMs / 1000 + 0.35} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ endMs: value * 1000 })} />
+              <button className="ss-drawer-action-btn danger" onClick={onDeleteSelectedZoom}><Trash2 size={14} /> Delete Zoom Region</button>
+            </Section>
+          )}
         </div>
       )}
 
@@ -443,10 +472,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="field-row check-row" onClick={() => onChange(!checked)}>
-      <label>{label}</label>
-      <div className={`pro-checkbox ${checked ? "checked" : ""}`}>{checked && <Check size={12} strokeWidth={3} />}</div>
-    </div>
+    <button type="button" className="field-row check-row" onClick={() => onChange(!checked)} aria-pressed={checked}>
+      <span className="field-label">{label}</span>
+      <span className={`pro-switch ${checked ? "checked" : ""}`} aria-hidden="true"><span /></span>
+    </button>
   );
 }
 
@@ -462,8 +491,8 @@ function EffectThumbnail({ effect }: { effect: ClickEffect }) {
 
 function SpeedPills({ speed, onChange }: { speed: MovementSpeed; onChange: (v: MovementSpeed) => void }) {
   return (
-    <div className="toggle-segmented speed-pills" style={{ marginTop: "var(--space-1)" }}>
-      {(["slow", "medium", "fast", "rapid", "custom"] as MovementSpeed[]).map((s) => (
+    <div className="toggle-segmented speed-pills animated-pills" style={{ "--pill-count": 4, "--pill-index": Math.max(0, ["slow", "medium", "fast", "custom"].indexOf(speed)) } as CSSProperties}>
+      {(["slow", "medium", "fast", "custom"] as MovementSpeed[]).map((s) => (
         <button key={s} className={`seg-btn ${speed === s ? "active" : ""}`} onClick={() => onChange(s)}>
           {s.charAt(0).toUpperCase() + s.slice(1)}
         </button>

@@ -39,6 +39,11 @@ struct EditorPaths(Mutex<Option<(String, String)>>);
 /// Live state mirrored to the floating recording dock window.
 struct DockState(Mutex<DockStateSnapshot>);
 
+/// The dock should remain on-screen for the entire recording lifecycle.
+/// Only an explicit recording stop (or the user's own minimize action) may
+/// make it disappear.
+static DOCK_VISIBLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct DockStateSnapshot {
     recording: bool,
@@ -288,11 +293,14 @@ fn end_region_selection(app: tauri::AppHandle) -> Result<(), String> {
 /// small launcher window.
 #[tauri::command]
 fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    DOCK_VISIBLE_REQUESTED.store(visible, Ordering::SeqCst);
     let win = app
         .get_webview_window("dock")
         .ok_or_else(|| "Dock window not found".to_string())?;
 
     if visible {
+        let _ = win.unminimize();
+        let _ = win.set_always_on_top(true);
         // Center above the bottom edge of the main window's monitor.
         if let Some(mon) = app
             .get_webview_window("main")
@@ -319,6 +327,11 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
         let delayed_dock = win.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(120));
+            if !DOCK_VISIBLE_REQUESTED.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = delayed_dock.set_always_on_top(true);
+            let _ = delayed_dock.show();
             if let Err(error) = exclude_from_capture(&delayed_dock) {
                 eprintln!("[Snap] Delayed dock capture exclusion failed: {error}");
             }
@@ -333,6 +346,21 @@ fn set_dock_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> 
         let _ = main.emit("dock-visibility", visible);
     }
     Ok(())
+}
+
+/// Called after the dock React surface mounts. This closes the startup race
+/// where recording can begin before the predeclared hidden WebView is ready.
+#[tauri::command]
+fn dock_window_ready(app: tauri::AppHandle) -> Result<(), String> {
+    if !DOCK_VISIBLE_REQUESTED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let win = app
+        .get_webview_window("dock")
+        .ok_or_else(|| "Dock window not found".to_string())?;
+    let _ = win.set_always_on_top(true);
+    let _ = win.show();
+    exclude_from_capture(&win)
 }
 
 /// Resize the recorder dock between its full controls and a small restorable
@@ -369,6 +397,14 @@ fn update_dock_state(
     *state.0.lock().map_err(|e| e.to_string())? = snapshot.clone();
     if let Some(dock) = app.get_webview_window("dock") {
         let _ = dock.emit("dock-state", snapshot);
+        // A live recording owns dock visibility. Reassert show/topmost on each
+        // state tick so focus changes, display changes, or WebView recreation
+        // cannot silently leave the controls hidden. `show` does not restore a
+        // user-minimized native window, so an explicit minimize remains honored.
+        if DOCK_VISIBLE_REQUESTED.load(Ordering::SeqCst) {
+            let _ = dock.set_always_on_top(true);
+            let _ = dock.show();
+        }
     }
     Ok(())
 }
@@ -772,6 +808,7 @@ pub fn run() {
             begin_region_selection,
             end_region_selection,
             set_dock_visible,
+            dock_window_ready,
             set_dock_compact,
             update_dock_state,
             get_dock_state,

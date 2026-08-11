@@ -61,7 +61,7 @@ export default function RecordingOverlay() {
       : { left: 0, top: 0, right: 0, bottom: 0 };
 
   const cls = paused
-    ? "rec-border green"
+    ? "rec-border paused"
     : style === "red"
       ? "rec-border red"
       : "rec-border dashed";
