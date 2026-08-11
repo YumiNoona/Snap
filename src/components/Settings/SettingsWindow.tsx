@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { check } from "@tauri-apps/plugin-updater";
@@ -8,6 +9,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Download,
+  Database,
   Frame,
   Minimize2,
   Minus,
@@ -70,6 +72,10 @@ export default function SettingsWindow() {
       // Preferences remain active for this session if persistent storage is unavailable.
     }
   }, [settings]);
+
+  useEffect(() => {
+    void invoke("organize_recording_data", { showSupportFiles: settings.showRecordingDataFiles }).catch(() => {});
+  }, [settings.showRecordingDataFiles]);
 
   const checkForUpdates = async () => {
     if (updateCheckRef.current || updateState === "downloading" || updateState === "installing") return;
@@ -174,6 +180,7 @@ export default function SettingsWindow() {
                 <SettingsToggle icon={<Timer size={18} />} title="3–2–1 countdown" description="Give yourself time before recording starts" checked={settings.countdown} onChange={(value) => change("countdown", value)} />
                 <SettingsToggle icon={<Minimize2 size={18} />} title="Minimize while recording" description="Keep the launcher out of your capture" checked={settings.minimizeWhileRecording} onChange={(value) => change("minimizeWhileRecording", value)} />
                 <SettingsToggle icon={<PanelTopOpen size={18} />} title="Open editor after recording" description="Open the finished recording automatically" checked={settings.autoOpenEditor} onChange={(value) => change("autoOpenEditor", value)} />
+                <SettingsToggle icon={<Database size={18} />} title="Show audio and JSON files" description="Reveal Snap’s per-recording working-data folders in Videos" checked={settings.showRecordingDataFiles} onChange={(value) => change("showRecordingDataFiles", value)} />
               </div>
             </>
           ) : (

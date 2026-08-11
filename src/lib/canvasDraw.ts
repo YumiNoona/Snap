@@ -265,15 +265,18 @@ export function drawTextLayer(
 ) {
   ctx.save();
   const fontSize = Math.max(8, layer.fontSize);
-  ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+  const family = layer.fontFamily === "serif"
+    ? "Georgia, serif"
+    : layer.fontFamily === "mono" ? "ui-monospace, Consolas, monospace" : "system-ui, sans-serif";
+  ctx.font = `${layer.fontWeight ?? 600} ${fontSize}px ${family}`;
   ctx.textBaseline = "middle";
-  ctx.textAlign = "center";
+  ctx.textAlign = layer.align ?? "center";
   const cx = x + w / 2, cy = y + h / 2;
   const measured = Math.min(w, ctx.measureText(layer.content).width + fontSize);
   const boxW = Math.max(fontSize * 1.5, measured);
   const boxH = Math.min(h, fontSize * 1.75);
   if (layer.style !== "plain") {
-    ctx.fillStyle = layer.style === "boxed" ? "rgba(15,23,42,0.82)" : layer.color;
+    ctx.fillStyle = layer.backgroundColor ?? (layer.style === "boxed" ? "rgba(15,23,42,0.82)" : layer.color);
     ctx.beginPath();
     if (layer.style === "badge") {
       ctx.arc(cx, cy, Math.min(boxH, boxW) / 2, 0, Math.PI * 2);
@@ -283,7 +286,8 @@ export function drawTextLayer(
     ctx.fill();
   }
   ctx.fillStyle = layer.style === "plain" || layer.style === "boxed" ? layer.color : "#ffffff";
-  ctx.fillText(layer.content, cx, cy, Math.max(1, w - 8));
+  const textX = layer.align === "left" ? x + 12 : layer.align === "right" ? x + w - 12 : cx;
+  ctx.fillText(layer.content, textX, cy, Math.max(1, w - 16));
   ctx.restore();
 }
 
@@ -298,33 +302,52 @@ export function drawShapeLayer(
   const sw = Math.max(1, layer.strokeWidth);
   ctx.save();
   ctx.strokeStyle = layer.color;
-  ctx.fillStyle = layer.color;
+  ctx.fillStyle = layer.fillColor ?? layer.color;
   ctx.lineWidth = sw;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const inset = Math.max(sw * 1.5, Math.min(w, h) * 0.045);
+  x += inset; y += inset; w = Math.max(1, w - inset * 2); h = Math.max(1, h - inset * 2);
   const cx = x + w / 2, cy = y + h / 2;
+  const fillOpacity = Math.max(0, Math.min(1, layer.fillOpacity ?? (layer.shape === "blob" || layer.shape === "downArrow" || layer.shape === "pointer" ? 0.86 : 0)));
+  const strokeOpacity = Math.max(0, Math.min(1, layer.strokeOpacity ?? 1));
   if (layer.shape === "line" || layer.shape === "dashedLine" || layer.shape === "arrow") {
     if (layer.shape === "dashedLine") ctx.setLineDash([sw * 3, sw * 2]);
+    ctx.globalAlpha = strokeOpacity;
     ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x + w, cy); ctx.stroke();
     if (layer.shape === "arrow") {
       const ah = Math.min(22, Math.max(8, h * 0.25));
-      ctx.beginPath(); ctx.moveTo(x + w, cy); ctx.lineTo(x + w - ah, cy - ah * 0.6); ctx.lineTo(x + w - ah, cy + ah * 0.6); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = Math.max(fillOpacity, strokeOpacity);
+      ctx.beginPath(); ctx.moveTo(x + w, cy); ctx.lineTo(x + w - ah, cy - ah * 0.62); ctx.lineTo(x + w - ah * 0.72, cy); ctx.lineTo(x + w - ah, cy + ah * 0.62); ctx.closePath(); ctx.fill();
     }
   } else if (layer.shape === "rectangle" || layer.shape === "roundedRect") {
-    ctx.beginPath(); roundRect(ctx, x, y, w, h, layer.shape === "roundedRect" ? Math.min(18, h / 4) : 0); ctx.stroke();
+    const radius = layer.shape === "roundedRect" ? Math.min(layer.cornerRadius ?? 18, h / 2, w / 2) : 0;
+    ctx.beginPath(); roundRect(ctx, x, y, w, h, radius);
+    if (fillOpacity > 0) { ctx.globalAlpha = fillOpacity; ctx.fill(); }
+    ctx.globalAlpha = strokeOpacity; ctx.stroke();
   } else if (layer.shape === "circle") {
-    ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2);
+    if (fillOpacity > 0) { ctx.globalAlpha = fillOpacity; ctx.fill(); }
+    ctx.globalAlpha = strokeOpacity; ctx.stroke();
   } else if (layer.shape === "blob") {
-    ctx.globalAlpha = 0.72;
+    ctx.globalAlpha = fillOpacity;
     ctx.beginPath();
     ctx.moveTo(x + w * 0.12, cy); ctx.bezierCurveTo(x, y, x + w * 0.62, y - h * 0.08, x + w * 0.9, y + h * 0.25);
     ctx.bezierCurveTo(x + w * 1.08, y + h * 0.72, x + w * 0.55, y + h * 1.08, x + w * 0.2, y + h * 0.86);
     ctx.bezierCurveTo(x - w * 0.05, y + h * 0.72, x, y + h * 0.35, x + w * 0.12, cy); ctx.fill();
   } else if (layer.shape === "downArrow") {
-    ctx.beginPath(); ctx.moveTo(cx - w * 0.16, y); ctx.lineTo(cx + w * 0.16, y); ctx.lineTo(cx + w * 0.16, y + h * 0.58); ctx.lineTo(x + w * 0.82, y + h * 0.58); ctx.lineTo(cx, y + h); ctx.lineTo(x + w * 0.18, y + h * 0.58); ctx.lineTo(cx - w * 0.16, y + h * 0.58); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = fillOpacity;
+    ctx.beginPath(); ctx.moveTo(cx - w * 0.13, y); ctx.quadraticCurveTo(cx - w * 0.16, y, cx - w * 0.16, y + h * 0.56); ctx.lineTo(x + w * 0.2, y + h * 0.56); ctx.lineTo(cx, y + h); ctx.lineTo(x + w * 0.8, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y); ctx.closePath(); ctx.fill();
   } else {
-    ctx.translate(x, y);
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(w * 0.15, h); ctx.lineTo(w * 0.42, h * 0.68); ctx.lineTo(w * 0.68, h); ctx.lineTo(w * 0.82, h * 0.86); ctx.lineTo(w * 0.56, h * 0.55); ctx.lineTo(w, h * 0.48); ctx.closePath(); ctx.fill();
+    // Clean cursor-pointer silhouette with a compact stem instead of the old
+    // jagged polygon that distorted badly at non-square sizes.
+    ctx.globalAlpha = fillOpacity;
+    ctx.translate(x + w * 0.12, y + h * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(w * 0.62, h * 0.48); ctx.lineTo(w * 0.38, h * 0.54);
+    ctx.lineTo(w * 0.55, h * 0.86); ctx.lineTo(w * 0.37, h * 0.96);
+    ctx.lineTo(w * 0.2, h * 0.62); ctx.lineTo(0, h * 0.8); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = strokeOpacity; ctx.stroke();
   }
   ctx.restore();
 }
@@ -339,8 +362,9 @@ export function drawMaskLayer(
 ) {
   const { x, y, w, h } = rect;
   ctx.save();
+  ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
   if (layer.mask === "blur") {
-    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    ctx.beginPath(); roundRect(ctx, x, y, w, h, Math.min(layer.feather ?? 8, w / 2, h / 2)); ctx.clip();
     ctx.filter = `blur(${Math.max(1, layer.intensity)}px)`;
     ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
     ctx.filter = "none";
@@ -354,9 +378,11 @@ export function drawMaskLayer(
     const sy = source.y + ((y - dest.y) / dest.h) * source.h;
     const sw = (w / dest.w) * source.w / zoom;
     const sh = (h / dest.h) * source.h / zoom;
+    ctx.shadowColor = "rgba(96,165,250,.38)";
+    ctx.shadowBlur = layer.feather ?? 8;
     ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.clip();
     ctx.drawImage(video, sx + ((w / dest.w) * source.w - sw) / 2, sy + ((h / dest.h) * source.h - sh) / 2, sw, sh, x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 3; ctx.stroke();
   }
   ctx.restore();
 }

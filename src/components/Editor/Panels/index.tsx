@@ -1,6 +1,6 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, type LucideIcon } from "lucide-react";
 import type { EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
@@ -59,6 +59,7 @@ export default function Panels({
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
+  const annotationDrawerRef = useRef<HTMLDivElement>(null);
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
   const updateCursor = (patch: Partial<EditorConfig["cursorStyle"]>) =>
@@ -130,6 +131,8 @@ export default function Panels({
     return {
       id: genId(), type: "text", ...timing, x: 0.2, y: 0.4, w: 0.6, h: 0.16,
       content: style === "badge" ? "1" : "Text", style, color: "#ffffff", fontSize: 24,
+      fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#2563eb",
+      letterSpacing: 0, opacity: 1, rotation: 0, flipX: false, flipY: false,
     };
   };
 
@@ -137,7 +140,8 @@ export default function Panels({
     const timing = layerTiming();
     return {
       id: genId(), type: "shape", ...timing, x: 0.3, y: 0.3, w: 0.4, h: 0.4,
-      shape, color, strokeWidth: 3,
+      shape, color, strokeWidth: 4, fillColor: color, fillOpacity: ["downArrow", "pointer"].includes(shape) ? 1 : 0,
+      strokeOpacity: 1, cornerRadius: 18, opacity: 1, rotation: 0, flipX: false, flipY: false,
     };
   };
 
@@ -146,6 +150,7 @@ export default function Panels({
     return {
       id: genId(), type: "mask", ...timing, x: 0.32, y: 0.28, w: 0.36, h: 0.34,
       mask, intensity: mask === "blur" ? 12 : mask === "magnifier" ? 2.0 : 1,
+      feather: 8, opacity: 1,
     };
   };
 
@@ -159,6 +164,10 @@ export default function Panels({
     if (!selectedLayer) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
   };
+
+  useEffect(() => {
+    if (selectedLayerId && annotationDrawerRef.current) annotationDrawerRef.current.scrollTop = 0;
+  }, [selectedLayerId]);
 
   return (
     <aside className="ss-panels-drawer">
@@ -295,7 +304,8 @@ export default function Panels({
 
       {/* ═══ ANNOTATIONS TAB ═══════════════════════════════════════════ */}
       {activeTab === "annotations" && (
-        <div className="ss-drawer-content">
+        <div ref={annotationDrawerRef} className={`ss-drawer-content ${selectedLayer ? "layer-inspector-mode" : ""}`}>
+          {!selectedLayer && <>
           <Section title="Text">
             <div className="annotation-card-grid">
               {(["plain", "boxed", "pill", "badge"] as TextLayer["style"][]).map((style) => (
@@ -343,49 +353,66 @@ export default function Panels({
               ))}
             </div>
           </Section>
-
-          {/* Active layers list */}
-          {layers.length > 0 && (
-            <Section title="Layers">
-              <div className="layers-list">
-                {layers.map((layer) => (
-                  <div
-                    key={layer.id}
-                    className={`layer-row ${selectedLayerId === layer.id ? "active" : ""}`}
-                    onClick={() => onSelectLayer(layer.id)}
-                  >
-                    <span className="layer-type-tag">{layer.type}</span>
-                    <span className="layer-time">{(layer.start).toFixed(1)}s–{(layer.end).toFixed(1)}s</span>
-                    <button className="layer-delete-btn" onClick={(e) => { e.stopPropagation(); deleteLayer(layer.id); }} title="Delete layer">
-                      <Minus size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
+          </>}
           {selectedLayer && (
-            <Section title="Selected Layer">
-              {selectedLayer.type === "text" && (
-                <>
-                  <div className="field-row"><label>Text</label><input className="layer-text-input" value={selectedLayer.content} onChange={(e) => updateSelectedLayer({ content: e.target.value })} /></div>
-                  <ColorInput label="Color" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
-                  <Slider label="Font Size" value={selectedLayer.fontSize} min={10} max={96} step={1} unit="px" onChange={(fontSize) => updateSelectedLayer({ fontSize })} />
-                </>
-              )}
-              {selectedLayer.type === "shape" && (
-                <>
-                  <ColorInput label="Color" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
-                  <Slider label="Stroke" value={selectedLayer.strokeWidth} min={1} max={16} step={1} unit="px" onChange={(strokeWidth) => updateSelectedLayer({ strokeWidth })} />
-                </>
-              )}
-              {selectedLayer.type === "mask" && (
-                <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.5} onChange={(intensity) => updateSelectedLayer({ intensity })} />
-              )}
-              <Slider label="Start" value={selectedLayer.start} min={0} max={duration} step={0.1} unit="s" onChange={(start) => updateSelectedLayer({ start: Math.min(start, selectedLayer.end) })} />
-              <Slider label="End" value={selectedLayer.end} min={0} max={duration} step={0.1} unit="s" onChange={(end) => updateSelectedLayer({ end: Math.max(end, selectedLayer.start) })} />
-              <p className="panel-help-text">Drag the layer in the preview; drag its lower-right corner to resize.</p>
-            </Section>
+            <>
+              <div className="layer-inspector-header">
+                <button onClick={() => onSelectLayer(null)} title="Back to annotation tools" aria-label="Back to annotation tools"><ArrowLeft size={17} /></button>
+                <span><strong>Editing {selectedLayer.type}</strong><small>{selectedLayer.start.toFixed(1)}s–{selectedLayer.end.toFixed(1)}s</small></span>
+              </div>
+              <Section title={`${selectedLayer.type.charAt(0).toUpperCase() + selectedLayer.type.slice(1)} Properties`}>
+                {selectedLayer.type === "text" && (
+                  <>
+                    <label className="layer-field-stack"><span>Content</span><textarea className="layer-textarea" rows={3} value={selectedLayer.content} onChange={(e) => updateSelectedLayer({ content: e.target.value })} /></label>
+                    <SelectRow label="Style" value={selectedLayer.style} options={["plain", "boxed", "pill", "badge"]} onChange={(style) => updateSelectedLayer({ style: style as TextLayer["style"] })} />
+                    <SelectRow label="Typeface" value={selectedLayer.fontFamily ?? "system"} options={["system", "serif", "mono"]} onChange={(fontFamily) => updateSelectedLayer({ fontFamily: fontFamily as TextLayer["fontFamily"] })} />
+                    <SelectRow label="Weight" value={String(selectedLayer.fontWeight ?? 700)} options={["400", "500", "600", "700", "800"]} onChange={(fontWeight) => updateSelectedLayer({ fontWeight: Number(fontWeight) as TextLayer["fontWeight"] })} />
+                    <ColorInput label="Text Color" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
+                    {selectedLayer.style !== "plain" && <ColorInput label="Background" value={selectedLayer.backgroundColor ?? "#2563eb"} onChange={(backgroundColor) => updateSelectedLayer({ backgroundColor })} />}
+                    <Slider label="Font Size" value={selectedLayer.fontSize} min={10} max={120} step={1} unit="px" onChange={(fontSize) => updateSelectedLayer({ fontSize })} />
+                    <Slider label="Letter Space" value={selectedLayer.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateSelectedLayer({ letterSpacing })} />
+                    <div className="layer-icon-pills" aria-label="Text alignment">
+                      {([ ["left", AlignLeft], ["center", AlignCenter], ["right", AlignRight] ] as const).map(([align, Icon]) => <button key={align} className={(selectedLayer.align ?? "center") === align ? "active" : ""} onClick={() => updateSelectedLayer({ align })} title={`${align} align`}><Icon size={16} /></button>)}
+                    </div>
+                  </>
+                )}
+                {selectedLayer.type === "shape" && (
+                  <>
+                    <SelectRow label="Shape" value={selectedLayer.shape} options={["line", "dashedLine", "arrow", "rectangle", "roundedRect", "circle", "blob", "downArrow", "pointer"]} onChange={(shape) => updateSelectedLayer({ shape: shape as ShapeLayer["shape"] })} />
+                    <ColorInput label="Stroke" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
+                    <ColorInput label="Fill" value={selectedLayer.fillColor ?? selectedLayer.color} onChange={(fillColor) => updateSelectedLayer({ fillColor })} />
+                    <Slider label="Stroke Width" value={selectedLayer.strokeWidth} min={1} max={24} step={1} unit="px" onChange={(strokeWidth) => updateSelectedLayer({ strokeWidth })} />
+                    <Slider label="Stroke Opacity" value={Math.round((selectedLayer.strokeOpacity ?? 1) * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ strokeOpacity: value / 100 })} />
+                    <Slider label="Fill Opacity" value={Math.round((selectedLayer.fillOpacity ?? 0) * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ fillOpacity: value / 100 })} />
+                    {selectedLayer.shape === "roundedRect" && <Slider label="Roundness" value={selectedLayer.cornerRadius ?? 18} min={0} max={80} step={1} unit="px" onChange={(cornerRadius) => updateSelectedLayer({ cornerRadius })} />}
+                  </>
+                )}
+                {selectedLayer.type === "mask" && (
+                  <>
+                    <SelectRow label="Effect" value={selectedLayer.mask} options={["spotlight", "blur", "magnifier"]} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"] })} />
+                    <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.1} onChange={(intensity) => updateSelectedLayer({ intensity })} />
+                    <Slider label="Edge Feather" value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />
+                  </>
+                )}
+              </Section>
+              <Section title="Transform">
+                <div className="layer-number-grid">
+                  <NumberField label="X" value={selectedLayer.x * 100} onChange={(value) => updateSelectedLayer({ x: Math.max(0, Math.min(1 - selectedLayer.w, value / 100)) })} />
+                  <NumberField label="Y" value={selectedLayer.y * 100} onChange={(value) => updateSelectedLayer({ y: Math.max(0, Math.min(1 - selectedLayer.h, value / 100)) })} />
+                  <NumberField label="W" value={selectedLayer.w * 100} onChange={(value) => updateSelectedLayer({ w: Math.max(.04, Math.min(1 - selectedLayer.x, value / 100)) })} />
+                  <NumberField label="H" value={selectedLayer.h * 100} onChange={(value) => updateSelectedLayer({ h: Math.max(.04, Math.min(1 - selectedLayer.y, value / 100)) })} />
+                </div>
+                {selectedLayer.type !== "mask" && <Slider label="Rotation" value={selectedLayer.rotation ?? 0} min={0} max={360} step={1} unit="°" onChange={(rotation) => updateSelectedLayer({ rotation })} />}
+                <Slider label="Opacity" value={Math.round((selectedLayer.opacity ?? 1) * 100)} min={5} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ opacity: value / 100 })} />
+                {selectedLayer.type !== "mask" && <div className="layer-icon-pills"><button className={selectedLayer.flipX ? "active" : ""} onClick={() => updateSelectedLayer({ flipX: !selectedLayer.flipX })} title="Flip horizontally"><FlipHorizontal2 size={17} /><span>Flip X</span></button><button className={selectedLayer.flipY ? "active" : ""} onClick={() => updateSelectedLayer({ flipY: !selectedLayer.flipY })} title="Flip vertically"><FlipVertical2 size={17} /><span>Flip Y</span></button></div>}
+              </Section>
+              <Section title="Timing">
+                <Slider label="Start" value={selectedLayer.start} min={config.trimStart} max={Math.max(config.trimStart, selectedLayer.end - .2)} step={0.05} unit="s" onChange={(start) => updateSelectedLayer({ start: Math.min(start, selectedLayer.end - .2) })} />
+                <Slider label="End" value={selectedLayer.end} min={selectedLayer.start + .2} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(end) => updateSelectedLayer({ end: Math.max(end, selectedLayer.start + .2) })} />
+                <p className="panel-help-text">Drag the timeline bar to move it or trim either edge. On canvas, drag inside to move, use eight handles to scale, and drag the top handle to rotate. Hold Shift to snap rotation.</p>
+                <button className="ss-drawer-action-btn danger" onClick={() => deleteLayer(selectedLayer.id)}><Trash2 size={14} /> Delete Layer</button>
+              </Section>
+            </>
           )}
         </div>
       )}
@@ -424,7 +451,7 @@ export default function Panels({
               </button>
             )}
             <p className="panel-help-text">
-              Add Zoom Region creates a bar at the playhead immediately. Drag it to move, trim either edge, then click the preview to set its focus point.
+              Add Zoom Region creates a bar at the playhead immediately. Move or trim the bar in the timeline, then drag directly in the preview to place its focus point.
             </p>
             {config.zoomMode === "auto" && (
               <button className="ss-drawer-action-btn" onClick={onRegenerateAutoZoom}>
@@ -434,8 +461,10 @@ export default function Panels({
           </Section>
           {selectedZoomRegion && (
             <Section title="Selected Zoom">
+              <div className="selection-source-badge">{selectedZoomRegion.source === "auto" ? "Auto zoom" : "Manual zoom"}</div>
               <Slider label="Zoom" value={selectedZoomRegion.scale} min={1.1} max={4} step={0.1} unit="×" onChange={(scale) => onSelectedZoomChange({ scale })} />
               <Slider label="Transition" value={selectedZoomRegion.transitionMs} min={40} max={Math.max(80, Math.min(2000, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(transitionMs) => onSelectedZoomChange({ transitionMs })} />
+              <SelectRow label="Transition Curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
               <Slider label="Focus X" value={Math.round(selectedZoomRegion.x * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ x: value / 100 })} />
               <Slider label="Focus Y" value={Math.round(selectedZoomRegion.y * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ y: value / 100 })} />
               <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
@@ -468,6 +497,14 @@ export default function Panels({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return <div className="ss-section"><h4 className="ss-section-heading">{title}</h4><div className="ss-section-body">{children}</div></div>;
+}
+
+function SelectRow({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
+  return <label className="field-row select-row"><span className="field-label">{label}</span><select className="layer-select-input" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{optionLabels?.[option] ?? option.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase())}</option>)}</select></label>;
+}
+
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return <label className="layer-number-field"><span>{label}</span><div><input type="number" min={0} max={100} step={1} value={Math.round(value)} onChange={(event) => onChange(Number(event.target.value))} /><em>%</em></div></label>;
 }
 
 function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {

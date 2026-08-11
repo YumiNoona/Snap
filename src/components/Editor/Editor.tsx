@@ -11,6 +11,7 @@ import ExportModal from "./ExportModal";
 import type { EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
+import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
 import "./Editor.css";
 
 interface Props {
@@ -82,65 +83,6 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
-interface ResolvedZoomRegion extends ZoomRegionSettings {
-  memberIndices: number[];
-  zoomIndices: number[];
-  resetIndex: number | null;
-}
-
-function resolveZoomRegion(
-  frames: Keyframe[],
-  selection: ZoomRegionSelection | null,
-  timelineEndMs: number
-): ResolvedZoomRegion | null {
-  if (!selection) return null;
-  const sorted = frames.map((frame, index) => ({ frame, index })).sort((a, b) => a.frame.time - b.frame.time);
-  const regions: ResolvedZoomRegion[] = [];
-  let active: ResolvedZoomRegion | null = null;
-
-  for (const { frame, index } of sorted) {
-    if (frame.scale > 1.02) {
-      if (!active) {
-        active = {
-          startMs: Math.max(0, frame.time - (frame.duration || 0)),
-          endMs: frame.time,
-          scale: frame.scale,
-          x: frame.x,
-          y: frame.y,
-          transitionMs: frame.duration || 400,
-          memberIndices: [index],
-          zoomIndices: [index],
-          resetIndex: null,
-        };
-      } else {
-        active.endMs = Math.max(active.endMs, frame.time);
-        active.scale = Math.max(active.scale, frame.scale);
-        active.x = frame.x;
-        active.y = frame.y;
-        active.memberIndices.push(index);
-        active.zoomIndices.push(index);
-      }
-    } else if (active) {
-      active.endMs = Math.max(active.startMs + 100, frame.time);
-      active.memberIndices.push(index);
-      active.resetIndex = index;
-      regions.push(active);
-      active = null;
-    }
-  }
-  if (active) {
-    active.endMs = Math.max(active.startMs + 100, timelineEndMs);
-    regions.push(active);
-  }
-
-  return regions.reduce<ResolvedZoomRegion | null>((best, region) => {
-    const score = Math.abs(region.startMs - selection.startMs) + Math.abs(region.endMs - selection.endMs);
-    if (!best) return region;
-    const bestScore = Math.abs(best.startMs - selection.startMs) + Math.abs(best.endMs - selection.endMs);
-    return score < bestScore ? region : best;
-  }, null);
-}
-
 function waitForPlayable(video: HTMLVideoElement, timeoutMs = 1400): Promise<void> {
   if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return Promise.resolve();
   return new Promise((resolve) => {
@@ -160,55 +102,6 @@ function waitForPlayable(video: HTMLVideoElement, timeoutMs = 1400): Promise<voi
     video.addEventListener("loadeddata", finish, { once: true });
     video.addEventListener("seeked", finish, { once: true });
     video.addEventListener("error", finish, { once: true });
-  });
-}
-
-/**
- * `play()` resolving only means the media element entered its playing state.
- * For the editor we need stronger proof: WebView2 must have decoded a newer
- * frame so the canvas preview can actually advance.
- */
-function waitForDecodedFrame(
-  video: HTMLVideoElement,
-  afterTime: number,
-  timeoutMs = 1100
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const frameVideo = video as HTMLVideoElement & {
-      requestVideoFrameCallback?: (callback: (now: number, metadata: { mediaTime: number }) => void) => number;
-      cancelVideoFrameCallback?: (handle: number) => void;
-    };
-    let settled = false;
-    let frameHandle: number | null = null;
-
-    const finish = (advanced: boolean) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      video.removeEventListener("timeupdate", onTime);
-      video.removeEventListener("error", onError);
-      if (frameHandle !== null) frameVideo.cancelVideoFrameCallback?.(frameHandle);
-      resolve(advanced);
-    };
-    const hasAdvanced = (mediaTime = video.currentTime) => mediaTime > afterTime + 0.012;
-    const onTime = () => {
-      if (hasAdvanced()) finish(true);
-    };
-    const onError = () => finish(false);
-    const watchFrame = (_now: number, metadata: { mediaTime: number }) => {
-      if (hasAdvanced(metadata.mediaTime)) {
-        finish(true);
-      } else if (!settled && frameVideo.requestVideoFrameCallback) {
-        frameHandle = frameVideo.requestVideoFrameCallback(watchFrame);
-      }
-    };
-    const timer = window.setTimeout(() => finish(hasAdvanced()), timeoutMs);
-
-    video.addEventListener("timeupdate", onTime);
-    video.addEventListener("error", onError, { once: true });
-    if (frameVideo.requestVideoFrameCallback) {
-      frameHandle = frameVideo.requestVideoFrameCallback(watchFrame);
-    }
   });
 }
 
@@ -243,14 +136,13 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const historyRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
   const futureRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
-  const playbackRequestRef = useRef(0);
+  const playbackCommandRef = useRef(0);
   const desiredPlayingRef = useRef(false);
   const playbackRecoveryTimerRef = useRef<number | null>(null);
   const playbackProgressRef = useRef({ mediaTime: 0, changedAt: performance.now() });
-  const playbackStartRequestRef = useRef(0);
   const playbackRecoveryInFlightRef = useRef(false);
   const playbackBoundsRef = useRef({ start: config.trimStart, end: config.trimEnd || duration });
-  const manualTargetRangeRef = useRef<{ startMs: number; endMs: number } | null>(null);
+  const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
   const lastSnapshotRef = useRef({ config, keyframes });
   const applyingHistoryRef = useRef(false);
 
@@ -369,35 +261,43 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     });
   }, []);
 
-  // Keep both transport buttons synchronized to one media controller. A
-  // guarded recovery path is used only when WebView2 has stopped delivering
-  // decoded frames; ordinary pause/resume never races multiple play() calls.
+  const clearPlaybackRecovery = useCallback(() => {
+    if (playbackRecoveryTimerRef.current !== null) {
+      window.clearTimeout(playbackRecoveryTimerRef.current);
+      playbackRecoveryTimerRef.current = null;
+    }
+    playbackRecoveryInFlightRef.current = false;
+  }, []);
+
+  /** Stop playback and invalidate every older asynchronous play request. */
+  const pausePlayback = useCallback(() => {
+    desiredPlayingRef.current = false;
+    playbackCommandRef.current += 1;
+    clearPlaybackRecovery();
+    const el = videoRef.current;
+    if (el && !el.paused) el.pause();
+    setPlaying(false);
+  }, [clearPlaybackRecovery]);
+
+  // Media events are the source of truth for the transport UI. Decoder
+  // recovery is seek-only: load() resets the resource and aborts outstanding
+  // play promises, which caused the editor to remain stuck after layer edits.
   useEffect(() => {
     const el = mediaElement;
     if (!el) return;
     videoRef.current = el;
 
-    const clearRecovery = () => {
-      if (playbackRecoveryTimerRef.current !== null) {
-        window.clearTimeout(playbackRecoveryTimerRef.current);
-        playbackRecoveryTimerRef.current = null;
-      }
-    };
     const onPlaying = () => {
       playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
       if (desiredPlayingRef.current) setPlaying(true);
     };
     const onPause = () => {
       setPlaying(false);
-      // A pause outside an in-flight start/recovery is authoritative. This is
-      // what prevents a stale "wants to play" flag from turning the next Play
-      // click into another Pause command.
-      if (!playbackStartRequestRef.current && !playbackRecoveryInFlightRef.current) {
-        desiredPlayingRef.current = false;
-      }
+      if (!playbackRecoveryInFlightRef.current) desiredPlayingRef.current = false;
     };
     const onEnded = () => {
       desiredPlayingRef.current = false;
+      playbackCommandRef.current += 1;
       setPlaying(false);
     };
     const onProgress = () => {
@@ -406,55 +306,38 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       }
       setCurrentTime(el.currentTime);
     };
-    const recoverPlayback = () => {
+    const scheduleRecovery = () => {
       if (!desiredPlayingRef.current || playbackRecoveryInFlightRef.current) return;
-      clearRecovery();
-      const request = playbackRequestRef.current;
+      clearPlaybackRecovery();
+      const command = playbackCommandRef.current;
       const stalledAt = el.currentTime;
       playbackRecoveryTimerRef.current = window.setTimeout(async () => {
         playbackRecoveryTimerRef.current = null;
-        if (!desiredPlayingRef.current || request !== playbackRequestRef.current || el.ended) return;
+        if (!desiredPlayingRef.current || command !== playbackCommandRef.current || el.ended) return;
         if (Math.abs(el.currentTime - stalledAt) >= 0.015) return;
 
         playbackRecoveryInFlightRef.current = true;
         const { start, end: configuredEnd } = playbackBoundsRef.current;
         const end = configuredEnd || el.duration || Number.POSITIVE_INFINITY;
-        const restartAt = Math.max(start, Math.min(end - 0.04, stalledAt - 0.045));
         try {
-          // A short backward seek makes the decoder produce a fresh frame and
-          // avoids skipping content. It is less disruptive than load(), which
-          // resets the full media resource and rejects pending play promises.
-          el.currentTime = Math.max(start, restartAt);
+          // Refresh the decoder at the same logical frame without replacing
+          // the media source or skipping visible content.
+          el.currentTime = Math.max(start, Math.min(end - 0.04, stalledAt));
           await waitForPlayable(el, 1000);
-          if (!desiredPlayingRef.current || request !== playbackRequestRef.current) return;
-          const beforePlay = el.currentTime;
+          if (!desiredPlayingRef.current || command !== playbackCommandRef.current) return;
           await el.play();
-          const advanced = await waitForDecodedFrame(el, beforePlay, 1200);
-          if (!advanced && desiredPlayingRef.current && request === playbackRequestRef.current) {
-            // Last-resort decoder reset. There is no pending play() at this
-            // point, so load() cannot race an unresolved playback promise.
-            const resumeAt = el.currentTime;
-            el.pause();
-            el.load();
-            await waitForPlayable(el, 1800);
-            el.currentTime = Math.max(start, Math.min(resumeAt, end - 0.04));
-            await waitForPlayable(el, 1200);
-            if (desiredPlayingRef.current && request === playbackRequestRef.current) {
-              await el.play();
-            }
-          }
         } catch (error) {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
             console.warn("[Snap] Preview decoder recovery failed:", error);
           }
         } finally {
           playbackRecoveryInFlightRef.current = false;
-          if (desiredPlayingRef.current && request === playbackRequestRef.current && !el.paused) {
+          if (desiredPlayingRef.current && command === playbackCommandRef.current && !el.paused) {
             playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
             setPlaying(true);
           }
         }
-      }, 520);
+      }, 900);
     };
 
     el.addEventListener("play", onPlaying);
@@ -462,93 +345,80 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     el.addEventListener("pause", onPause);
     el.addEventListener("ended", onEnded);
     el.addEventListener("timeupdate", onProgress);
-    el.addEventListener("waiting", recoverPlayback);
-    el.addEventListener("stalled", recoverPlayback);
+    el.addEventListener("waiting", scheduleRecovery);
+    el.addEventListener("stalled", scheduleRecovery);
 
     const watchdog = window.setInterval(() => {
       if (!desiredPlayingRef.current || el.paused || el.ended) return;
-      const progress = playbackProgressRef.current;
-      if (performance.now() - progress.changedAt > 1500 && el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        recoverPlayback();
-      }
-    }, 650);
+      if (performance.now() - playbackProgressRef.current.changedAt > 1800) scheduleRecovery();
+    }, 700);
 
     return () => {
       desiredPlayingRef.current = false;
-      clearRecovery();
+      playbackCommandRef.current += 1;
+      clearPlaybackRecovery();
       window.clearInterval(watchdog);
       el.removeEventListener("play", onPlaying);
       el.removeEventListener("playing", onPlaying);
       el.removeEventListener("pause", onPause);
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("timeupdate", onProgress);
-      el.removeEventListener("waiting", recoverPlayback);
-      el.removeEventListener("stalled", recoverPlayback);
+      el.removeEventListener("waiting", scheduleRecovery);
+      el.removeEventListener("stalled", scheduleRecovery);
       videoRef.current = null;
     };
-  }, [mediaElement, videoPath]);
+  }, [clearPlaybackRecovery, mediaElement, videoPath]);
 
-  const togglePlay = useCallback(async () => {
-    const attachedElement = document.querySelector<HTMLVideoElement>("video#preview-video");
-    const el = attachedElement ?? videoRef.current;
+  const togglePlay = useCallback(() => {
+    const el = videoRef.current;
     if (!el) return;
-    if (videoRef.current !== el) videoRef.current = el;
-
-    const request = ++playbackRequestRef.current;
-    const startIsPending = playbackStartRequestRef.current !== 0;
-    // Decide from the real media state, not an old desired state. A second
-    // click during startup still cancels that pending start immediately.
-    if ((!el.paused && !el.ended) || startIsPending) {
-      desiredPlayingRef.current = false;
-      playbackStartRequestRef.current = 0;
-      el.pause();
-      setPlaying(false);
+    if (desiredPlayingRef.current || (!el.paused && !el.ended)) {
+      pausePlayback();
       return;
     }
 
+    clearPlaybackRecovery();
+    const command = ++playbackCommandRef.current;
     desiredPlayingRef.current = true;
-    playbackStartRequestRef.current = request;
-
     const start = Math.max(0, config.trimStart);
     const end = config.trimEnd || el.duration || duration;
     if (el.ended || (end > start && el.currentTime >= end - 0.025) || el.currentTime < start) {
       el.currentTime = start;
       setCurrentTime(start);
-      await waitForPlayable(el);
-    } else if (el.seeking || el.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      await waitForPlayable(el);
     }
+    playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
 
-    if (playbackRequestRef.current !== request || !desiredPlayingRef.current) return;
-
-    try {
-      const beforePlay = el.currentTime;
-      await el.play();
-      if (playbackRequestRef.current !== request || !desiredPlayingRef.current) {
-        el.pause();
-        return;
-      }
-      playbackStartRequestRef.current = 0;
-      playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
+    // A seek may delay play() resolution. Keep this request detached so Pause
+    // and edit actions remain immediate; their command token invalidates it.
+    void el.play().then(() => {
+      // A superseded promise must never pause or otherwise control a newer
+      // playback command. The explicit pause path already handled its state.
+      if (command !== playbackCommandRef.current || !desiredPlayingRef.current) return;
       setPlaying(!el.paused);
-      const advanced = await waitForDecodedFrame(el, beforePlay);
-      if (!advanced && playbackRequestRef.current === request && desiredPlayingRef.current) {
-        // Let the single watchdog/recovery path repair the decoder. Do not
-        // issue a second play() here and race the first command.
-        playbackProgressRef.current = { mediaTime: beforePlay, changedAt: performance.now() - 2000 };
-        el.dispatchEvent(new Event("stalled"));
-      }
-    } catch (error) {
-      if (playbackRequestRef.current !== request) return;
+    }).catch((error) => {
+      if (command !== playbackCommandRef.current) return;
       desiredPlayingRef.current = false;
       setPlaying(false);
       if (!(error instanceof DOMException && error.name === "AbortError")) {
-        console.warn("[Snap] Preview playback could not resume:", error);
+        console.warn("[Snap] Preview playback could not start:", error);
       }
-    } finally {
-      if (playbackStartRequestRef.current === request) playbackStartRequestRef.current = 0;
-    }
-  }, [config.trimEnd, config.trimStart, duration]);
+    });
+  }, [clearPlaybackRecovery, config.trimEnd, config.trimStart, duration, pausePlayback]);
+
+  useEffect(() => {
+    const handlePlaybackShortcut = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.isContentEditable
+        || !!target.closest("input, textarea, select, button, [role='textbox'], [role='slider']")
+      )) return;
+      event.preventDefault();
+      void togglePlay();
+    };
+    window.addEventListener("keydown", handlePlaybackShortcut);
+    return () => window.removeEventListener("keydown", handlePlaybackShortcut);
+  }, [togglePlay]);
 
   // Pause playback at the trim end / keep playhead inside the trim range
   useEffect(() => {
@@ -557,16 +427,14 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     const onTime = () => {
       const end = config.trimEnd || el.duration || 0;
       if (!el.paused && end > 0 && el.currentTime >= end) {
-        desiredPlayingRef.current = false;
-        playbackRequestRef.current += 1;
-        el.pause();
+        pausePlayback();
         el.currentTime = end;
         setCurrentTime(end);
       }
     };
     el.addEventListener("timeupdate", onTime);
     return () => el.removeEventListener("timeupdate", onTime);
-  }, [config.trimEnd, config.trimStart, videoPath]);
+  }, [config.trimEnd, config.trimStart, pausePlayback, videoPath]);
 
   const seekTo = useCallback(
     (t: number) => {
@@ -641,23 +509,11 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   };
 
   const getOccupiedZoomRanges = useCallback((frames: Keyframe[], timelineEndMs: number) => {
-    const sorted = [...frames].sort((a, b) => a.time - b.time);
-    const ranges: Array<{ startMs: number; endMs: number }> = [];
-    let startMs: number | null = null;
-    for (const frame of sorted) {
-      if (frame.scale > 1.02 && startMs === null) {
-        startMs = Math.max(0, frame.time - (frame.duration || 0));
-      } else if (frame.scale <= 1.02 && startMs !== null) {
-        ranges.push({ startMs, endMs: Math.max(startMs + 100, frame.time) });
-        startMs = null;
-      }
-    }
-    if (startMs !== null) ranges.push({ startMs, endMs: timelineEndMs });
-    return ranges;
+    return collectZoomRegions(frames, timelineEndMs).map(({ startMs, endMs }) => ({ startMs, endMs }));
   }, []);
 
   const resolvedSelectedZoom = useMemo(
-    () => resolveZoomRegion(keyframes, selectedZoomRegion, Math.round((config.trimEnd || duration) * 1000)),
+    () => findZoomRegion(keyframes, selectedZoomRegion, Math.round((config.trimEnd || duration) * 1000)),
     [config.trimEnd, duration, keyframes, selectedZoomRegion]
   );
 
@@ -684,6 +540,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         if (patch.x !== undefined) next.x = patch.x;
         if (patch.y !== undefined) next.y = patch.y;
       }
+      if (patch.easing !== undefined) next.easing = patch.easing;
       if (patch.transitionMs !== undefined && (index === region.zoomIndices[0] || index === region.resetIndex)) {
         next.duration = Math.min(Math.round(newDuration / 2), Math.max(40, patch.transitionMs));
       }
@@ -691,7 +548,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     }).sort((a, b) => a.time - b.time);
 
     setKeyframes(updated);
-    setSelectedZoomRegion({ startMs, endMs });
+    setSelectedZoomRegion({ startMs, endMs, regionId: region.regionId });
   }, [config.trimEnd, config.trimStart, duration, keyframes, resolvedSelectedZoom]);
 
   const deleteSelectedZoom = useCallback(() => {
@@ -700,6 +557,78 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     setKeyframes(keyframes.filter((_, index) => !memberSet.has(index)));
     setSelectedZoomRegion(null);
   }, [keyframes, resolvedSelectedZoom]);
+
+  const deleteZoomRegion = useCallback((selection: ZoomRegionSelection) => {
+    const region = findZoomRegion(keyframes, selection, Math.round((config.trimEnd || duration) * 1000));
+    if (!region) return;
+    const memberSet = new Set(region.memberIndices);
+    setKeyframes(keyframes.filter((_, index) => !memberSet.has(index)));
+    if (selectedZoomRegion?.regionId === region.regionId) setSelectedZoomRegion(null);
+  }, [config.trimEnd, duration, keyframes, selectedZoomRegion?.regionId]);
+
+  const duplicateZoomRegion = useCallback((selection: ZoomRegionSelection) => {
+    const timelineStartMs = Math.round(config.trimStart * 1000);
+    const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
+    const region = findZoomRegion(keyframes, selection, timelineEndMs);
+    if (!region) return;
+    const regionDuration = Math.max(350, region.endMs - region.startMs);
+    const occupied = getOccupiedZoomRanges(keyframes, timelineEndMs).sort((a, b) => a.startMs - b.startMs);
+    let destination = Math.min(region.endMs + 80, timelineEndMs - regionDuration);
+    const overlaps = (start: number) => occupied.some((range) => start < range.endMs + 50 && start + regionDuration > range.startMs - 50);
+    if (destination < timelineStartMs || overlaps(destination)) {
+      destination = timelineStartMs;
+      for (const range of occupied) {
+        if (destination + regionDuration <= range.startMs - 50) break;
+        destination = Math.max(destination, range.endMs + 50);
+      }
+    }
+    if (destination + regionDuration > timelineEndMs) {
+      // A short project may have no empty span large enough. Keep Duplicate
+      // reliable by creating an offset overlapping copy that can be moved or
+      // trimmed immediately from the timeline.
+      destination = Math.max(timelineStartMs, Math.min(timelineEndMs - regionDuration, region.startMs + 200));
+    }
+
+    const regionId = `zoom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const copies = region.memberIndices.map((index) => ({
+      ...keyframes[index],
+      time: Math.round(destination + (keyframes[index].time - region.startMs)),
+      regionId,
+      source: "manual" as const,
+    }));
+    const next = [...keyframes, ...copies].sort((a, b) => a.time - b.time);
+    setKeyframes(next);
+    setSelectedZoomRegion({ startMs: destination, endMs: destination + regionDuration, regionId });
+    setActiveTool("motion");
+    pausePlayback();
+    seekTo(destination / 1000);
+  }, [config.trimEnd, config.trimStart, duration, getOccupiedZoomRanges, keyframes, pausePlayback, seekTo]);
+
+  const duplicateLayer = useCallback((id: string) => {
+    const layer = config.layers.find((candidate) => candidate.id === id);
+    if (!layer) return;
+    const timelineEnd = config.trimEnd || duration;
+    const layerDuration = Math.max(0.2, layer.end - layer.start);
+    const shiftedStart = Math.min(Math.max(config.trimStart, layer.end + 0.15), Math.max(config.trimStart, timelineEnd - layerDuration));
+    const copy = {
+      ...layer,
+      id: `${layer.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      start: shiftedStart,
+      end: Math.min(timelineEnd, shiftedStart + layerDuration),
+      x: Math.min(0.92, layer.x + 0.025),
+      y: Math.min(0.92, layer.y + 0.025),
+    } as Layer;
+    setConfig((current) => ({ ...current, layers: [...current.layers, copy] }));
+    setSelectedLayerId(copy.id);
+    setActiveTool("annotations");
+    pausePlayback();
+    seekTo(copy.start + 0.01);
+  }, [config.layers, config.trimEnd, config.trimStart, duration, pausePlayback, seekTo]);
+
+  const deleteLayer = useCallback((id: string) => {
+    setConfig((current) => ({ ...current, layers: current.layers.filter((layer) => layer.id !== id) }));
+    if (selectedLayerId === id) setSelectedLayerId(null);
+  }, [selectedLayerId]);
 
   const handleAddManualZoom = useCallback(() => {
     const videoEndMs = Math.max(0, Math.round((config.trimEnd || duration) * 1000));
@@ -747,6 +676,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     const transitionMs = Math.max(450, Math.min(requestedTransitionMs, Math.floor((available - 500) / 2)));
     const zoomInMs = Math.min(endMs, startMs + transitionMs);
     const holdUntilMs = Math.max(zoomInMs, endMs - transitionMs);
+    const regionId = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const zoomKf: Keyframe = {
       time: zoomInMs,
       duration: transitionMs,
@@ -754,6 +684,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       y: 0.5,
       scale: config.zoomLevel || 2.0,
       easing: "ease-in-out",
+      source: "manual",
+      regionId,
     };
     const holdKf: Keyframe = { ...zoomKf, time: holdUntilMs, duration: 0 };
     const resetKf: Keyframe = {
@@ -763,6 +695,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       y: 0.5,
       scale: 1,
       easing: "ease-in-out",
+      source: "manual",
+      regionId,
     };
     const base = keyframes.length > 0
       ? keyframes
@@ -770,26 +704,32 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     const updated = [...base, zoomKf, holdKf, resetKf].sort((a, b) => a.time - b.time);
     setKeyframes(updated);
     setConfig((current) => ({ ...current, zoomMode: "manual" }));
-    manualTargetRangeRef.current = { startMs, endMs };
-    setSelectedZoomRegion({ startMs, endMs });
+    manualTargetRangeRef.current = { startMs, endMs, regionId };
+    setSelectedZoomRegion({ startMs, endMs, regionId });
     // The bar exists immediately. The next preview click only changes its
     // focus point; Escape keeps the new centered bar.
     setZoomTargetMode(true);
   }, [config.trimEnd, config.trimStart, config.zoomLevel, config.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
 
-  const updateManualZoomTarget = useCallback((point: { x: number; y: number }) => {
+  const updateManualZoomTarget = useCallback((point: { x: number; y: number }, commit = true) => {
     const range = manualTargetRangeRef.current;
     if (!range) {
-      setZoomTargetMode(false);
+      if (commit) setZoomTargetMode(false);
       return;
     }
     setKeyframes((frames) => frames.map((frame) => (
-      frame.scale > 1.02 && frame.time >= range.startMs && frame.time < range.endMs
+      frame.scale > 1.02 && (
+        range.regionId
+          ? frame.regionId === range.regionId
+          : frame.time >= range.startMs && frame.time < range.endMs
+      )
         ? { ...frame, x: point.x, y: point.y }
         : frame
     )));
-    manualTargetRangeRef.current = null;
-    setZoomTargetMode(false);
+    if (commit) {
+      manualTargetRangeRef.current = null;
+      setZoomTargetMode(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -803,6 +743,12 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     window.addEventListener("keydown", cancel);
     return () => window.removeEventListener("keydown", cancel);
   }, [zoomTargetMode]);
+
+  useEffect(() => {
+    if (activeTool === "motion" || !zoomTargetMode) return;
+    manualTargetRangeRef.current = null;
+    setZoomTargetMode(false);
+  }, [activeTool, zoomTargetMode]);
 
   return (
     <div className="screenstudio-editor-layout">
@@ -979,17 +925,21 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
               setConfig((c) => (c.trimEnd === 0 ? { ...c, trimEnd: d } : c));
             }}
             onMediaElementChange={setMediaElement}
-            onClick={togglePlay}
             cropMode={cropMode}
             onCropApply={handleCropApply}
             onCropCancel={handleCropCancel}
             selectedLayerId={selectedLayerId}
+            onLayerSelect={(id) => {
+              setSelectedLayerId(id);
+              if (id) setActiveTool("annotations");
+            }}
             onLayerChange={(updated) => setConfig((c) => ({
               ...c,
               layers: c.layers.map((layer) => layer.id === updated.id ? updated : layer),
             }))}
-            zoomTargetMode={zoomTargetMode}
-            zoomFocusPoint={resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
+            zoomTargetMode={activeTool === "motion" && zoomTargetMode}
+            zoomFocusPoint={activeTool === "motion" && zoomTargetMode && resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
+            zoomFocusSource={resolvedSelectedZoom?.source ?? config.zoomMode}
             onZoomTargetPick={updateManualZoomTarget}
             autoZoomRevision={autoZoomRevision}
           />
@@ -1051,17 +1001,15 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           // Selecting a bar enters focus editing at the beginning of that
           // camera move. This keeps the source frame stable while the blue
           // focus marker is repositioned in the preview.
-          desiredPlayingRef.current = false;
-          playbackRequestRef.current += 1;
-          playbackStartRequestRef.current = 0;
-          videoRef.current?.pause();
-          setPlaying(false);
+          pausePlayback();
           setSelectedZoomRegion(region);
           setActiveTool("motion");
           manualTargetRangeRef.current = region;
           setZoomTargetMode(true);
           seekTo(region.startMs / 1000);
         }}
+        onZoomRegionDuplicate={duplicateZoomRegion}
+        onZoomRegionDelete={deleteZoomRegion}
         onAudioMuteChange={(track, muted) => setConfig((current) => ({
           ...current,
           audio: {
@@ -1069,6 +1017,21 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             ...(track === "system" ? { systemMuted: muted } : { micMuted: muted }),
           },
         }))}
+        layers={config.layers}
+        selectedLayerId={selectedLayerId}
+        onLayerSelect={(id) => {
+          pausePlayback();
+          setSelectedLayerId(id);
+          setActiveTool("annotations");
+          const layer = config.layers.find((candidate) => candidate.id === id);
+          if (layer && (currentTime < layer.start || currentTime > layer.end)) seekTo(layer.start + 0.01);
+        }}
+        onLayerChange={(updated) => setConfig((current) => ({
+          ...current,
+          layers: current.layers.map((layer) => layer.id === updated.id ? updated : layer),
+        }))}
+        onLayerDuplicate={duplicateLayer}
+        onLayerDelete={deleteLayer}
       />
       {showExport && (
         <ExportModal

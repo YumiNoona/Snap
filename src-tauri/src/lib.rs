@@ -1,14 +1,15 @@
-mod capture;
 mod audio;
-mod input_hook;
+mod capture;
 mod export;
+mod input_hook;
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use tauri::webview::Color;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri::webview::Color;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
 };
@@ -27,7 +28,9 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
         GetWindowDisplayAffinity(hwnd, &mut applied)
             .map_err(|error| format!("Unable to verify capture affinity: {error}"))?;
         if applied != WDA_EXCLUDEFROMCAPTURE.0 {
-            return Err(format!("Windows applied capture affinity {applied:#x} instead of WDA_EXCLUDEFROMCAPTURE"));
+            return Err(format!(
+                "Windows applied capture affinity {applied:#x} instead of WDA_EXCLUDEFROMCAPTURE"
+            ));
         }
     }
     Ok(())
@@ -164,7 +167,8 @@ async fn open_editor_window(
         let _ = tx.send(result);
     });
 
-    rx.recv().map_err(|e| format!("Editor window creation thread died: {e}"))?
+    rx.recv()
+        .map_err(|e| format!("Editor window creation thread died: {e}"))?
 }
 
 /// Called by the frontend after React mounts and the UI is rendered — the
@@ -214,7 +218,8 @@ async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
         let _ = tx.send(result);
     });
 
-    rx.recv().map_err(|e| format!("Teleprompter window creation thread died: {e}"))?
+    rx.recv()
+        .map_err(|e| format!("Teleprompter window creation thread died: {e}"))?
 }
 
 /// Open Settings as a dedicated OS-level module, matching the standalone
@@ -250,7 +255,8 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         let _ = tx.send(result);
     });
 
-    rx.recv().map_err(|error| format!("Settings window creation thread died: {error}"))?
+    rx.recv()
+        .map_err(|error| format!("Settings window creation thread died: {error}"))?
 }
 
 #[tauri::command]
@@ -265,26 +271,43 @@ fn get_pending_editor_paths(state: tauri::State<EditorPaths>) -> Result<(String,
 
 #[tauri::command]
 fn begin_region_selection(app: tauri::AppHandle) -> Result<capture::TargetBounds, String> {
-    let window = app.get_webview_window("main").ok_or("Main window not found")?;
-    let monitor = window.current_monitor().map_err(|e| e.to_string())?
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| e.to_string())?
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or("No monitor available")?;
     let position = *monitor.position();
     let size = *monitor.size();
     window.set_always_on_top(true).map_err(|e| e.to_string())?;
-    window.set_position(tauri::PhysicalPosition::new(position.x, position.y)).map_err(|e| e.to_string())?;
-    window.set_size(tauri::PhysicalSize::new(size.width, size.height)).map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(position.x, position.y))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::PhysicalSize::new(size.width, size.height))
+        .map_err(|e| e.to_string())?;
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
-    Ok(capture::TargetBounds { x: position.x, y: position.y, w: size.width as i32, h: size.height as i32 })
+    Ok(capture::TargetBounds {
+        x: position.x,
+        y: position.y,
+        w: size.width as i32,
+        h: size.height as i32,
+    })
 }
 
 #[tauri::command]
 fn end_region_selection(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or("Main window not found")?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
     window.set_always_on_top(false).map_err(|e| e.to_string())?;
-    window.set_size(tauri::LogicalSize::new(1180.0, 440.0)).map_err(|e| e.to_string())?;
+    window
+        .set_size(tauri::LogicalSize::new(1180.0, 440.0))
+        .map_err(|e| e.to_string())?;
     window.center().map_err(|e| e.to_string())
 }
 
@@ -373,7 +396,11 @@ fn set_dock_compact(app: tauri::AppHandle, compact: bool) -> Result<(), String> 
     let scale = win.scale_factor().map_err(|error| error.to_string())?;
     let old_size = win.outer_size().map_err(|error| error.to_string())?;
     let old_position = win.outer_position().map_err(|error| error.to_string())?;
-    let (logical_width, logical_height) = if compact { (196.0, 60.0) } else { (460.0, 74.0) };
+    let (logical_width, logical_height) = if compact {
+        (196.0, 60.0)
+    } else {
+        (460.0, 74.0)
+    };
     let new_width = (logical_width * scale).round() as i32;
     let new_height = (logical_height * scale).round() as i32;
     let centered_x = old_position.x + (old_size.width as i32 - new_width) / 2;
@@ -472,7 +499,10 @@ fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String
         let _ = win.set_focus();
     } else {
         // If overlay border is active, don't hide the window — just clear countdown
-        let border_active = OVERLAY_APPEARANCE.lock().map(|g| g.is_some()).unwrap_or(false);
+        let border_active = OVERLAY_APPEARANCE
+            .lock()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
         if !border_active {
             let _ = win.hide();
         }
@@ -622,8 +652,14 @@ const WALLPAPER_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "bmp", "g
 
 fn resolve_wallpapers_dir() -> Option<std::path::PathBuf> {
     let candidates = [
-        std::env::current_dir().ok()?.join("public").join("Wallpapers"),
-        std::env::current_dir().ok()?.join("public").join("wallpapers"),
+        std::env::current_dir()
+            .ok()?
+            .join("public")
+            .join("Wallpapers"),
+        std::env::current_dir()
+            .ok()?
+            .join("public")
+            .join("wallpapers"),
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("public")
@@ -639,11 +675,13 @@ fn resolve_wallpapers_dir() -> Option<std::path::PathBuf> {
 /// Enumerate wallpaper images under public/Wallpapers/ (png/jpg/jpeg/webp/bmp/gif).
 #[tauri::command]
 fn list_wallpaper_images() -> std::result::Result<Vec<WallpaperEntry>, String> {
-    let dir =
-        resolve_wallpapers_dir().ok_or_else(|| "public/Wallpapers directory not found".to_string())?;
+    let dir = resolve_wallpapers_dir()
+        .ok_or_else(|| "public/Wallpapers directory not found".to_string())?;
     let mut entries: Vec<WallpaperEntry> = Vec::new();
 
-    for entry in std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))? {
+    for entry in
+        std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?
+    {
         let entry = entry.map_err(|e| format!("Cannot read dir entry: {e}"))?;
         if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
             continue;
@@ -690,7 +728,9 @@ fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
         resolve_cursors_dir().ok_or_else(|| "public/Cursors directory not found".to_string())?;
     let mut packs = Vec::new();
 
-    for entry in std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))? {
+    for entry in
+        std::fs::read_dir(&dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?
+    {
         let entry = entry.map_err(|e| format!("Cannot read dir entry: {e}"))?;
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
@@ -754,8 +794,7 @@ fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
 #[tauri::command]
 fn list_directory(path: String) -> std::result::Result<Vec<FileEntry>, String> {
     let mut entries = Vec::new();
-    let dir = std::fs::read_dir(&path)
-        .map_err(|e| format!("Cannot read directory {path}: {e}"))?;
+    let dir = std::fs::read_dir(&path).map_err(|e| format!("Cannot read directory {path}: {e}"))?;
     for entry in dir.flatten() {
         let meta = entry.metadata().ok();
         entries.push(FileEntry {
@@ -766,9 +805,140 @@ fn list_directory(path: String) -> std::result::Result<Vec<FileEntry>, String> {
         });
     }
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(entries)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingDataPaths {
+    data_dir: String,
+    log_path: String,
+}
+
+fn recording_data_paths(video_path: &Path) -> (PathBuf, PathBuf) {
+    let parent = video_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = video_path.file_stem().unwrap_or_default().to_string_lossy();
+    let data_dir = parent.join(stem.as_ref());
+    let log_path = data_dir.join("events.json");
+    (data_dir, log_path)
+}
+
+#[cfg(target_os = "windows")]
+fn set_support_folder_hidden(path: &Path, hidden: bool) -> std::result::Result<(), String> {
+    let flag = if hidden { "+H" } else { "-H" };
+    let status = std::process::Command::new("attrib.exe")
+        .arg(flag)
+        .arg(path.as_os_str())
+        .status()
+        .map_err(|error| format!("Unable to update recording-data visibility: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("attrib.exe exited with {status}"))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_support_folder_hidden(_path: &Path, _hidden: bool) -> std::result::Result<(), String> {
+    Ok(())
+}
+
+/// Create the private working-data folder used by input logging and both
+/// audio tracks. The MP4 deliberately remains in Videos so Explorer presents
+/// a clean, familiar recording library.
+#[tauri::command]
+fn prepare_recording_data(
+    video_path: String,
+    show_support_files: bool,
+) -> std::result::Result<RecordingDataPaths, String> {
+    let (data_dir, log_path) = recording_data_paths(Path::new(&video_path));
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| format!("Unable to create recording-data folder: {error}"))?;
+    set_support_folder_hidden(&data_dir, !show_support_files)?;
+    Ok(RecordingDataPaths {
+        data_dir: data_dir.to_string_lossy().to_string(),
+        log_path: log_path.to_string_lossy().to_string(),
+    })
+}
+
+/// Resolve current and legacy input-log layouts. This keeps old recordings,
+/// imported recordings, auto-zoom, and export working across the migration.
+#[tauri::command]
+fn resolve_recording_log_path(video_path: String) -> String {
+    let video = Path::new(&video_path);
+    let (data_dir, preferred) = recording_data_paths(video);
+    if preferred.exists() {
+        return preferred.to_string_lossy().to_string();
+    }
+
+    let stem = video.file_stem().unwrap_or_default().to_string_lossy();
+    let nested_legacy = data_dir.join(format!("{stem}.json"));
+    if nested_legacy.exists() {
+        return nested_legacy.to_string_lossy().to_string();
+    }
+
+    let flat_legacy = video.with_extension("json");
+    if flat_legacy.exists() {
+        return flat_legacy.to_string_lossy().to_string();
+    }
+    preferred.to_string_lossy().to_string()
+}
+
+/// Move legacy flat JSON sidecars into their matching audio folders and set
+/// folder visibility to the user's preference. Individual failures are kept
+/// non-fatal so one locked recording cannot block the rest of the library.
+#[tauri::command]
+fn organize_recording_data(show_support_files: bool) -> std::result::Result<usize, String> {
+    let videos = PathBuf::from(capture::get_videos_dir()?);
+    std::fs::create_dir_all(&videos)
+        .map_err(|error| format!("Unable to open Videos folder: {error}"))?;
+    let entries: Vec<_> = std::fs::read_dir(&videos)
+        .map_err(|error| format!("Unable to scan Videos folder: {error}"))?
+        .flatten()
+        .collect();
+    let mut moved = 0usize;
+
+    for entry in &entries {
+        let path = entry.path();
+        if !path.is_file()
+            || path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| !value.eq_ignore_ascii_case("json"))
+                .unwrap_or(true)
+        {
+            continue;
+        }
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        if !stem.starts_with("snap_") {
+            continue;
+        }
+        let data_dir = videos.join(stem.as_ref());
+        if std::fs::create_dir_all(&data_dir).is_err() {
+            continue;
+        }
+        let destination = data_dir.join("events.json");
+        if !destination.exists() && std::fs::rename(&path, &destination).is_ok() {
+            moved += 1;
+        }
+        let _ = set_support_folder_hidden(&data_dir, !show_support_files);
+    }
+
+    for entry in entries {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name.starts_with("snap_") {
+            let _ = set_support_folder_hidden(&path, !show_support_files);
+        }
+    }
+    Ok(moved)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -818,6 +988,9 @@ pub fn run() {
             set_countdown,
             read_text_file,
             list_directory,
+            prepare_recording_data,
+            resolve_recording_log_path,
+            organize_recording_data,
             list_cursor_packs,
             list_wallpaper_images,
             open_explorer,

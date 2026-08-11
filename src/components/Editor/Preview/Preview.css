@@ -38,42 +38,6 @@
   border-radius: var(--radius-sm);
 }
 
-.preview-controls {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 2;
-}
-
-.play-overlay {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.72));
-  transition: opacity var(--dur-base) var(--ease-standard), transform var(--dur-base) var(--ease-standard);
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.play-overlay:hover {
-  color: #ffffff;
-  transform: scale(1.08);
-}
-
-.play-overlay.hidden {
-  opacity: 0;
-  transform: scale(0.8);
-  pointer-events: none;
-}
-
 .crop-hint {
   position: absolute;
   bottom: var(--space-4);

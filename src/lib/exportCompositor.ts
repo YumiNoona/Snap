@@ -339,8 +339,15 @@ export async function createExportCompositor(
       const ly = offsetY + layer.y * videoH;
       const lw = layer.w * videoW;
       const lh = layer.h * videoH;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
+      ctx.translate(lx + lw / 2, ly + lh / 2);
+      ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
+      ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
+      ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
       else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      ctx.restore();
     }
 
     // Click-ripple spawning — export always plays forward in real time, so

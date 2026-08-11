@@ -43,7 +43,6 @@ export default function TeleprompterWindow({ onClose }: Props) {
   const actualWordCount = wordIndices.length;
 
   useEffect(() => {
-    console.log("[Snap Teleprompter] mounted OK, standalone:", isStandalone);
     if (!isStandalone) return;
     const prevBg = document.body.style.background;
     const prevColor = document.body.style.color;

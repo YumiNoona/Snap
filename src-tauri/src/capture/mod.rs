@@ -48,7 +48,12 @@ pub struct CaptureRegion {
 }
 
 #[derive(Clone, Copy)]
-struct CropRect { x: u32, y: u32, w: u32, h: u32 }
+struct CropRect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
 
 /// Physical-pixel bounds of a monitor or window target. The editor uses these to
 /// map input-hook screen coordinates onto the recorded video frame.
@@ -229,22 +234,39 @@ pub async fn start_recording(
     let is_rec_clone = is_recording.clone();
     let is_paused_clone = is_paused.clone();
     let target_bounds = get_target_bounds(target_id.clone()).ok();
-    let crop = region.and_then(|selected| target_bounds.map(|bounds| {
-        let left = (selected.x - bounds.x).clamp(0, bounds.w.saturating_sub(2));
-        let top = (selected.y - bounds.y).clamp(0, bounds.h.saturating_sub(2));
-        let max_w = bounds.w - left;
-        let max_h = bounds.h - top;
-        let mut w = selected.w.clamp(2, max_w) as u32;
-        let mut h = selected.h.clamp(2, max_h) as u32;
-        w -= w % 2; h -= h % 2;
-        CropRect { x: left as u32, y: top as u32, w: w.max(2), h: h.max(2) }
-    }));
+    let crop = region.and_then(|selected| {
+        target_bounds.map(|bounds| {
+            let left = (selected.x - bounds.x).clamp(0, bounds.w.saturating_sub(2));
+            let top = (selected.y - bounds.y).clamp(0, bounds.h.saturating_sub(2));
+            let max_w = bounds.w - left;
+            let max_h = bounds.h - top;
+            let mut w = selected.w.clamp(2, max_w) as u32;
+            let mut h = selected.h.clamp(2, max_h) as u32;
+            w -= w % 2;
+            h -= h % 2;
+            CropRect {
+                x: left as u32,
+                y: top as u32,
+                w: w.max(2),
+                h: h.max(2),
+            }
+        })
+    });
 
     // Use std::thread::spawn instead of tokio::task::spawn_blocking to guarantee
     // a fresh thread with no prior COM initialization (avoids RPC_E_CHANGED_MODE).
     thread::spawn(move || {
-        let result = run_capture_thread(&target_id, &output_path, crop, is_rec_clone, is_paused_clone, startup_tx.clone());
-        if let Err(error) = &result { let _ = startup_tx.send(Err(error.clone())); }
+        let result = run_capture_thread(
+            &target_id,
+            &output_path,
+            crop,
+            is_rec_clone,
+            is_paused_clone,
+            startup_tx.clone(),
+        );
+        if let Err(error) = &result {
+            let _ = startup_tx.send(Err(error.clone()));
+        }
         let _ = done_tx.send(result);
     });
 
@@ -285,7 +307,9 @@ pub fn set_paused(paused: bool) -> std::result::Result<(), String> {
 pub async fn stop_recording() -> std::result::Result<(), String> {
     let handle = {
         let mut guard = STATE.lock().map_err(|e| e.to_string())?;
-        guard.take().ok_or_else(|| "No recording in progress".to_string())?
+        guard
+            .take()
+            .ok_or_else(|| "No recording in progress".to_string())?
     };
 
     eprintln!("[Snap] Signaling capture thread to stop...");
@@ -526,8 +550,7 @@ fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
 fn create_capture_item(target_id: &str) -> Result<GraphicsCaptureItem> {
     let class_name = HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureItem");
-    let interop: IGraphicsCaptureItemInterop =
-        unsafe { RoGetActivationFactory(&class_name) }?;
+    let interop: IGraphicsCaptureItemInterop = unsafe { RoGetActivationFactory(&class_name) }?;
 
     if let Some(hmonitor) = hmonitor_from_id(target_id) {
         unsafe { interop.CreateForMonitor(hmonitor) }
@@ -540,11 +563,7 @@ fn create_capture_item(target_id: &str) -> Result<GraphicsCaptureItem> {
 
 // ── FFmpeg subprocess ────────────────────────────────────────────────────────
 
-fn spawn_ffmpeg(
-    output_path: &str,
-    width: u32,
-    height: u32,
-) -> Result<(Child, ChildStdin, String)> {
+fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, ChildStdin, String)> {
     let size = format!("{width}x{height}");
 
     fn try_ffmpeg(args: &[&str]) -> std::result::Result<Child, std::io::Error> {
@@ -557,15 +576,31 @@ fn spawn_ffmpeg(
     }
 
     let candidates: [(&str, Vec<&str>); 3] = [
-        ("NVENC", vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M"]),
-        ("AMD AMF", vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M"]),
-        ("Intel Quick Sync", vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M"]),
+        (
+            "NVENC",
+            vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M"],
+        ),
+        (
+            "AMD AMF",
+            vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M"],
+        ),
+        (
+            "Intel Quick Sync",
+            vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M"],
+        ),
     ];
     for (name, codec_args) in candidates {
         let test_src = format!("color=black:s={size}:r=1");
         let mut probe_args = vec![
-            "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", &test_src,
-            "-frames:v", "1",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            &test_src,
+            "-frames:v",
+            "1",
         ];
         probe_args.extend(codec_args.iter().copied());
         probe_args.extend(["-f", "null", "-"]);
@@ -582,13 +617,25 @@ fn spawn_ffmpeg(
             continue;
         }
         let mut args = vec![
-            "-y", "-f", "rawvideo", "-pixel_format", "bgra",
-            "-video_size", &size, "-framerate", "60", "-i", "pipe:0",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "bgra",
+            "-video_size",
+            &size,
+            "-framerate",
+            "60",
+            "-i",
+            "pipe:0",
         ];
         args.extend(codec_args);
         args.extend(["-pix_fmt", "yuv420p", output_path]);
         if let Ok(mut child) = try_ffmpeg(&args) {
-            let stdin = child.stdin.take().ok_or_else(|| Error::new(E_FAIL, "FFmpeg stdin unavailable"))?;
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| Error::new(E_FAIL, "FFmpeg stdin unavailable"))?;
             return Ok((child, stdin, name.to_string()));
         }
     }
@@ -642,11 +689,7 @@ fn read_ffmpeg_stderr(child: &mut Child) -> String {
     }
 }
 
-fn validate_output(
-    path: &std::path::Path,
-    ffmpeg_ok: bool,
-    stderr: &str,
-) -> Result<()> {
+fn validate_output(path: &std::path::Path, ffmpeg_ok: bool, stderr: &str) -> Result<()> {
     let exists = path.exists();
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
@@ -684,7 +727,10 @@ fn validate_output(
         ));
     }
 
-    eprintln!("[Snap] Output validated OK: {} ({size} bytes)", path.display());
+    eprintln!(
+        "[Snap] Output validated OK: {} ({size} bytes)",
+        path.display()
+    );
     Ok(())
 }
 
@@ -731,7 +777,12 @@ fn write_frame_to_ffmpeg(
         context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
     }
 
-    let crop = crop.unwrap_or(CropRect { x: 0, y: 0, w: desc.Width, h: desc.Height });
+    let crop = crop.unwrap_or(CropRect {
+        x: 0,
+        y: 0,
+        w: desc.Width,
+        h: desc.Height,
+    });
     let height = crop.h as usize;
     let row_pitch = mapped.RowPitch as usize;
     let packed_row = (crop.w * 4) as usize;
@@ -739,7 +790,8 @@ fn write_frame_to_ffmpeg(
     let mut buf = Vec::with_capacity(packed_row * height);
     unsafe {
         for row in 0..height {
-            let src = (mapped.pData as *const u8).add((row + crop.y as usize) * row_pitch + crop.x as usize * 4);
+            let src = (mapped.pData as *const u8)
+                .add((row + crop.y as usize) * row_pitch + crop.x as usize * 4);
             let slice = std::slice::from_raw_parts(src, packed_row);
             buf.extend_from_slice(slice);
         }

@@ -36,8 +36,8 @@ pub fn enumerate_audio_devices() -> std::result::Result<Vec<AudioDevice>, String
 
     let _ = initialize_mta();
 
-    let enumerator = DeviceEnumerator::new()
-        .map_err(|e| format!("DeviceEnumerator failed: {e}"))?;
+    let enumerator =
+        DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator failed: {e}"))?;
 
     let mut devices = Vec::new();
 
@@ -71,10 +71,7 @@ pub fn enumerate_audio_devices() -> std::result::Result<Vec<AudioDevice>, String
         }
     }
 
-    eprintln!(
-        "[Snap Audio] Step 1: found {} devices",
-        devices.len()
-    );
+    eprintln!("[Snap Audio] Step 1: found {} devices", devices.len());
     Ok(devices)
 }
 
@@ -101,7 +98,14 @@ pub async fn start_audio_capture(
 
     // Use std::thread::spawn for a fresh thread with no prior COM initialization.
     thread::spawn(move || {
-        let result = run_audio_threads(&mic_device_id, &speaker_device_id, &output_dir, is_rec_clone, is_paused_clone, mic_muted_clone);
+        let result = run_audio_threads(
+            &mic_device_id,
+            &speaker_device_id,
+            &output_dir,
+            is_rec_clone,
+            is_paused_clone,
+            mic_muted_clone,
+        );
         let _ = done_tx.send(result);
     });
 
@@ -132,7 +136,10 @@ pub fn set_audio_paused(paused: bool) -> std::result::Result<(), String> {
     let guard = AUDIO_STATE.lock().map_err(|e| e.to_string())?;
     if let Some(handle) = guard.as_ref() {
         handle.is_paused.store(paused, Ordering::SeqCst);
-        eprintln!("[Snap Audio] Capture {}", if paused { "paused" } else { "resumed" });
+        eprintln!(
+            "[Snap Audio] Capture {}",
+            if paused { "paused" } else { "resumed" }
+        );
     }
     Ok(())
 }
@@ -171,8 +178,7 @@ fn run_audio_threads(
     let out_dir = std::path::PathBuf::from(output_dir);
     let mic_id = mic_device_id.to_string();
     let speaker_id = speaker_device_id.to_string();
-    std::fs::create_dir_all(&out_dir)
-        .map_err(|e| format!("Failed to create output dir: {e}"))?;
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
 
     let sys_path = out_dir.join("system_audio.wav");
     let mic_path = out_dir.join("mic_audio.wav");
@@ -188,13 +194,18 @@ fn run_audio_threads(
     let capture_system = speaker_id != "disabled";
     let capture_mic = mic_id != "disabled";
     let sys_handle = if capture_system {
-        eprintln!("[Snap Audio] Step 2: starting system loopback capture -> {}", sys_file.display());
+        eprintln!(
+            "[Snap Audio] Step 2: starting system loopback capture -> {}",
+            sys_file.display()
+        );
         Some(thread::spawn(move || {
             if let Err(e) = capture_loopback(&speaker_id, sys_file, sys_rec, sys_paused) {
                 eprintln!("[Snap Audio] System loopback error: {e}");
             }
         }))
-    } else { None };
+    } else {
+        None
+    };
 
     eprintln!(
         "[Snap Audio] Step 3: starting mic capture ({mic_id}) -> {}",
@@ -206,23 +217,31 @@ fn run_audio_threads(
                 eprintln!("[Snap Audio] Mic capture error: {e}");
             }
         }))
-    } else { None };
+    } else {
+        None
+    };
 
     // Wait for both threads
-    if let Some(handle) = sys_handle { let _ = handle.join(); }
-    if let Some(handle) = mic_handle { let _ = handle.join(); }
+    if let Some(handle) = sys_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = mic_handle {
+        let _ = handle.join();
+    }
 
     // Verify output files
     let mut errors = Vec::new();
     let mut expected = Vec::new();
-    if capture_system { expected.push(("system audio", &sys_path)); }
-    if capture_mic { expected.push(("mic audio", &mic_path)); }
+    if capture_system {
+        expected.push(("system audio", &sys_path));
+    }
+    if capture_mic {
+        expected.push(("mic audio", &mic_path));
+    }
     for (label, path) in expected {
         let exists = path.exists();
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        eprintln!(
-            "[Snap Audio] {label} output: exists={exists}, size={size} bytes"
-        );
+        eprintln!("[Snap Audio] {label} output: exists={exists}, size={size} bytes");
         if !exists {
             errors.push(format!("{label} file missing: {}", path.display()));
         } else if size == 0 {
@@ -264,8 +283,8 @@ fn write_wav_header(
 
     // fmt chunk
     writer.write_all(b"fmt ")?;
-    writer.write_all(&16u32.to_le_bytes())?;       // chunk size
-    writer.write_all(&1u16.to_le_bytes())?;         // PCM = 1
+    writer.write_all(&16u32.to_le_bytes())?; // chunk size
+    writer.write_all(&1u16.to_le_bytes())?; // PCM = 1
     writer.write_all(&channels.to_le_bytes())?;
     writer.write_all(&sample_rate.to_le_bytes())?;
     writer.write_all(&byte_rate.to_le_bytes())?;
@@ -309,20 +328,29 @@ fn capture_loopback(
         .ok()
         .map_err(|e| format!("COM init: {e:?}"))?;
 
-    let enumerator =
-        DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
+    let enumerator = DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
 
     let device = if speaker_device_id == "default" || speaker_device_id.is_empty() {
-        enumerator.get_default_device(&Direction::Render)
+        enumerator
+            .get_default_device(&Direction::Render)
             .map_err(|e| format!("Get default render device: {e}"))?
     } else if let Some(idx_str) = speaker_device_id.strip_prefix("speaker:") {
-        let idx: usize = idx_str.parse().map_err(|_| format!("Invalid speaker device index: {idx_str}"))?;
-        let coll = enumerator.get_device_collection(&Direction::Render)
+        let idx: usize = idx_str
+            .parse()
+            .map_err(|_| format!("Invalid speaker device index: {idx_str}"))?;
+        let coll = enumerator
+            .get_device_collection(&Direction::Render)
             .map_err(|e| format!("Get render device collection: {e}"))?;
-        (&coll).into_iter().enumerate().find(|(i, _)| *i == idx).and_then(|(_, d)| d.ok())
+        (&coll)
+            .into_iter()
+            .enumerate()
+            .find(|(i, _)| *i == idx)
+            .and_then(|(_, d)| d.ok())
             .ok_or_else(|| format!("Speaker device at index {idx} not found"))?
     } else {
-        return Err(format!("Unknown speaker device ID format: {speaker_device_id}"));
+        return Err(format!(
+            "Unknown speaker device ID format: {speaker_device_id}"
+        ));
     };
 
     let dev_name = device
@@ -386,8 +414,8 @@ fn capture_loopback(
     // Stream audio directly to disk instead of accumulating in memory.
     // Write a WAV header with placeholder size, then stream samples, then
     // seek back and finalize the header with the actual data size.
-    let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Create loopback WAV: {e}"))?;
+    let mut file =
+        std::fs::File::create(&output_path).map_err(|e| format!("Create loopback WAV: {e}"))?;
     write_wav_header(&mut file, SYS_CHANNELS, 0)
         .map_err(|e| format!("Write loopback WAV header: {e}"))?;
 
@@ -452,9 +480,7 @@ fn capture_loopback(
     finalize_wav_header(&mut file, data_size_u32)
         .map_err(|e| format!("Finalize loopback WAV header: {e}"))?;
 
-    eprintln!(
-        "[Snap Audio] Loopback stopped — {total_data_bytes} bytes streamed to WAV"
-    );
+    eprintln!("[Snap Audio] Loopback stopped — {total_data_bytes} bytes streamed to WAV");
     eprintln!("[Snap Audio] Loopback WAV written OK");
     Ok(())
 }
@@ -472,8 +498,7 @@ fn capture_microphone(
         .ok()
         .map_err(|e| format!("COM init: {e:?}"))?;
 
-    let enumerator =
-        DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
+    let enumerator = DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
 
     // Select the mic device based on the provided ID.
     // "default" or "" → default Communications capture device
@@ -502,9 +527,7 @@ fn capture_microphone(
     let dev_name = device
         .get_friendlyname()
         .unwrap_or_else(|_| "unknown".to_string());
-    eprintln!(
-        "[Snap Audio] Mic device: \"{dev_name}\" (id={mic_device_id})"
-    );
+    eprintln!("[Snap Audio] Mic device: \"{dev_name}\" (id={mic_device_id})");
 
     let mut audio_client = device
         .get_iaudioclient()
@@ -556,8 +579,8 @@ fn capture_microphone(
     );
 
     // Stream mic audio directly to disk (same pattern as loopback).
-    let mut file = std::fs::File::create(&output_path)
-        .map_err(|e| format!("Create mic WAV: {e}"))?;
+    let mut file =
+        std::fs::File::create(&output_path).map_err(|e| format!("Create mic WAV: {e}"))?;
     write_wav_header(&mut file, MIC_CHANNELS, 0)
         .map_err(|e| format!("Write mic WAV header: {e}"))?;
 
@@ -575,7 +598,9 @@ fn capture_microphone(
             while sample_queue.len() > blockalign as usize * 512 {
                 let chunk_size = blockalign as usize * 512;
                 let mut chunk: Vec<u8> = sample_queue.drain(..chunk_size).collect();
-                if is_muted.load(Ordering::Relaxed) { chunk.fill(0); }
+                if is_muted.load(Ordering::Relaxed) {
+                    chunk.fill(0);
+                }
                 file.write_all(&chunk)
                     .map_err(|e| format!("Write mic chunk: {e}"))?;
                 total_data_bytes += chunk_size as u64;
@@ -618,9 +643,7 @@ fn capture_microphone(
     finalize_wav_header(&mut file, data_size_u32)
         .map_err(|e| format!("Finalize mic WAV header: {e}"))?;
 
-    eprintln!(
-        "[Snap Audio] Mic stopped — {total_data_bytes} bytes streamed to WAV"
-    );
+    eprintln!("[Snap Audio] Mic stopped — {total_data_bytes} bytes streamed to WAV");
     eprintln!("[Snap Audio] Mic WAV written OK");
     Ok(())
 }

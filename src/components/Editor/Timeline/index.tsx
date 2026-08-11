@@ -1,11 +1,13 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2 } from "lucide-react";
-import type { Keyframe, EditorConfig, ZoomRegionSelection } from "../../../lib/types";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal } from "lucide-react";
+import type { Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
+import { collectZoomRegions } from "../../../lib/zoomRegions";
 import "./Timeline.css";
 
 interface Props {
@@ -31,6 +33,14 @@ interface Props {
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
   onZoomRegionSelect: (region: ZoomRegionSelection) => void;
+  onZoomRegionDuplicate: (region: ZoomRegionSelection) => void;
+  onZoomRegionDelete: (region: ZoomRegionSelection) => void;
+  layers: Layer[];
+  selectedLayerId: string | null;
+  onLayerSelect: (id: string) => void;
+  onLayerChange: (layer: Layer) => void;
+  onLayerDuplicate: (id: string) => void;
+  onLayerDelete: (id: string) => void;
 }
 
 interface ZoomSegment {
@@ -41,6 +51,8 @@ interface ZoomSegment {
   lastZoomIndex: number;
   resetIndex: number | null;
   memberIndices: number[];
+  source: "auto" | "manual";
+  regionId?: string;
 }
 
 export default function Timeline({
@@ -66,13 +78,26 @@ export default function Timeline({
   onAudioMuteChange,
   selectedZoomRegion,
   onZoomRegionSelect,
+  onZoomRegionDuplicate,
+  onZoomRegionDelete,
+  layers,
+  selectedLayerId,
+  onLayerSelect,
+  onLayerChange,
+  onLayerDuplicate,
+  onLayerDelete,
 }: Props) {
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
   const [waveforms, setWaveforms] = useState<{ sys?: number[]; mic?: number[] }>({});
   const [contentWidth, setContentWidth] = useState(600);
-  const [timelineHeight, setTimelineHeight] = useState(230);
+  const [timelineHeight, setTimelineHeight] = useState(240);
+  const [contextMenu, setContextMenu] = useState<
+    | { kind: "zoom"; x: number; y: number; region: ZoomRegionSelection }
+    | { kind: "layer"; x: number; y: number; layer: Layer }
+    | null
+  >(null);
 
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const timeAreaRef = useRef<HTMLDivElement>(null);
@@ -84,6 +109,22 @@ export default function Timeline({
       dragCleanupRef.current?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [contextMenu]);
   const [hasSys, setHasSys] = useState(false);
   const [hasMic, setHasMic] = useState(false);
 
@@ -132,49 +173,29 @@ export default function Timeline({
   const effectiveWidth = Math.max(1, contentWidth * zoomScale);
 
   const zoomSegments = useMemo(() => {
-    const sorted = keyframes
-      .map((frame, index) => ({ frame, index }))
-      .sort((a, b) => a.frame.time - b.frame.time);
-    const segments: ZoomSegment[] = [];
-    let active: ZoomSegment | null = null;
-    for (let i = 0; i < sorted.length; i++) {
-      const { frame, index } = sorted[i];
-      if (frame.scale > 1.02) {
-        const transitionStart = Math.max(0, frame.time - (frame.duration || 0));
-        if (!active) {
-          active = {
-            start: transitionStart / 1000,
-            end: frame.time / 1000,
-            scale: frame.scale,
-            firstIndex: index,
-            lastZoomIndex: index,
-            resetIndex: null,
-            memberIndices: [index],
-          };
-        } else {
-          active.scale = Math.max(active.scale, frame.scale);
-          active.lastZoomIndex = index;
-          active.memberIndices.push(index);
-        }
-      } else if (active) {
-        active.end = Math.max(active.start + 0.1, frame.time / 1000);
-        active.resetIndex = index;
-        active.memberIndices.push(index);
-        segments.push(active);
-        active = null;
-      }
-    }
-    if (active) {
-      active.end = config.trimEnd || duration;
-      segments.push(active);
-    }
-    return segments;
+    return collectZoomRegions(keyframes, Math.round((config.trimEnd || duration) * 1000)).map((region): ZoomSegment => ({
+      start: region.startMs / 1000,
+      end: region.endMs / 1000,
+      scale: region.scale,
+      firstIndex: region.zoomIndices[0],
+      lastZoomIndex: region.zoomIndices[region.zoomIndices.length - 1],
+      resetIndex: region.resetIndex,
+      memberIndices: region.memberIndices,
+      source: region.source ?? "auto",
+      regionId: region.regionId,
+    }));
   }, [keyframes, config.trimEnd, duration]);
 
+  const visibleLayerTypes = useMemo(
+    () => (["text", "shape", "mask"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
+    [layers]
+  );
+
   const beginZoomEdit = (event: React.PointerEvent, segment: ZoomSegment, mode: "move" | "start" | "end") => {
+    if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    onZoomRegionSelect({ startMs: Math.round(segment.start * 1000), endMs: Math.round(segment.end * 1000) });
+    onZoomRegionSelect({ startMs: Math.round(segment.start * 1000), endMs: Math.round(segment.end * 1000), regionId: segment.regionId });
     const startX = event.clientX;
     const initial = keyframes.map((frame) => ({ ...frame }));
     const editingSegment: ZoomSegment = { ...segment, memberIndices: [...segment.memberIndices] };
@@ -192,7 +213,7 @@ export default function Timeline({
     if (editingSegment.resetIndex === null) {
       editingSegment.resetIndex = initial.length;
       editingSegment.memberIndices.push(initial.length);
-      initial.push({ time: Math.round(endMs), duration: 400, x: 0.5, y: 0.5, scale: 1, easing: "ease-in-out" });
+      initial.push({ time: Math.round(endMs), duration: 400, x: 0.5, y: 0.5, scale: 1, easing: "ease-in-out", source: editingSegment.source, regionId: editingSegment.regionId });
     }
     const previousEndMs = zoomSegments
       .filter((candidate) => candidate !== segment && candidate.end <= segment.start)
@@ -266,7 +287,7 @@ export default function Timeline({
       cleanup();
       if (pendingKeyframes) {
         onKeyframesChange(pendingKeyframes);
-        onZoomRegionSelect({ startMs: Math.round(visualStartMs), endMs: Math.round(visualEndMs) });
+        onZoomRegionSelect({ startMs: Math.round(visualStartMs), endMs: Math.round(visualEndMs), regionId: editingSegment.regionId });
       }
     };
     const onCancel = () => {
@@ -280,11 +301,73 @@ export default function Timeline({
     dragCleanupRef.current = cleanup;
   };
 
+  const beginLayerEdit = (event: React.PointerEvent, layer: Layer, mode: "move" | "start" | "end") => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onLayerSelect(layer.id);
+    const bar = (event.currentTarget as HTMLElement).closest<HTMLElement>(".layer-clip-bar");
+    if (!bar || duration <= 0) return;
+    const startX = event.clientX;
+    const initialStart = layer.start;
+    const initialEnd = layer.end;
+    const layerDuration = Math.max(0.2, initialEnd - initialStart);
+    const minTime = Math.max(0, config.trimStart);
+    const maxTime = Math.max(minTime + 0.2, config.trimEnd || duration);
+    let visualStart = initialStart;
+    let visualEnd = initialEnd;
+    let pending: Layer | null = null;
+    let animationFrame = 0;
+    bar.classList.add("editing");
+
+    const paint = () => {
+      animationFrame = 0;
+      bar.style.left = `${x(visualStart)}px`;
+      bar.style.width = `${Math.max(18, w(visualEnd - visualStart))}px`;
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      const area = timeAreaRef.current;
+      if (!area) return;
+      const delta = ((moveEvent.clientX - startX) / area.getBoundingClientRect().width) * duration;
+      if (mode === "move") {
+        const bounded = Math.max(minTime - initialStart, Math.min(maxTime - initialEnd, delta));
+        visualStart = initialStart + bounded;
+        visualEnd = initialEnd + bounded;
+      } else if (mode === "start") {
+        visualStart = Math.max(minTime, Math.min(initialEnd - 0.2, initialStart + delta));
+        visualEnd = initialEnd;
+      } else {
+        visualStart = initialStart;
+        visualEnd = Math.max(initialStart + 0.2, Math.min(maxTime, initialEnd + delta));
+      }
+      pending = { ...layer, start: Math.round(visualStart * 100) / 100, end: Math.round(visualEnd * 100) / 100 };
+      if (!animationFrame) animationFrame = requestAnimationFrame(paint);
+    };
+    const cleanup = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      bar.classList.remove("editing");
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => { cleanup(); if (pending) onLayerChange(pending); };
+    const onCancel = () => {
+      cleanup();
+      bar.style.left = `${x(initialStart)}px`;
+      bar.style.width = `${Math.max(18, w(layerDuration))}px`;
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+    dragCleanupRef.current = cleanup;
+  };
+
   const beginResize = (event: React.MouseEvent) => {
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = timelineHeight;
-    const move = (e: MouseEvent) => setTimelineHeight(Math.max(170, Math.min(430, startHeight - (e.clientY - startY))));
+    const move = (e: MouseEvent) => setTimelineHeight(Math.max(190, Math.min(620, startHeight - (e.clientY - startY))));
     const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -362,8 +445,13 @@ export default function Timeline({
     (config.aspectRatio?.width === ar.width && config.aspectRatio?.height === ar.height)
   )?.label || "Wide 16:9";
 
+  const menuPosition = (event: React.MouseEvent) => ({
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 196)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 142)),
+  });
+
   return (
-    <div className="ss-timeline-container" style={{ height: `${timelineHeight}px`, "--track-scale": Math.max(1, (timelineHeight - 95) / 135) } as React.CSSProperties}>
+    <div className="ss-timeline-container" style={{ height: `${timelineHeight}px` }}>
       <div className="timeline-resize-edge" onMouseDown={beginResize} title="Drag the timeline edge to resize" />
       {/* ── Screen Studio Toolbar ──────────────────────────────────── */}
       <div className="ss-timeline-toolbar">
@@ -466,7 +554,7 @@ export default function Timeline({
       <div className="ss-tracks-wrapper">
         {/* Left label rail */}
         <div className="ss-labels-col">
-          <div className="track-label">Video</div>
+          <div className="track-label video-label">Video</div>
           <div className="track-label audio-label">
             <button
               className={`track-label-button ${config.audio.systemMuted ? "muted" : ""}`}
@@ -487,11 +575,16 @@ export default function Timeline({
               <span className="audio-state-dot" aria-hidden="true" />
             </button>
           </div>
-          <div className="track-label">Zoom</div>
+          <div className="track-label zoom-label">Zoom</div>
+          {visibleLayerTypes.map((type) => (
+            <div key={type} className={`track-label layer-label ${type}-label`}>
+              {type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}
+            </div>
+          ))}
         </div>
 
         {/* Shared timeline columns */}
-        <div className="ss-timeline-scroll" ref={scrollRef}>
+        <div className={`ss-timeline-scroll ${zoomScale > 1 ? "is-zoomed" : ""}`} ref={scrollRef}>
         <div className="ss-timeline-col" ref={timeAreaRef} style={{ width: `${effectiveWidth}px` }} onClick={(e) => onSeek(getTimeFromEvent(e))}>
           {/* Video layer */}
           <div className="ss-track-row video-track">
@@ -532,18 +625,60 @@ export default function Timeline({
             {zoomSegments.map((segment, index) => (
               <div
                 key={`zoom-${index}`}
-                className={`zoom-segment-bar ${selectedZoomRegion && Math.abs(selectedZoomRegion.startMs - segment.start * 1000) < 2 && Math.abs(selectedZoomRegion.endMs - segment.end * 1000) < 2 ? "selected" : ""}`}
+                className={`zoom-segment-bar ${segment.source} ${selectedZoomRegion && (
+                  selectedZoomRegion.regionId && segment.regionId
+                    ? selectedZoomRegion.regionId === segment.regionId
+                    : Math.abs(selectedZoomRegion.startMs - segment.start * 1000) < 2 && Math.abs(selectedZoomRegion.endMs - segment.end * 1000) < 2
+                ) ? "selected" : ""}`}
                 style={{ left: x(segment.start), width: Math.max(18, w(segment.end - segment.start)) }}
                 onPointerDown={(event) => beginZoomEdit(event, segment, "move")}
                 onClick={(event) => event.stopPropagation()}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const position = menuPosition(event);
+                  setContextMenu({
+                    kind: "zoom",
+                    ...position,
+                    region: { startMs: Math.round(segment.start * 1000), endMs: Math.round(segment.end * 1000), regionId: segment.regionId },
+                  });
+                }}
                 title="Drag to move · drag either edge to change duration"
               >
                 <button className="zoom-bar-handle left" onPointerDown={(event) => beginZoomEdit(event, segment, "start")} aria-label="Change zoom start" />
-                <span>Zoom {segment.scale.toFixed(1)}×</span>
+                <span><i className="zoom-source-dot" />{segment.scale.toFixed(1)}×</span>
                 <button className="zoom-bar-handle right" onPointerDown={(event) => beginZoomEdit(event, segment, "end")} aria-label="Change zoom end" />
               </div>
             ))}
           </div>
+
+          {visibleLayerTypes.map((type) => (
+            <div key={type} className={`ss-track-row layer-track ${type}-track`}>
+              <div className="layer-connecting-line" />
+              {layers.filter((layer) => layer.type === type).map((layer) => {
+                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : layer.mask;
+                return (
+                  <div
+                    key={layer.id}
+                    className={`layer-clip-bar ${type} ${selectedLayerId === layer.id ? "selected" : ""}`}
+                    style={{ left: x(layer.start), width: Math.max(18, w(layer.end - layer.start)) }}
+                    onPointerDown={(event) => beginLayerEdit(event, layer, "move")}
+                    onClick={(event) => event.stopPropagation()}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setContextMenu({ kind: "layer", ...menuPosition(event), layer });
+                    }}
+                    title={`${name} · drag to move, trim either edge`}
+                  >
+                    <button className="layer-bar-handle left" onPointerDown={(event) => beginLayerEdit(event, layer, "start")} aria-label={`Change ${type} start`} />
+                    <span>{name}</span>
+                    <button className="layer-bar-handle right" onPointerDown={(event) => beginLayerEdit(event, layer, "end")} aria-label={`Change ${type} end`} />
+                  </div>
+                );
+              })}
+            </div>
+          ))}
 
           {/* Trim handles + playhead overlay (span all layers) */}
           <div
@@ -567,6 +702,39 @@ export default function Timeline({
         </div>
         </div>
       </div>
+      {contextMenu && createPortal(
+        <div
+          className="timeline-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          aria-label={`${contextMenu.kind} actions`}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button role="menuitem" onClick={() => {
+            if (contextMenu.kind === "zoom") onZoomRegionSelect(contextMenu.region);
+            else onLayerSelect(contextMenu.layer.id);
+            setContextMenu(null);
+          }}>
+            <SlidersHorizontal size={15} /> Edit parameters
+          </button>
+          <button role="menuitem" onClick={() => {
+            if (contextMenu.kind === "zoom") onZoomRegionDuplicate(contextMenu.region);
+            else onLayerDuplicate(contextMenu.layer.id);
+            setContextMenu(null);
+          }}>
+            <Copy size={15} /> Duplicate
+          </button>
+          <div className="timeline-context-separator" />
+          <button className="danger" role="menuitem" onClick={() => {
+            if (contextMenu.kind === "zoom") onZoomRegionDelete(contextMenu.region);
+            else onLayerDelete(contextMenu.layer.id);
+            setContextMenu(null);
+          }}>
+            <Trash2 size={15} /> Remove
+          </button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

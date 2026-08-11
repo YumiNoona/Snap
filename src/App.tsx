@@ -9,6 +9,7 @@ import Editor from "./components/Editor/Editor";
 import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
 import SettingsWindow from "./components/Settings/SettingsWindow";
 import "./App.css";
+import { recordingDataPaths } from "./lib/recordingPaths";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -187,7 +188,7 @@ function App() {
     if (editorVideo) {
       return (
         <ErrorBoundary onReset={closeEditorWindow}>
-          <Editor videoPath={editorVideo} inputLogPath={editorLog || editorVideo.replace(/\.[^/.]+$/, ".json")} onClose={closeEditorWindow} />
+          <Editor videoPath={editorVideo} inputLogPath={editorLog || recordingDataPaths(editorVideo).logPath} onClose={closeEditorWindow} />
         </ErrorBoundary>
       );
     }
@@ -212,7 +213,7 @@ function App() {
               const mp4s = files.filter((f) => !f.is_dir && f.name.endsWith(".mp4"));
               if (mp4s.length > 0) {
                 const latest = mp4s[0];
-                const jsonPath = latest.path.replace(/\.mp4$/, ".json");
+                const jsonPath = await invoke<string>("resolve_recording_log_path", { videoPath: latest.path }).catch(() => recordingDataPaths(latest.path).logPath);
                 setEditorVideo(latest.path);
                 setEditorLog(jsonPath);
               }

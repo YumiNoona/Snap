@@ -5,8 +5,8 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
 use rdev::EventType;
+use serde::Serialize;
 
 // ── Globals — one persistent hook, one active writer ─────────────────────────
 
@@ -204,8 +204,7 @@ pub async fn start_input_logging(
 
     eprintln!("[Snap Input] Step 1: opening log file -> {output_path}");
 
-    let file =
-        File::create(&output_path).map_err(|e| format!("Cannot create log file: {e}"))?;
+    let file = File::create(&output_path).map_err(|e| format!("Cannot create log file: {e}"))?;
 
     EVENT_COUNT.store(0, Ordering::SeqCst);
 
@@ -275,7 +274,9 @@ pub fn mark_capture_start() {
 /// FFmpeg still timestamps every submitted frame at 60 FPS, so without this
 /// correction input events gradually fall behind the actual video.
 pub fn mark_capture_end(frames_sent: u64) {
-    if !IS_ACTIVE.load(Ordering::Relaxed) { return; }
+    if !IS_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
     let now_ms = match *SESSION_START.lock().unwrap() {
         Some(start) => (start.elapsed().as_millis() as u64)
             .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed)),
@@ -305,7 +306,10 @@ pub fn set_input_paused(paused: bool) -> std::result::Result<(), String> {
         }
         IS_PAUSED.store(false, Ordering::SeqCst);
     }
-    eprintln!("[Snap Input] Logging {}", if paused { "paused" } else { "resumed" });
+    eprintln!(
+        "[Snap Input] Logging {}",
+        if paused { "paused" } else { "resumed" }
+    );
     Ok(())
 }
 
@@ -322,7 +326,8 @@ pub async fn stop_input_logging() -> std::result::Result<u64, String> {
     // Explicitly flush the writer before dropping to surface any I/O errors.
     let mut guard = ACTIVE_WRITER.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut w) = *guard {
-        w.flush().map_err(|e| format!("Failed to flush input log: {e}"))?;
+        w.flush()
+            .map_err(|e| format!("Failed to flush input log: {e}"))?;
     }
     *guard = None;
 

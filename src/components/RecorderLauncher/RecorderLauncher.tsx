@@ -28,6 +28,7 @@ import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
 import { type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
+import { recordingDataPaths } from "../../lib/recordingPaths";
 import "./RecorderLauncher.css";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -125,6 +126,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       // ignore storage errors
     }
   }, [settings]);
+
+  useEffect(() => {
+    invoke("organize_recording_data", { showSupportFiles: settings.showRecordingDataFiles }).catch((error) => {
+      console.error("Unable to organize recording support data:", error);
+    });
+  }, [settings.showRecordingDataFiles]);
 
   useEffect(() => {
     const unlisten = listen<AppSettings>("settings-changed", (event) => setSettings(event.payload));
@@ -268,8 +275,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       const videosDir = await invoke<string>("get_videos_dir");
       const stamp = Date.now();
       const videoPath = `${videosDir}\\snap_${stamp}.mp4`;
-      const logPath = `${videosDir}\\snap_${stamp}.json`;
-      const audioDir = `${videosDir}\\snap_${stamp}`;
+      const preferredPaths = recordingDataPaths(videoPath);
+      const prepared = await invoke<{ dataDir: string; logPath: string }>("prepare_recording_data", {
+        videoPath,
+        showSupportFiles: settings.showRecordingDataFiles,
+      });
+      const logPath = prepared.logPath || preferredPaths.logPath;
+      const audioDir = prepared.dataDir || preferredPaths.dataDir;
 
       lastVideoRef.current = videoPath;
       lastLogRef.current = logPath;
@@ -456,9 +468,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     }
   };
 
-  const openRecording = (videoPath: string) => {
+  const openRecording = async (videoPath: string) => {
     setShowFileBrowser(false);
-    onOpenEditor(videoPath, videoPath.replace(/\.mp4$/i, ".json"));
+    const fallback = recordingDataPaths(videoPath).logPath;
+    const logPath = await invoke<string>("resolve_recording_log_path", { videoPath }).catch(() => fallback);
+    onOpenEditor(videoPath, logPath);
   };
 
   const microphones = audioDevices.filter((d) => d.device_type === "microphone");

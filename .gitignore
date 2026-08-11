@@ -9,7 +9,7 @@ dist-ssr/
 
 # Rust / Cargo build output
 src-tauri/target/
-Cargo.lock
+src-tauri/gen/
 
 # Editor / IDE
 .vscode/*
@@ -41,8 +41,15 @@ Thumbs.db
 desktop.ini
 
 # Test recordings & output files
-*.mp4
-*.wav
-*.jsonl
-*.json
-snap_*
+snap_*.mp4
+snap_*.wav
+snap_*.json
+snap_*.jsonl
+snap_*/
+recordings/
+exports/
+
+# Local release artifacts and signing material
+release-artifacts/
+*.key
+*.key.pub

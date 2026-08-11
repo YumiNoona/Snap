@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Play } from "lucide-react";
 import type { InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
@@ -24,16 +23,65 @@ interface Props {
   onTimeUpdate: (t: number) => void;
   onDuration: (d: number) => void;
   onMediaElementChange?: (element: HTMLVideoElement | null) => void;
-  onClick?: () => void;
   cropMode?: boolean;
   onCropApply?: (crop: { x: number; y: number; w: number; h: number } | null) => void;
   onCropCancel?: () => void;
   selectedLayerId?: string | null;
+  onLayerSelect?: (id: string | null) => void;
   onLayerChange?: (layer: Layer) => void;
   zoomTargetMode?: boolean;
   zoomFocusPoint?: { x: number; y: number } | null;
-  onZoomTargetPick?: (point: { x: number; y: number }) => void;
+  zoomFocusSource?: "auto" | "manual";
+  onZoomTargetPick?: (point: { x: number; y: number }, commit?: boolean) => void;
   autoZoomRevision?: number;
+}
+
+type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+function rotatePoint(x: number, y: number, cx: number, cy: number, degrees: number) {
+  const radians = degrees * Math.PI / 180;
+  const cos = Math.cos(radians), sin = Math.sin(radians);
+  const dx = x - cx, dy = y - cy;
+  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+}
+
+function layerCanvasRect(layer: Layer, geometry: { offsetX: number; offsetY: number; videoW: number; videoH: number }) {
+  const x = geometry.offsetX + layer.x * geometry.videoW;
+  const y = geometry.offsetY + layer.y * geometry.videoH;
+  const w = layer.w * geometry.videoW;
+  const h = layer.h * geometry.videoH;
+  return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+}
+
+function pointInLayer(point: { x: number; y: number }, layer: Layer, geometry: { offsetX: number; offsetY: number; videoW: number; videoH: number }) {
+  const rect = layerCanvasRect(layer, geometry);
+  const local = rotatePoint(point.x, point.y, rect.cx, rect.cy, -(layer.rotation ?? 0));
+  return local.x >= rect.x && local.x <= rect.x + rect.w && local.y >= rect.y && local.y <= rect.y + rect.h;
+}
+
+function gizmoHandlePoints(rect: ReturnType<typeof layerCanvasRect>): Array<{ handle: GizmoHandle; x: number; y: number }> {
+  return [
+    { handle: "nw", x: rect.x, y: rect.y },
+    { handle: "n", x: rect.cx, y: rect.y },
+    { handle: "ne", x: rect.x + rect.w, y: rect.y },
+    { handle: "e", x: rect.x + rect.w, y: rect.cy },
+    { handle: "se", x: rect.x + rect.w, y: rect.y + rect.h },
+    { handle: "s", x: rect.cx, y: rect.y + rect.h },
+    { handle: "sw", x: rect.x, y: rect.y + rect.h },
+    { handle: "w", x: rect.x, y: rect.cy },
+  ];
+}
+
+/** Return the first click strictly after the supplied media timestamp. */
+function firstClickAfter(clicks: InputEvent[], timestampMs: number) {
+  let low = 0;
+  let high = clicks.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (clicks[middle].ts <= timestampMs) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 }
 
 export default function Preview({
@@ -46,14 +94,15 @@ export default function Preview({
   onTimeUpdate,
   onDuration,
   onMediaElementChange,
-  onClick,
   cropMode = false,
   onCropApply,
   onCropCancel,
   selectedLayerId = null,
+  onLayerSelect,
   onLayerChange,
   zoomTargetMode = false,
   zoomFocusPoint = null,
+  zoomFocusSource = "manual",
   onZoomTargetPick,
   autoZoomRevision = 0,
 }: Props) {
@@ -66,7 +115,11 @@ export default function Preview({
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
   const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
   const cropDrag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  const suppressPlayUntilRef = useRef(0);
+  const zoomTargetDrag = useRef<{
+    pointerId: number;
+    pendingPoint: { x: number; y: number };
+    animationFrame: number;
+  } | null>(null);
   const geomRef = useRef({ offsetX: 0, offsetY: 0, videoW: 1280, videoH: 720, cw: 1280, ch: 720 });
   const sourceViewRef = useRef({ x: 0, y: 0, w: 1280, h: 720, baseX: 0, baseY: 0, baseW: 1280, baseH: 720 });
   const mouseMoveEvents = useRef<InputEvent[]>([]);
@@ -77,14 +130,17 @@ export default function Preview({
   const clickRipples = useRef<{ x: number; y: number; ts: number }[]>([]);
   const prevTimeRef = useRef(-1);
   const prevPlayRef = useRef(-1);
+  const effectTimelineTsRef = useRef(-1);
   const wallpaperRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
   const fadeRef = useRef<{ start: number }>({ start: 0 });
+  const zoomFocusDisplayRef = useRef<{ x: number; y: number } | null>(null);
   const lastPackRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
   const smoothedCursorRef = useRef<{ x: number; y: number; ts: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
   const [eventsReady, setEventsReady] = useState(false);
   const [currentZoom, setCurrentZoom] = useState(1.0);
+  const [zoomTargetDragging, setZoomTargetDragging] = useState(false);
   const videoMetaRef = useRef<{ w: number; h: number; d: number } | null>(null);
   const kfGenerated = useRef(false);
   const generatedRevision = useRef(-1);
@@ -93,10 +149,14 @@ export default function Preview({
   const audioContextRef = useRef<AudioContext | null>(null);
   const maskSourceRef = useRef<HTMLCanvasElement | null>(null);
   const layerDrag = useRef<{
-    mode: "move" | "resize";
+    mode: "move" | "resize" | "rotate";
+    handle?: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
     layer: Layer;
     startX: number;
     startY: number;
+    centerX: number;
+    centerY: number;
+    startAngle: number;
   } | null>(null);
 
   // Cache resolved CSS variable colors ONCE — never call getComputedStyle inside rAF.
@@ -124,6 +184,8 @@ export default function Preview({
     clickIdxRef.current = 0;
     regionRef.current = null;
     clickRipples.current = [];
+    prevPlayRef.current = -1;
+    effectTimelineTsRef.current = -1;
     generatedRevision.current = -1;
   }, [inputLogPath]);
 
@@ -139,6 +201,8 @@ export default function Preview({
         regionRef.current = region;
         clickIdxRef.current = 0;
         clickRipples.current = [];
+        prevPlayRef.current = -1;
+        effectTimelineTsRef.current = -1;
         setEventsReady(true);
       } catch (e) {
         setLoadError(`Failed to load log: ${e}`);
@@ -292,6 +356,22 @@ export default function Preview({
     if (!ctx) return;
 
     const ts = video.currentTime * 1000;
+
+    // Click effects use a forward-only event cursor for cheap playback. Keep
+    // that cursor aligned with media time whenever replay, scrubbing, or a
+    // decoder-recovery seek moves the playhead discontinuously. Without this,
+    // the cursor remains at the end after the first pass and no click effect
+    // (Christmas, ripple, spotlight, etc.) can appear on replay.
+    const previousEffectTs = effectTimelineTsRef.current;
+    const timelineJumped = previousEffectTs >= 0
+      && (ts < previousEffectTs - 8 || ts > previousEffectTs + 350);
+    if (timelineJumped) {
+      clickIdxRef.current = firstClickAfter(clickEvents.current, ts);
+      clickRipples.current = [];
+      prevPlayRef.current = ts;
+    }
+    effectTimelineTsRef.current = ts;
+
     const { w: cw, h: ch } = canvasSize;
     const pad = config.padding;
     const br = config.borderRadius;
@@ -586,8 +666,15 @@ export default function Preview({
       const lw = layer.w * videoW;
       const lh = layer.h * videoH;
 
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
+      ctx.translate(lx + lw / 2, ly + lh / 2);
+      ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
+      ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
+      ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
       else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      ctx.restore();
     }
 
     // Selection affordance is drawn last so every layer type can be moved and
@@ -599,17 +686,38 @@ export default function Preview({
         const ly = offsetY + layer.y * videoH;
         const lw = layer.w * videoW;
         const lh = layer.h * videoH;
+        const cx = lx + lw / 2, cy = ly + lh / 2;
         ctx.save();
-        ctx.strokeStyle = "#3b82f6";
+        ctx.translate(cx, cy);
+        ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
+        ctx.translate(-cx, -cy);
+        ctx.strokeStyle = "rgba(96, 165, 250, .96)";
         ctx.lineWidth = 2;
-        ctx.setLineDash([4, 4]);
-        ctx.strokeRect(lx, ly, lw, lh);
         ctx.setLineDash([]);
-        ctx.fillStyle = "#3b82f6";
-        ctx.fillRect(lx + lw - 7, ly + lh - 7, 14, 14);
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(lx + lw - 7, ly + lh - 7, 14, 14);
+        ctx.strokeRect(lx, ly, lw, lh);
+
+        // Rotation is available for visual objects; masks stay axis-aligned so
+        // their sampled pixels remain exact.
+        if (layer.type !== "mask") {
+          ctx.beginPath(); ctx.moveTo(cx, ly); ctx.lineTo(cx, ly - 26); ctx.stroke();
+          ctx.fillStyle = "#0b1220";
+          ctx.beginPath(); ctx.arc(cx, ly - 31, 8, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = "#60a5fa"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath(); ctx.arc(cx, ly - 31, 2.2, 0, Math.PI * 2); ctx.fill();
+        }
+
+        const handles = [
+          [lx, ly], [cx, ly], [lx + lw, ly], [lx + lw, cy],
+          [lx + lw, ly + lh], [cx, ly + lh], [lx, ly + lh], [lx, cy],
+        ];
+        for (const [hx, hy] of handles) {
+          ctx.fillStyle = "#f8fafc";
+          ctx.fillRect(hx - 5, hy - 5, 10, 10);
+          ctx.strokeStyle = "#2563eb";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(hx - 5, hy - 5, 10, 10);
+        }
         ctx.restore();
       }
     }
@@ -647,32 +755,51 @@ export default function Preview({
     }
 
     if (zoomFocusPoint) {
-      const focusSourceX = baseX + zoomFocusPoint.x * baseW;
-      const focusSourceY = baseY + zoomFocusPoint.y * baseH;
+      const display = zoomTargetMode
+        ? { ...zoomFocusPoint }
+        : zoomFocusDisplayRef.current ?? { ...zoomFocusPoint };
+      if (!zoomTargetMode) {
+        display.x += (zoomFocusPoint.x - display.x) * 0.2;
+        display.y += (zoomFocusPoint.y - display.y) * 0.2;
+      }
+      zoomFocusDisplayRef.current = display;
+      const focusSourceX = baseX + display.x * baseW;
+      const focusSourceY = baseY + display.y * baseH;
       const focusX = offsetX + ((focusSourceX - coverX) / Math.max(1, coverW)) * videoW;
       const focusY = offsetY + ((focusSourceY - coverY) / Math.max(1, coverH)) * videoH;
       const isVisible = focusX >= offsetX - 12 && focusX <= offsetX + videoW + 12 &&
         focusY >= offsetY - 12 && focusY <= offsetY + videoH + 12;
       if (isVisible) {
+        const pulse = (Math.sin(performance.now() / 170) + 1) / 2;
+        const accent = zoomFocusSource === "auto" ? "139, 92, 246" : "59, 130, 246";
         ctx.save();
-        ctx.shadowColor = "rgba(37, 99, 235, 0.65)";
-        ctx.shadowBlur = 12;
-        ctx.fillStyle = "#3b82f6";
+        ctx.shadowColor = `rgba(${accent}, 0.7)`;
+        ctx.shadowBlur = 11 + pulse * 5;
+        ctx.fillStyle = `rgb(${accent})`;
         ctx.strokeStyle = "rgba(255, 255, 255, 0.96)";
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(focusX, focusY, zoomTargetMode ? 11 : 8, 0, Math.PI * 2);
+        ctx.arc(focusX, focusY, zoomTargetMode ? 10 + pulse * 1.5 : 8, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(59, 130, 246, 0.72)";
+        ctx.strokeStyle = `rgba(${accent}, ${0.56 + pulse * 0.3})`;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(focusX, focusY, zoomTargetMode ? 20 : 15, 0, Math.PI * 2);
+        ctx.arc(focusX, focusY, (zoomTargetMode ? 19 : 15) + pulse * 3, 0, Math.PI * 2);
         ctx.stroke();
+        if (zoomTargetMode) {
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(${accent}, .95)`;
+          ctx.lineWidth = 2;
+          for (const [x1, y1, x2, y2] of [[-29,0,-21,0],[29,0,21,0],[0,-29,0,-21],[0,29,0,21]]) {
+            ctx.beginPath(); ctx.moveTo(focusX + x1, focusY + y1); ctx.lineTo(focusX + x2, focusY + y2); ctx.stroke();
+          }
+        }
         ctx.restore();
       }
     } else if (zoomTargetMode) {
+      zoomFocusDisplayRef.current = null;
       ctx.save();
       ctx.strokeStyle = "#3b82f6"; ctx.fillStyle = "rgba(59,130,246,0.2)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(offsetX + videoW / 2, offsetY + videoH / 2, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -695,7 +822,7 @@ export default function Preview({
       prevTimeRef.current = ts;
     }
   }, [
-    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint,
+    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
     getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
   ]);
   renderRef.current = render;
@@ -734,77 +861,169 @@ export default function Preview({
     };
   }, []);
 
-  const handleZoomTargetClick = useCallback((e: React.MouseEvent) => {
-    if (!zoomTargetMode || !onZoomTargetPick) return;
-    e.preventDefault();
-    e.stopPropagation();
-    suppressPlayUntilRef.current = performance.now() + 300;
-    const p = canvasToBacking(e.clientX, e.clientY);
+  const zoomTargetFromClient = useCallback((clientX: number, clientY: number) => {
+    const p = canvasToBacking(clientX, clientY);
     const g = geomRef.current;
     const view = sourceViewRef.current;
     const sourceX = view.x + ((p.x - g.offsetX) / Math.max(1, g.videoW)) * view.w;
     const sourceY = view.y + ((p.y - g.offsetY) / Math.max(1, g.videoH)) * view.h;
-    onZoomTargetPick({
+    return {
       x: Math.max(0, Math.min(1, (sourceX - view.baseX) / Math.max(1, view.baseW))),
       y: Math.max(0, Math.min(1, (sourceY - view.baseY) / Math.max(1, view.baseH))),
-    });
-  }, [zoomTargetMode, onZoomTargetPick, canvasToBacking]);
+    };
+  }, [canvasToBacking]);
 
   const handleCropMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       if (zoomTargetMode && onZoomTargetPick) {
-        // Keep target mode active through the entire pointer sequence. If it
-        // is cleared on mousedown, the Play overlay appears beneath the same
-        // pointer before mouseup and can accidentally start playback.
         e.preventDefault();
         e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const point = zoomTargetFromClient(e.clientX, e.clientY);
+        zoomTargetDrag.current = { pointerId: e.pointerId, pendingPoint: point, animationFrame: 0 };
+        setZoomTargetDragging(true);
+        // Publish immediately so a simple click remains responsive, then keep
+        // the same edit session alive until pointerup for smooth dragging.
+        onZoomTargetPick(point, false);
         return;
       }
       if (!cropMode) {
-        const layer = config.layers.find((l) => l.id === selectedLayerId);
-        if (!layer || !onLayerChange) return;
         const p = canvasToBacking(e.clientX, e.clientY);
         const g = geomRef.current;
-        const lx = g.offsetX + layer.x * g.videoW, ly = g.offsetY + layer.y * g.videoH;
-        const lw = layer.w * g.videoW, lh = layer.h * g.videoH;
-        if (p.x < lx || p.x > lx + lw || p.y < ly || p.y > ly + lh) return;
+        const time = videoRef.current?.currentTime ?? 0;
+        const active = config.layers.filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02);
+        const selected = active.find((layer) => layer.id === selectedLayerId) ?? null;
+        let target = selected;
+        let handle: GizmoHandle | undefined;
+        let mode: "move" | "resize" | "rotate" = "move";
+
+        if (selected) {
+          const rect = layerCanvasRect(selected, g);
+          const rotation = selected.rotation ?? 0;
+          const rotationPoint = rotatePoint(rect.cx, rect.y - 31, rect.cx, rect.cy, rotation);
+          if (selected.type !== "mask" && Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14) {
+            mode = "rotate";
+          } else {
+            const hit = gizmoHandlePoints(rect).find((candidate) => {
+              const point = rotatePoint(candidate.x, candidate.y, rect.cx, rect.cy, rotation);
+              return Math.hypot(p.x - point.x, p.y - point.y) <= 12;
+            });
+            if (hit) { mode = "resize"; handle = hit.handle; }
+            else if (!pointInLayer(p, selected, g)) target = null;
+          }
+        }
+
+        if (!target) {
+          target = [...active].reverse().find((layer) => pointInLayer(p, layer, g)) ?? null;
+          mode = "move";
+        }
+        if (!target || !onLayerChange) {
+          onLayerSelect?.(null);
+          return;
+        }
+        if (target.id !== selectedLayerId) onLayerSelect?.(target.id);
+        const rect = layerCanvasRect(target, g);
         e.preventDefault(); e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
         layerDrag.current = {
-          mode: Math.abs(p.x - (lx + lw)) < 18 && Math.abs(p.y - (ly + lh)) < 18 ? "resize" : "move",
-          layer: { ...layer }, startX: p.x, startY: p.y,
+          mode, handle, layer: { ...target }, startX: p.x, startY: p.y,
+          centerX: rect.cx, centerY: rect.cy,
+          startAngle: Math.atan2(p.y - rect.cy, p.x - rect.cx) * 180 / Math.PI,
         };
         return;
       }
       e.preventDefault();
       e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
       const p = canvasToBacking(e.clientX, e.clientY);
       cropDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     },
-    [cropMode, zoomTargetMode, onZoomTargetPick, canvasToBacking, config.layers, selectedLayerId, onLayerChange]
+    [cropMode, zoomTargetMode, onZoomTargetPick, zoomTargetFromClient, canvasToBacking, config.layers, selectedLayerId, onLayerChange, onLayerSelect]
   );
 
   const handleCropMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       const p = canvasToBacking(e.clientX, e.clientY);
+      const zoomDrag = zoomTargetDrag.current;
+      if (zoomDrag && zoomTargetMode && onZoomTargetPick) {
+        zoomDrag.pendingPoint = zoomTargetFromClient(e.clientX, e.clientY);
+        if (!zoomDrag.animationFrame) {
+          zoomDrag.animationFrame = requestAnimationFrame(() => {
+            const active = zoomTargetDrag.current;
+            if (!active) return;
+            active.animationFrame = 0;
+            onZoomTargetPick(active.pendingPoint, false);
+          });
+        }
+        return;
+      }
       if (layerDrag.current && onLayerChange) {
         const g = geomRef.current;
         const d = layerDrag.current;
         const dx = (p.x - d.startX) / g.videoW, dy = (p.y - d.startY) / g.videoH;
         if (d.mode === "move") {
           onLayerChange({ ...d.layer, x: Math.max(0, Math.min(1 - d.layer.w, d.layer.x + dx)), y: Math.max(0, Math.min(1 - d.layer.h, d.layer.y + dy)) });
-        } else {
-          onLayerChange({ ...d.layer, w: Math.max(0.04, Math.min(1 - d.layer.x, d.layer.w + dx)), h: Math.max(0.04, Math.min(1 - d.layer.y, d.layer.h + dy)) });
+        } else if (d.mode === "rotate") {
+          const angle = Math.atan2(p.y - d.centerY, p.x - d.centerX) * 180 / Math.PI;
+          const raw = (d.layer.rotation ?? 0) + angle - d.startAngle;
+          const snapped = e.shiftKey ? Math.round(raw / 15) * 15 : raw;
+          onLayerChange({ ...d.layer, rotation: ((snapped % 360) + 360) % 360 });
+        } else if (d.handle) {
+          const rect = layerCanvasRect(d.layer, g);
+          const local = rotatePoint(p.x, p.y, rect.cx, rect.cy, -(d.layer.rotation ?? 0));
+          let left = rect.x, right = rect.x + rect.w, top = rect.y, bottom = rect.y + rect.h;
+          if (d.handle.includes("w")) left = Math.min(local.x, right - g.videoW * 0.04);
+          if (d.handle.includes("e")) right = Math.max(local.x, left + g.videoW * 0.04);
+          if (d.handle.includes("n")) top = Math.min(local.y, bottom - g.videoH * 0.04);
+          if (d.handle.includes("s")) bottom = Math.max(local.y, top + g.videoH * 0.04);
+          left = Math.max(g.offsetX, left); top = Math.max(g.offsetY, top);
+          right = Math.min(g.offsetX + g.videoW, right); bottom = Math.min(g.offsetY + g.videoH, bottom);
+          onLayerChange({
+            ...d.layer,
+            x: (left - g.offsetX) / g.videoW,
+            y: (top - g.offsetY) / g.videoH,
+            w: Math.max(0.04, (right - left) / g.videoW),
+            h: Math.max(0.04, (bottom - top) / g.videoH),
+          });
         }
         return;
+      }
+      if (!cropMode && !zoomTargetMode && canvasRef.current) {
+        const time = videoRef.current?.currentTime ?? 0;
+        const selected = config.layers.find((layer) => layer.id === selectedLayerId && time >= layer.start - .02 && time <= layer.end + .02);
+        if (selected) {
+          const g = geomRef.current;
+          const rect = layerCanvasRect(selected, g);
+          const rotation = selected.rotation ?? 0;
+          const rotationPoint = rotatePoint(rect.cx, rect.y - 31, rect.cx, rect.cy, rotation);
+          const hit = gizmoHandlePoints(rect).find((candidate) => {
+            const point = rotatePoint(candidate.x, candidate.y, rect.cx, rect.cy, rotation);
+            return Math.hypot(p.x - point.x, p.y - point.y) <= 12;
+          });
+          const cursors: Record<GizmoHandle, string> = { nw: "nwse-resize", n: "ns-resize", ne: "nesw-resize", e: "ew-resize", se: "nwse-resize", s: "ns-resize", sw: "nesw-resize", w: "ew-resize" };
+          canvasRef.current.style.cursor = selected.type !== "mask" && Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14
+            ? "grab"
+            : hit ? cursors[hit.handle]
+            : pointInLayer(p, selected, g) ? "move" : "default";
+        }
       }
       if (!cropMode || !cropDrag.current) return;
       cropDrag.current.x1 = p.x;
       cropDrag.current.y1 = p.y;
     },
-    [cropMode, canvasToBacking, onLayerChange]
+    [cropMode, zoomTargetMode, canvasToBacking, zoomTargetFromClient, onZoomTargetPick, onLayerChange, config.layers, selectedLayerId]
   );
 
-  const handleCropMouseUp = useCallback(() => {
+  const handleCropMouseUp = useCallback((event?: React.PointerEvent) => {
+    if (event?.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const zoomDrag = zoomTargetDrag.current;
+    if (zoomDrag) {
+      if (zoomDrag.animationFrame) cancelAnimationFrame(zoomDrag.animationFrame);
+      zoomTargetDrag.current = null;
+      setZoomTargetDragging(false);
+      onZoomTargetPick?.(zoomDrag.pendingPoint, true);
+      return;
+    }
     if (layerDrag.current) { layerDrag.current = null; return; }
     const drag = cropDrag.current;
     cropDrag.current = null;
@@ -821,7 +1040,12 @@ export default function Preview({
         h: rect.h / g.videoH,
       });
     }
-  }, [cropMode, onCropApply]);
+  }, [cropMode, onCropApply, onZoomTargetPick]);
+
+  useEffect(() => () => {
+    const drag = zoomTargetDrag.current;
+    if (drag?.animationFrame) cancelAnimationFrame(drag.animationFrame);
+  }, []);
 
   useEffect(() => {
     if (!cropMode) return;
@@ -852,10 +1076,6 @@ export default function Preview({
     return () => window.removeEventListener("resize", onResize);
   }, [videoReady, computeCanvasSize]);
 
-  const togglePlay = () => {
-    if (performance.now() < suppressPlayUntilRef.current) return;
-    onClick?.();
-  };
   const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {
     videoRef.current = element;
     onMediaElementChange?.(element);
@@ -864,12 +1084,12 @@ export default function Preview({
 
   return (
     <div
-      className={`preview-container ${cropMode ? "crop-mode" : ""} ${zoomTargetMode ? "zoom-target-mode" : ""}`}
+      className={`preview-container ${cropMode ? "crop-mode" : ""} ${zoomTargetMode ? "zoom-target-mode" : ""} ${zoomTargetDragging ? "zoom-target-dragging" : ""}`}
       ref={containerRef}
-      onClick={handleZoomTargetClick}
-      onMouseDown={handleCropMouseDown}
-      onMouseMove={handleCropMouseMove}
-      onMouseUp={handleCropMouseUp}
+      onPointerDown={handleCropMouseDown}
+      onPointerMove={handleCropMouseMove}
+      onPointerUp={handleCropMouseUp}
+      onPointerCancel={handleCropMouseUp}
     >
       {loadError && <p className="preview-error">{loadError}</p>}
       <canvas
@@ -877,19 +1097,14 @@ export default function Preview({
         width={canvasSize.w}
         height={canvasSize.h}
         className="preview-canvas"
-        style={{ cursor: cropMode || zoomTargetMode ? "crosshair" : undefined }}
+        style={{ cursor: cropMode ? "crosshair" : zoomTargetMode ? (zoomTargetDragging ? "grabbing" : "grab") : selectedLayerId ? "move" : undefined }}
       />
-      <div className="preview-controls" onClick={cropMode || zoomTargetMode || selectedLayerId ? undefined : togglePlay}>
-        <div className={`play-overlay ${playing || cropMode || zoomTargetMode || selectedLayerId ? "hidden" : ""}`}>
-          <Play size={44} fill="currentColor" />
-        </div>
-      </div>
       {cropMode && (
         <div className="crop-hint">
           Drag to crop region • Esc to cancel • tiny click to reset
         </div>
       )}
-      {zoomTargetMode && <div className="crop-hint">Click the point you want to zoom toward • Esc to cancel</div>}
+      {zoomTargetMode && <div className="crop-hint">Drag anywhere to place the zoom focus • Esc to cancel</div>}
       {config.zoomEnabled && keyframes.length > 0 && currentZoom > 1.02 && (
         <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}

@@ -1,9 +1,9 @@
-use std::process::{Command, Stdio};
-use std::io::Read;
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::sync::{Mutex as StdMutex, OnceLock};
 use serde::Deserialize;
+use std::fs::File;
+use std::io::Read;
+use std::io::{BufWriter, Write};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex as StdMutex, OnceLock};
 
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
@@ -57,7 +57,10 @@ pub struct ExportRequest {
 pub async fn export_video(request: ExportRequest) -> std::result::Result<String, String> {
     eprintln!("[Snap Export] Starting export...");
     eprintln!("[Snap Export] Input: {}", request.input_video);
-    eprintln!("[Snap Export] Output: {}", request.export_settings.output_path);
+    eprintln!(
+        "[Snap Export] Output: {}",
+        request.export_settings.output_path
+    );
 
     let settings = &request.export_settings;
     let cfg = &request.config;
@@ -77,21 +80,26 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
         _ => "28",
     };
 
-    let mut args: Vec<String> = vec![
-        "-y".into(),
-        "-i".into(), request.input_video.clone(),
-    ];
+    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), request.input_video.clone()];
 
     // Detect sidecar audio files
     let input_path = std::path::Path::new(&request.input_video);
     let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
-    let parent = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let parent = input_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let audio_dir = parent.join(stem.as_ref());
 
     let sys_wav = audio_dir.join("system_audio.wav");
     let mic_wav = audio_dir.join("mic_audio.wav");
-    let has_sys = sys_wav.exists() && std::fs::metadata(&sys_wav).map(|m| m.len() > 0).unwrap_or(false);
-    let has_mic = mic_wav.exists() && std::fs::metadata(&mic_wav).map(|m| m.len() > 0).unwrap_or(false);
+    let has_sys = sys_wav.exists()
+        && std::fs::metadata(&sys_wav)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+    let has_mic = mic_wav.exists()
+        && std::fs::metadata(&mic_wav)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
 
     let mut audio_inputs = 0;
     if has_sys {
@@ -122,7 +130,9 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
     if audio_inputs > 0 {
         if audio_inputs == 2 {
             args.push("-filter_complex".into());
-            args.push(format!("[0:v]{vf}[v];[1:a][2:a]amix=inputs=2:duration=first[a]"));
+            args.push(format!(
+                "[0:v]{vf}[v];[1:a][2:a]amix=inputs=2:duration=first[a]"
+            ));
             args.push("-map".into());
             args.push("[v]".into());
             args.push("-map".into());
@@ -150,10 +160,14 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
         args.push("gif".into());
     } else {
         args.extend_from_slice(&[
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "medium".into(),
-            "-crf".into(), crf.into(),
-            "-pix_fmt".into(), "yuv420p".into(),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "medium".into(),
+            "-crf".into(),
+            crf.into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
         ]);
     }
 
@@ -192,7 +206,11 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
         output
     );
 
-    Ok(format!("Exported: {} ({:.1} MB)", output, meta.len() as f64 / 1_048_576.0))
+    Ok(format!(
+        "Exported: {} ({:.1} MB)",
+        output,
+        meta.len() as f64 / 1_048_576.0
+    ))
 }
 
 /// Build a nested if/else FFmpeg expression that piecewise-linearly
@@ -201,7 +219,11 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
 /// the last keyframe's value past the final keyframe, and holds the first
 /// keyframe's value before it starts (the clamped `max(0,min(1,...))` frac
 /// handles that automatically).
-fn build_piecewise(kfs: &[ExportKeyframe], fps: u32, value_of: impl Fn(&ExportKeyframe) -> f64) -> String {
+fn build_piecewise(
+    kfs: &[ExportKeyframe],
+    fps: u32,
+    value_of: impl Fn(&ExportKeyframe) -> f64,
+) -> String {
     if kfs.len() == 1 {
         return format!("{:.5}", value_of(&kfs[0]));
     }
@@ -247,7 +269,12 @@ fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) ->
 
     format!(
         "zoompan=z='{z}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={fps}",
-        z = z_expr, x = x_expr, y = y_expr, w = w, h = h, fps = fps
+        z = z_expr,
+        x = x_expr,
+        y = y_expr,
+        w = w,
+        h = h,
+        fps = fps
     )
 }
 
@@ -285,7 +312,9 @@ pub fn open_export_sink(path: String) -> std::result::Result<(), String> {
 pub fn write_export_chunk(bytes: Vec<u8>) -> std::result::Result<(), String> {
     let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
     match guard.as_mut() {
-        Some(w) => w.write_all(&bytes).map_err(|e| format!("Export write failed: {e}")),
+        Some(w) => w
+            .write_all(&bytes)
+            .map_err(|e| format!("Export write failed: {e}")),
         None => Err("Export sink not open".to_string()),
     }
 }
@@ -331,13 +360,23 @@ pub struct CanvasAudioMix {
 
 impl Default for CanvasAudioMix {
     fn default() -> Self {
-        Self { system_volume: 100.0, mic_volume: 100.0, system_muted: false, mic_muted: false }
+        Self {
+            system_volume: 100.0,
+            mic_volume: 100.0,
+            system_muted: false,
+            mic_muted: false,
+        }
     }
 }
 
-fn write_click_track(path: &std::path::Path, click_times_ms: &[f64], duration_seconds: f64) -> std::result::Result<(), String> {
+fn write_click_track(
+    path: &std::path::Path,
+    click_times_ms: &[f64],
+    duration_seconds: f64,
+) -> std::result::Result<(), String> {
     const RATE: u32 = 44_100;
-    let end_ms = (duration_seconds * 1000.0).max(click_times_ms.iter().copied().fold(0.0_f64, f64::max) + 180.0);
+    let end_ms = (duration_seconds * 1000.0)
+        .max(click_times_ms.iter().copied().fold(0.0_f64, f64::max) + 180.0);
     let samples = ((end_ms / 1000.0) * RATE as f64).ceil() as usize;
     let mut pcm = vec![0i16; samples.max(1)];
     for (click_index, click_ms) in click_times_ms.iter().enumerate() {
@@ -345,30 +384,48 @@ fn write_click_track(path: &std::path::Path, click_times_ms: &[f64], duration_se
         let click_len = (RATE as f64 * 0.095) as usize;
         for i in 0..click_len {
             let dst = start + i;
-            if dst >= pcm.len() { break; }
+            if dst >= pcm.len() {
+                break;
+            }
             let t = i as f64 / RATE as f64;
             let envelope = (-48.0 * t).exp();
             let tone = (std::f64::consts::TAU * (1050.0 - 4200.0 * t) * t).sin();
-            let noise_seed = ((i as u64 * 1_103_515_245 + click_index as u64 * 12_345) & 0xffff) as f64 / 32768.0 - 1.0;
+            let noise_seed = ((i as u64 * 1_103_515_245 + click_index as u64 * 12_345) & 0xffff)
+                as f64
+                / 32768.0
+                - 1.0;
             let value = ((tone * 0.8 + noise_seed * 0.2) * envelope * 7000.0) as i32;
             pcm[dst] = (pcm[dst] as i32 + value).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         }
     }
     let data_size = (pcm.len() * 2) as u32;
-    let mut out = BufWriter::new(File::create(path).map_err(|e| format!("Cannot create click track: {e}"))?);
+    let mut out =
+        BufWriter::new(File::create(path).map_err(|e| format!("Cannot create click track: {e}"))?);
     out.write_all(b"RIFF").map_err(|e| e.to_string())?;
-    out.write_all(&(36 + data_size).to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&(36 + data_size).to_le_bytes())
+        .map_err(|e| e.to_string())?;
     out.write_all(b"WAVEfmt ").map_err(|e| e.to_string())?;
-    out.write_all(&16u32.to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&1u16.to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&RATE.to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&(RATE * 2).to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&2u16.to_le_bytes()).map_err(|e| e.to_string())?;
-    out.write_all(&16u16.to_le_bytes()).map_err(|e| e.to_string())?;
+    out.write_all(&16u32.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&1u16.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&1u16.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&RATE.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&(RATE * 2).to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&2u16.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    out.write_all(&16u16.to_le_bytes())
+        .map_err(|e| e.to_string())?;
     out.write_all(b"data").map_err(|e| e.to_string())?;
-    out.write_all(&data_size.to_le_bytes()).map_err(|e| e.to_string())?;
-    for sample in pcm { out.write_all(&sample.to_le_bytes()).map_err(|e| e.to_string())?; }
+    out.write_all(&data_size.to_le_bytes())
+        .map_err(|e| e.to_string())?;
+    for sample in pcm {
+        out.write_all(&sample.to_le_bytes())
+            .map_err(|e| e.to_string())?;
+    }
     out.flush().map_err(|e| e.to_string())
 }
 
@@ -376,23 +433,40 @@ fn write_click_track(path: &std::path::Path, click_times_ms: &[f64], duration_se
 /// cursor, background, pan/zoom, styling) with the original system/mic
 /// audio and transcode to the user's chosen output format.
 #[tauri::command]
-pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result::Result<String, String> {
+pub async fn finalize_canvas_export(
+    request: CanvasExportRequest,
+) -> std::result::Result<String, String> {
     let settings = &request.export_settings;
 
-    eprintln!("[Snap Export] Finalizing canvas export -> {}", settings.output_path);
+    eprintln!(
+        "[Snap Export] Finalizing canvas export -> {}",
+        settings.output_path
+    );
 
     let input_path = std::path::Path::new(&request.input_video);
     let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
-    let parent = input_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let parent = input_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let audio_dir = parent.join(stem.as_ref());
     let sys_wav = audio_dir.join("system_audio.wav");
     let mic_wav = audio_dir.join("mic_audio.wav");
-    let has_sys = sys_wav.exists() && std::fs::metadata(&sys_wav).map(|m| m.len() > 0).unwrap_or(false);
-    let has_mic = mic_wav.exists() && std::fs::metadata(&mic_wav).map(|m| m.len() > 0).unwrap_or(false);
+    let has_sys = sys_wav.exists()
+        && std::fs::metadata(&sys_wav)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
+    let has_mic = mic_wav.exists()
+        && std::fs::metadata(&mic_wav)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
     let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
     let has_clicks = !request.click_times_ms.is_empty();
     if has_clicks {
-        write_click_track(&click_wav, &request.click_times_ms, request.export_duration_seconds)?;
+        write_click_track(
+            &click_wav,
+            &request.click_times_ms,
+            request.export_duration_seconds,
+        )?;
     }
 
     let crf = match settings.quality.as_str() {
@@ -413,14 +487,20 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
         let mut audio_sources: Vec<(usize, f64)> = Vec::new();
         let mut input_index = 1usize;
         if has_sys && !request.audio_mix.system_muted {
-            if request.trim_start_seconds > 0.0 { args.push("-ss".into()); args.push(format!("{:.6}", request.trim_start_seconds)); }
+            if request.trim_start_seconds > 0.0 {
+                args.push("-ss".into());
+                args.push(format!("{:.6}", request.trim_start_seconds));
+            }
             args.push("-i".into());
             args.push(sys_wav.to_string_lossy().to_string());
             audio_sources.push((input_index, request.audio_mix.system_volume / 100.0));
             input_index += 1;
         }
         if has_mic && !request.audio_mix.mic_muted {
-            if request.trim_start_seconds > 0.0 { args.push("-ss".into()); args.push(format!("{:.6}", request.trim_start_seconds)); }
+            if request.trim_start_seconds > 0.0 {
+                args.push("-ss".into());
+                args.push(format!("{:.6}", request.trim_start_seconds));
+            }
             args.push("-i".into());
             args.push(mic_wav.to_string_lossy().to_string());
             audio_sources.push((input_index, request.audio_mix.mic_volume / 100.0));
@@ -437,8 +517,13 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
             for (slot, (idx, volume)) in audio_sources.iter().enumerate() {
                 filter.push_str(&format!("[{idx}:a]volume={volume:.3}[a{slot}];"));
             }
-            for slot in 0..audio_sources.len() { filter.push_str(&format!("[a{slot}]")); }
-            filter.push_str(&format!("amix=inputs={}:duration=longest,apad[a]", audio_sources.len()));
+            for slot in 0..audio_sources.len() {
+                filter.push_str(&format!("[a{slot}]"));
+            }
+            filter.push_str(&format!(
+                "amix=inputs={}:duration=longest,apad[a]",
+                audio_sources.len()
+            ));
             args.push("-filter_complex".into());
             args.push(filter);
             args.push("-map".into());
@@ -467,17 +552,24 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
         }
 
         args.extend_from_slice(&[
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "medium".into(),
-            "-crf".into(), crf.into(),
-            "-pix_fmt".into(), "yuv420p".into(),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "medium".into(),
+            "-crf".into(),
+            crf.into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
             "-shortest".into(),
         ]);
     }
 
     args.push(settings.output_path.clone());
 
-    eprintln!("[Snap Export] Finalize FFmpeg command: ffmpeg {}", args.join(" "));
+    eprintln!(
+        "[Snap Export] Finalize FFmpeg command: ffmpeg {}",
+        args.join(" ")
+    );
 
     let mut child = Command::new("ffmpeg")
         .args(&args)
@@ -487,7 +579,9 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
         .spawn()
         .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
 
-    let status = child.wait().map_err(|e| format!("FFmpeg wait error: {e}"))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("FFmpeg wait error: {e}"))?;
 
     let mut stderr = String::new();
     if let Some(mut s) = child.stderr {
@@ -501,7 +595,9 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
 
     // Clean up the intermediate WebM now that the final file is encoded.
     let _ = std::fs::remove_file(&request.temp_webm_path);
-    if has_clicks { let _ = std::fs::remove_file(&click_wav); }
+    if has_clicks {
+        let _ = std::fs::remove_file(&click_wav);
+    }
 
     let output = request.export_settings.output_path.clone();
     let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
@@ -512,7 +608,11 @@ pub async fn finalize_canvas_export(request: CanvasExportRequest) -> std::result
         output
     );
 
-    Ok(format!("Exported: {} ({:.1} MB)", output, meta.len() as f64 / 1_048_576.0))
+    Ok(format!(
+        "Exported: {} ({:.1} MB)",
+        output,
+        meta.len() as f64 / 1_048_576.0
+    ))
 }
 
 #[cfg(test)]
@@ -534,8 +634,20 @@ mod tests {
     #[test]
     fn zoom_expression_contains_each_segment() {
         let keyframes = vec![
-            ExportKeyframe { time: 0.0, x: 0.5, y: 0.5, scale: 1.0, duration: 0.0 },
-            ExportKeyframe { time: 1000.0, x: 0.25, y: 0.75, scale: 2.0, duration: 400.0 },
+            ExportKeyframe {
+                time: 0.0,
+                x: 0.5,
+                y: 0.5,
+                scale: 1.0,
+                duration: 0.0,
+            },
+            ExportKeyframe {
+                time: 1000.0,
+                x: 0.25,
+                y: 0.75,
+                scale: 2.0,
+                duration: 400.0,
+            },
         ];
         let filter = build_zoompan_expr(&keyframes, 60, 1280, 720);
         assert!(filter.contains("zoompan"));

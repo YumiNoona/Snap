@@ -14,11 +14,15 @@ export interface Keyframe {
   y: number;
   scale: number;
   easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out";
+  source?: "auto" | "manual";
+  /** Stable identity shared by every keyframe that belongs to one zoom bar. */
+  regionId?: string;
 }
 
 export interface ZoomRegionSelection {
   startMs: number;
   endMs: number;
+  regionId?: string;
 }
 
 export interface ZoomRegionSettings extends ZoomRegionSelection {
@@ -26,6 +30,8 @@ export interface ZoomRegionSettings extends ZoomRegionSelection {
   x: number;
   y: number;
   transitionMs: number;
+  easing: Keyframe["easing"];
+  source?: "auto" | "manual";
 }
 
 export interface CursorPackState {
@@ -81,6 +87,10 @@ export interface BaseLayer {
   y: number;
   w: number;
   h: number;
+  rotation?: number;
+  flipX?: boolean;
+  flipY?: boolean;
+  opacity?: number;
 }
 
 export interface TextLayer extends BaseLayer {
@@ -89,6 +99,11 @@ export interface TextLayer extends BaseLayer {
   style: "plain" | "boxed" | "pill" | "badge";
   color: string;
   fontSize: number;
+  fontFamily?: "system" | "serif" | "mono";
+  fontWeight?: 400 | 500 | 600 | 700 | 800;
+  align?: "left" | "center" | "right";
+  backgroundColor?: string;
+  letterSpacing?: number;
 }
 
 export interface ShapeLayer extends BaseLayer {
@@ -96,12 +111,17 @@ export interface ShapeLayer extends BaseLayer {
   shape: "line" | "dashedLine" | "arrow" | "rectangle" | "roundedRect" | "circle" | "blob" | "downArrow" | "pointer";
   color: string;
   strokeWidth: number;
+  fillColor?: string;
+  fillOpacity?: number;
+  strokeOpacity?: number;
+  cornerRadius?: number;
 }
 
 export interface MaskLayer extends BaseLayer {
   type: "mask";
   mask: "spotlight" | "blur" | "magnifier";
   intensity: number;
+  feather?: number;
 }
 
 export type Layer = TextLayer | ShapeLayer | MaskLayer;

@@ -267,9 +267,8 @@ export function generateKeyframes(
   // Default: unzoomed full-screen 1.0x
   if (clusters.length === 0 || safeDuration === 0) {
     const defaultKfs: Keyframe[] = [
-      { time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1.0, easing: "ease" },
+      { time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1.0, easing: "ease", source: "auto" },
     ];
-    logKeyframesVisualization(events.length, clusters.length, defaultKfs);
     return defaultKfs;
   }
 
@@ -394,10 +393,20 @@ export function generateKeyframes(
     });
   }
 
-  const normalized = normalizeTrajectory(keyframes, safeDuration);
-
-  // Dev visualization log
-  logKeyframesVisualization(events.length, clusters.length, normalized);
+  let activeRegionId: string | undefined;
+  let regionSequence = 0;
+  const normalized = normalizeTrajectory(keyframes, safeDuration).map((frame) => {
+    if (frame.scale > 1.02) {
+      activeRegionId ??= `auto-${regionSequence++}-${Math.round(frame.time)}`;
+      return { ...frame, source: "auto" as const, regionId: activeRegionId };
+    }
+    if (activeRegionId) {
+      const reset = { ...frame, source: "auto" as const, regionId: activeRegionId };
+      activeRegionId = undefined;
+      return reset;
+    }
+    return { ...frame, source: "auto" as const };
+  });
 
   return normalized;
 }
@@ -423,31 +432,6 @@ function normalizeTrajectory(keyframes: Keyframe[], videoDurationMs: number): Ke
     normalized.push(frame);
   }
   return normalized;
-}
-
-/**
- * Log generated keyframes table to DevTools console for visual sanity-checking.
- */
-function logKeyframesVisualization(
-  totalEvents: number,
-  totalClusters: number,
-  keyframes: Keyframe[]
-) {
-  console.group("%c[Snap AutoZoom] Generated Keyframe Trajectory", "color: #a855f7; font-weight: bold; font-size: 13px;");
-  console.log(
-    `Input Events: ${totalEvents} | Significant Clusters: ${totalClusters} | Keyframes Generated: ${keyframes.length}`
-  );
-  console.table(
-    keyframes.map((kf, i) => ({
-      Index: i,
-      "Time (sec)": `${(kf.time / 1000).toFixed(2)}s`,
-      "Duration": `${kf.duration}ms`,
-      "Scale": `${kf.scale.toFixed(2)}x`,
-      "Focus (X, Y)": `(${kf.x.toFixed(2)}, ${kf.y.toFixed(2)})`,
-      "Easing": kf.easing,
-    }))
-  );
-  console.groupEnd();
 }
 
 /**
