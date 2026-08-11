@@ -29,6 +29,7 @@ import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
 import { type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
 import { recordingDataPaths } from "../../lib/recordingPaths";
+import snapAppIcon from "../../../src-tauri/icons/snap.png";
 import "./RecorderLauncher.css";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -553,7 +554,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         <div className="titlebar-drag-area" data-tauri-drag-region />
         <div className="titlebar-left">
           <div className="brand-logo-area">
-            <span className="brand-logo-text" aria-hidden="true"><i /><i /><i /></span>
+            <img className="brand-logo-icon" src={snapAppIcon} alt="" aria-hidden="true" />
             <span className="app-name">Snap</span>
           </div>
 

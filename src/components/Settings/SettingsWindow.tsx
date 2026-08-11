@@ -15,7 +15,6 @@ import {
   Minus,
   PanelTopOpen,
   RefreshCw,
-  Settings,
   Timer,
   WandSparkles,
   X,
@@ -26,6 +25,7 @@ import {
   readAppSettings,
   writeAppSettings,
 } from "../../lib/appSettings";
+import snapAppIcon from "../../../src-tauri/icons/snap.png";
 import "./SettingsWindow.css";
 
 type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "installing" | "error";
@@ -144,7 +144,7 @@ export default function SettingsWindow() {
   return (
     <div className="settings-window">
       <header className="settings-titlebar" data-tauri-drag-region>
-        <div className="settings-window-brand" data-tauri-drag-region><Settings size={17} /><strong>Snap Settings</strong></div>
+        <div className="settings-window-brand" data-tauri-drag-region><img className="settings-app-icon" src={snapAppIcon} alt="" aria-hidden="true" /><strong>Snap Settings</strong></div>
         <div className="settings-window-controls">
           <button title="Minimize" onClick={() => getCurrentWindow().minimize()}><Minus size={15} /></button>
           <button title="Close" onClick={() => getCurrentWindow().close()}><X size={15} /></button>
