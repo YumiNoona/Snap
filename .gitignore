@@ -5,6 +5,8 @@ node_modules/
 # Frontend build output
 dist/
 dist-ssr/
+.vite/
+*.tsbuildinfo
 *.local
 
 # Rust / Cargo build output
@@ -15,11 +17,16 @@ src-tauri/gen/
 .vscode/*
 !.vscode/extensions.json
 .idea/
+.fleet/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.bak
+*.tmp
+*.temp
+*~
 .agents/
 
 # Logs
@@ -51,5 +58,11 @@ exports/
 
 # Local release artifacts and signing material
 release-artifacts/
+*.exe
+*.msi
+*.msix
+*.appx
+*.sig
+latest.json
 *.key
 *.key.pub
