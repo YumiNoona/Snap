@@ -5,6 +5,7 @@ import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared, hasClickNear } from "../../../lib/inputLog";
+import { analyzeMobileVisualActivity } from "../../../lib/mobileAutoZoom";
 import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
@@ -127,6 +128,7 @@ export default function Preview({
   const clickEvents = useRef<InputEvent[]>([]);
   const clickIdxRef = useRef(0);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const inputSourceRef = useRef<string | null>(null);
   const clickRipples = useRef<{ x: number; y: number; ts: number }[]>([]);
   const prevTimeRef = useRef(-1);
   const prevPlayRef = useRef(-1);
@@ -183,6 +185,7 @@ export default function Preview({
     clickEvents.current = [];
     clickIdxRef.current = 0;
     regionRef.current = null;
+    inputSourceRef.current = null;
     clickRipples.current = [];
     prevPlayRef.current = -1;
     effectTimelineTsRef.current = -1;
@@ -193,12 +196,13 @@ export default function Preview({
   useEffect(() => {
     (async () => {
       try {
-        const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region } =
+        const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } =
           await loadInputLog(inputLogPath);
         allEvents.current = aligned;
         mouseMoveEvents.current = moves;
         clickEvents.current = clicks;
         regionRef.current = region;
+        inputSourceRef.current = source;
         clickIdxRef.current = 0;
         clickRipples.current = [];
         prevPlayRef.current = -1;
@@ -218,25 +222,32 @@ export default function Preview({
     if (!meta) return;
     kfGenerated.current = true;
     generatedRevision.current = autoZoomRevision;
-    if (allEvents.current.length > 0) {
+    let cancelled = false;
+    void (async () => {
+      let zoomEvents = allEvents.current;
+      if (zoomEvents.length === 0 && inputSourceRef.current === "mobile") {
+        zoomEvents = await analyzeMobileVisualActivity(videoPath, meta.w, meta.h, meta.d * 1000);
+      }
+      if (cancelled || zoomEvents.length === 0) return;
       // Input hooks report desktop coordinates. Normalize them into the
       // captured video's pixel space so region/window recordings focus on the
       // actual click instead of drifting toward the desktop origin.
-      const zoomEvents = allEvents.current.map((event) => {
+      const normalizedEvents = zoomEvents.map((event) => {
         if (typeof event.x !== "number" || typeof event.y !== "number") return event;
         const point = screenToVideoShared(regionRef.current, event.x, event.y, meta.w, meta.h);
         return { ...event, x: point.x, y: point.y };
       });
       const kf = generateKeyframes(
-        zoomEvents,
+        normalizedEvents,
         meta.w,
         meta.h,
         meta.d * 1000,
         getMovementDuration(config.zoomMovement)
       );
-      onKeyframesChange(kf);
-    }
-  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement]);
+      if (!cancelled) onKeyframesChange(kf);
+    })();
+    return () => { cancelled = true; };
+  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement, videoPath]);
 
   const playClickSound = useCallback(() => {
     if (!config.cursorStyle.clickSound || !playing) return;
@@ -310,6 +321,16 @@ export default function Preview({
       computeCanvasSize(video.videoWidth, video.videoHeight);
     }
   }, [config.aspectRatio, videoReady, computeCanvasSize]);
+
+  // Mobile recordings retain an embedded recovery audio stream and also have
+  // an extracted editable sidecar. Keep preview playback in sync with the
+  // timeline's primary audio controls.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = config.audio.systemMuted;
+    video.volume = Math.max(0, Math.min(1, config.audio.systemVolume / 100));
+  }, [config.audio.systemMuted, config.audio.systemVolume, videoReady]);
 
   // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {

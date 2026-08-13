@@ -127,6 +127,7 @@ export default function Timeline({
   }, [contextMenu]);
   const [hasSys, setHasSys] = useState(false);
   const [hasMic, setHasMic] = useState(false);
+  const [hasDeviceAudio, setHasDeviceAudio] = useState(false);
 
   // Detect sidecar audio files + build RMS waveforms for each track
   useEffect(() => {
@@ -140,20 +141,24 @@ export default function Timeline({
         const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: audioDir });
 
         const sysPath = `${audioDir}\\system_audio.wav`;
+        const devicePath = `${audioDir}\\device_audio.wav`;
         const micPath = `${audioDir}\\mic_audio.wav`;
-        const hasSysFile = files.some((f) => f.path === sysPath && f.size > 0);
+        const hasDeviceFile = files.some((f) => f.path === devicePath && f.size > 44);
+        const hasSysFile = hasDeviceFile || files.some((f) => f.path === sysPath && f.size > 44);
         const hasMicFile = files.some((f) => f.path === micPath && f.size > 0);
 
         setHasSys(hasSysFile);
         setHasMic(hasMicFile);
+        setHasDeviceAudio(hasDeviceFile);
 
         const wfs: { sys?: number[]; mic?: number[] } = {};
-        if (hasSysFile) wfs.sys = await loadWaveform(sysPath);
+        if (hasSysFile) wfs.sys = await loadWaveform(hasDeviceFile ? devicePath : sysPath);
         if (hasMicFile) wfs.mic = await loadWaveform(micPath);
         setWaveforms(wfs);
       } catch {
         setHasSys(false);
         setHasMic(false);
+        setHasDeviceAudio(false);
         setWaveforms({});
       }
     })();
@@ -559,9 +564,9 @@ export default function Timeline({
             <button
               className={`track-label-button ${config.audio.systemMuted ? "muted" : ""}`}
               onClick={() => onAudioMuteChange("system", !config.audio.systemMuted)}
-              title={config.audio.systemMuted ? "Unmute desktop audio" : "Mute desktop audio"}
+              title={config.audio.systemMuted ? `Unmute ${hasDeviceAudio ? "device" : "desktop"} audio` : `Mute ${hasDeviceAudio ? "device" : "desktop"} audio`}
             >
-              <span>Desktop</span>
+              <span>{hasDeviceAudio ? "Device" : "Desktop"}</span>
               <span className="audio-state-dot" aria-hidden="true" />
             </button>
           </div>
@@ -610,7 +615,7 @@ export default function Timeline({
           </div>
 
           {/* System Audio layer */}
-          <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? "Desktop audio" : "No desktop audio was recorded"}>
+          <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}>
             {hasSys ? <WaveRow data={waveforms.sys ?? pseudoWaveform()} /> : <span className="empty-track-label">No desktop audio</span>}
           </div>
 

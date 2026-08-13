@@ -2,8 +2,10 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
 use std::io::{BufWriter, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Mutex as StdMutex, OnceLock};
+
+use crate::process::background_command;
 
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
@@ -90,7 +92,12 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
         .unwrap_or_else(|| std::path::Path::new("."));
     let audio_dir = parent.join(stem.as_ref());
 
-    let sys_wav = audio_dir.join("system_audio.wav");
+    let device_wav = audio_dir.join("device_audio.wav");
+    let sys_wav = if device_wav.exists() {
+        device_wav
+    } else {
+        audio_dir.join("system_audio.wav")
+    };
     let mic_wav = audio_dir.join("mic_audio.wav");
     let has_sys = sys_wav.exists()
         && std::fs::metadata(&sys_wav)
@@ -175,7 +182,7 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
 
     eprintln!("[Snap Export] FFmpeg command: ffmpeg {}", args.join(" "));
 
-    let mut child = Command::new("ffmpeg")
+    let mut child = background_command("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -449,7 +456,12 @@ pub async fn finalize_canvas_export(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let audio_dir = parent.join(stem.as_ref());
-    let sys_wav = audio_dir.join("system_audio.wav");
+    let device_wav = audio_dir.join("device_audio.wav");
+    let sys_wav = if device_wav.exists() {
+        device_wav
+    } else {
+        audio_dir.join("system_audio.wav")
+    };
     let mic_wav = audio_dir.join("mic_audio.wav");
     let has_sys = sys_wav.exists()
         && std::fs::metadata(&sys_wav)
@@ -571,7 +583,7 @@ pub async fn finalize_canvas_export(
         args.join(" ")
     );
 
-    let mut child = Command::new("ffmpeg")
+    let mut child = background_command("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

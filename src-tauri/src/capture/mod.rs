@@ -1,10 +1,12 @@
 use std::ffi::c_void;
 use std::io::{Read, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::process::background_command;
 
 use serde::{Deserialize, Serialize};
 use windows::core::*;
@@ -94,9 +96,15 @@ pub fn get_target_bounds(target_id: String) -> std::result::Result<TargetBounds,
 
 #[tauri::command]
 pub fn get_videos_dir() -> std::result::Result<String, String> {
+    let library = get_videos_root().join("Snap");
+    std::fs::create_dir_all(&library)
+        .map_err(|error| format!("Unable to create the Snap recording library: {error}"))?;
+    Ok(library.to_string_lossy().to_string())
+}
+
+pub fn get_videos_root() -> std::path::PathBuf {
     let userprofile = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
-    let videos = std::path::PathBuf::from(&userprofile).join("Videos");
-    Ok(videos.to_string_lossy().to_string())
+    std::path::PathBuf::from(userprofile).join("Videos")
 }
 
 // ── Capture handle (held by the Tauri command thread) ────────────────────────
@@ -567,7 +575,7 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
     let size = format!("{width}x{height}");
 
     fn try_ffmpeg(args: &[&str]) -> std::result::Result<Child, std::io::Error> {
-        Command::new("ffmpeg")
+        background_command("ffmpeg")
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -604,7 +612,7 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
         ];
         probe_args.extend(codec_args.iter().copied());
         probe_args.extend(["-f", "null", "-"]);
-        let probe_ok = Command::new("ffmpeg")
+        let probe_ok = background_command("ffmpeg")
             .args(&probe_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())

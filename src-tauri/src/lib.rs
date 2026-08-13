@@ -2,6 +2,8 @@ mod audio;
 mod capture;
 mod export;
 mod input_hook;
+mod mobile;
+mod process;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -607,7 +609,7 @@ fn read_text_file(path: String) -> std::result::Result<String, String> {
 
 #[tauri::command]
 fn open_explorer(path: String) -> std::result::Result<(), String> {
-    std::process::Command::new("explorer")
+    process::background_command("explorer")
         .arg(&path)
         .spawn()
         .map_err(|e| format!("Cannot open explorer: {e}"))?;
@@ -830,7 +832,7 @@ fn recording_data_paths(video_path: &Path) -> (PathBuf, PathBuf) {
 #[cfg(target_os = "windows")]
 fn set_support_folder_hidden(path: &Path, hidden: bool) -> std::result::Result<(), String> {
     let flag = if hidden { "+H" } else { "-H" };
-    let status = std::process::Command::new("attrib.exe")
+    let status = process::background_command("attrib.exe")
         .arg(flag)
         .arg(path.as_os_str())
         .status()
@@ -848,8 +850,8 @@ fn set_support_folder_hidden(_path: &Path, _hidden: bool) -> std::result::Result
 }
 
 /// Create the private working-data folder used by input logging and both
-/// audio tracks. The MP4 deliberately remains in Videos so Explorer presents
-/// a clean, familiar recording library.
+/// audio tracks. The MP4 deliberately remains in Videos\Snap so Explorer
+/// presents a clean recording library owned by Snap.
 #[tauri::command]
 fn prepare_recording_data(
     video_path: String,
@@ -896,11 +898,53 @@ fn organize_recording_data(show_support_files: bool) -> std::result::Result<usiz
     let videos = PathBuf::from(capture::get_videos_dir()?);
     std::fs::create_dir_all(&videos)
         .map_err(|error| format!("Unable to open Videos folder: {error}"))?;
+    let mut moved = 0usize;
+
+    // Migrate only Snap-owned recordings from the former flat Videos layout.
+    // Existing destination names win, so this is safe to retry and never
+    // overwrites a user's recording.
+    let legacy_root = capture::get_videos_root();
+    if legacy_root != videos {
+        if let Ok(legacy_entries) = std::fs::read_dir(&legacy_root) {
+            for entry in legacy_entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with("snap_") {
+                    continue;
+                }
+                let is_support_folder = path.is_dir()
+                    && [
+                        "events.json",
+                        "system_audio.wav",
+                        "mic_audio.wav",
+                        "device_audio.wav",
+                        "mobile-recording.json",
+                        "mobile-capture.partial.mkv",
+                    ]
+                    .iter()
+                    .any(|asset| path.join(asset).exists());
+                let is_snap_asset = is_support_folder
+                    || path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|value| {
+                            value.eq_ignore_ascii_case("mp4") || value.eq_ignore_ascii_case("json")
+                        });
+                if !is_snap_asset {
+                    continue;
+                }
+                let destination = videos.join(&name);
+                if !destination.exists() && std::fs::rename(&path, &destination).is_ok() {
+                    moved += 1;
+                }
+            }
+        }
+    }
+
     let entries: Vec<_> = std::fs::read_dir(&videos)
         .map_err(|error| format!("Unable to scan Videos folder: {error}"))?
         .flatten()
         .collect();
-    let mut moved = 0usize;
 
     for entry in &entries {
         let path = entry.path();
@@ -962,6 +1006,14 @@ pub fn run() {
             audio::stop_audio_capture,
             audio::set_audio_paused,
             audio::set_microphone_muted,
+            mobile::mobile_environment,
+            mobile::install_android_capture_support,
+            mobile::enumerate_mobile_devices,
+            mobile::enumerate_mobile_capture_sources,
+            mobile::start_mobile_recording,
+            mobile::mobile_recording_status,
+            mobile::stop_mobile_recording,
+            mobile::recover_mobile_recordings,
             input_hook::start_input_logging,
             input_hook::stop_input_logging,
             input_hook::set_input_paused,

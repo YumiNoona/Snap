@@ -7,8 +7,8 @@ automatic or manual pan and zoom.
 
 ## Highlights
 
-- Full-screen, region, window, and connected-device recording modes
-- Separate microphone and desktop-audio tracks
+- Full-screen, region, window, Android USB, and iPhone/iPad UVC recording modes
+- Separate microphone, desktop-audio, and mobile device-audio tracks
 - Lightweight floating recording dock and standalone teleprompter
 - Automatic zoom generation from clicks and interaction clusters
 - Editable zoom, text, shape, and mask clips on a multi-track timeline
@@ -58,16 +58,18 @@ signing setup are documented in [RELEASING.md](RELEASING.md).
 
 ## Recording data layout
 
-Snap keeps the output folder clean by placing support files inside the matching
-recording folder:
+Snap owns a dedicated recording library at `Videos\Snap`. Visible MP4 files stay
+clean while support assets live in the matching hidden project folder:
 
 ```text
 Videos/
-├── snap_123456789.mp4
-└── snap_123456789/
-    ├── input.json
-    ├── system_audio.wav
-    └── mic_audio.wav
+└── Snap/
+    ├── snap_123456789.mp4
+    └── snap_123456789/
+        ├── events.json
+        ├── system_audio.wav
+        ├── mic_audio.wav
+        └── device_audio.wav
 ```
 
 The editor resolves both this layout and older sidecar layouts. The setting
@@ -81,9 +83,11 @@ disables audio, cursor data, auto zoom, editing, or export.
 | Recorder | `src-tauri/src/capture/` | Windows capture and H.264 recording |
 | Audio | `src-tauri/src/audio/` | WASAPI microphone and loopback capture |
 | Input log | `src-tauri/src/input_hook/` | Timestamped pointer and keyboard events |
+| Mobile capture | `src-tauri/src/mobile.rs` | Android scrcpy/ADB touch capture, iOS UVC, audio extraction, and recovery |
 | Application commands | `src-tauri/src/lib.rs` | Tauri IPC, windows, settings, and project paths |
 | Editor shell | `src/components/Editor/` | Preview, panels, timeline, presets, and transport |
 | Auto zoom | `src/lib/autoZoom.ts` | Interaction clustering and camera keyframes |
+| Mobile Auto Zoom | `src/lib/mobileAutoZoom.ts` | Visual-activity anchors when mobile touch telemetry is unavailable |
 | Canvas renderer | `src/lib/canvasDraw.ts` | Preview/export drawing primitives |
 | Export | `src/lib/canvasExport.ts` | Frame compositing and FFmpeg encoding |
 

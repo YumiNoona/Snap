@@ -6,6 +6,8 @@ export interface LoadedInputLog {
   mouseMoveEvents: InputEvent[];
   clickEvents: InputEvent[];
   region: { x: number; y: number; w: number; h: number } | null;
+  source: string | null;
+  platform: string | null;
 }
 
 /**
@@ -27,8 +29,12 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
   let captureElapsedMs = 0;
   let videoDurationMs = 0;
   let region: { x: number; y: number; w: number; h: number } | null = null;
+  let source: string | null = null;
+  let platform: string | null = null;
   for (const e of raw) {
     if (e.type === "meta") {
+      if (typeof e.source === "string") source = e.source;
+      if (typeof e.platform === "string") platform = e.platform;
       if (typeof e.captureStartMs === "number" && e.captureStartMs > 0) {
         captureStartMs = e.captureStartMs;
       }
@@ -59,7 +65,7 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
     .filter((e) => e.type === "mousedown" && e.x != null && e.y != null)
     .sort((a, b) => a.ts - b.ts);
 
-  return { allEvents: aligned, mouseMoveEvents, clickEvents, region };
+  return { allEvents: aligned, mouseMoveEvents, clickEvents, region, source, platform };
 }
 
 /** Binary-search interpolated cursor position (screen space) at a given video timestamp (ms). */

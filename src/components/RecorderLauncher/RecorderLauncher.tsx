@@ -22,11 +22,11 @@ import {
   FileVideo2,
   FolderOpen,
   LogOut,
-  Smartphone,
 } from "lucide-react";
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
+import DonateButton from "../shared/DonateButton";
 import { type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
 import { recordingDataPaths } from "../../lib/recordingPaths";
 import snapAppIcon from "../../../src-tauri/icons/snap.png";
@@ -544,7 +544,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   // Sub-view: Device Connection (image_1.png / image_2.png)
   if (activeView === "device") {
-    return <DeviceView onBack={() => setActiveView("launcher")} />;
+    return <DeviceView onBack={() => setActiveView("launcher")} onOpenEditor={onOpenEditor} />;
   }
 
   return (
@@ -591,6 +591,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         </div>
 
         <div className="titlebar-right">
+          <DonateButton />
           <button className="titlebar-icon-btn" title="Settings" onClick={onOpenSettings}>
             <Settings size={18} />
           </button>
@@ -659,7 +660,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
             <div className="focusee-card" onClick={handleDevice} title="Record a Mobile Device">
               <div className="card-thumb-frame">
                 <div className="wallpaper-preview device-preview">
-                  <Smartphone className="phone-illustration-icon" size={34} strokeWidth={1.8} />
+                  <span className="phone-illustration" aria-hidden="true">
+                    <span className="phone-screen" />
+                    <span className="phone-speaker" />
+                    <span className="phone-camera" />
+                    <span className="phone-home-indicator" />
+                  </span>
                 </div>
               </div>
               <span className="card-title-text"><strong>Device</strong></span>

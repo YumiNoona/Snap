@@ -365,15 +365,75 @@
   background: linear-gradient(180deg, rgba(2,6,23,.02), rgba(2,6,23,.12)), url("/recorder-panel.jpg") center / cover no-repeat;
 }
 
-.phone-illustration-icon {
+.phone-illustration {
+  position: relative;
   z-index: 2;
-  width: 38px;
-  height: 38px;
-  color: rgba(255,255,255,.96);
-  filter: drop-shadow(0 8px 12px rgba(15,23,42,.38));
+  width: 29px;
+  height: 49px;
+  border: 1px solid rgba(255,255,255,.82);
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(15,23,42,.34);
+  box-shadow: 0 8px 20px rgba(15,23,42,.28), inset 0 1px rgba(255,255,255,.12);
+  backdrop-filter: blur(4px);
   transition: transform var(--dur-base) var(--ease-out-back);
 }
-.focusee-card:hover .phone-illustration-icon { transform: translateY(-2px) scale(1.08); }
+
+.phone-screen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.phone-screen::after {
+  content: "";
+  position: absolute;
+  width: 30px;
+  height: 10px;
+  top: 10px;
+  left: -9px;
+  background: rgba(255,255,255,.08);
+  transform: rotate(-38deg);
+}
+
+.phone-speaker {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  left: 50%;
+  width: 8px;
+  height: 2px;
+  border-radius: 99px;
+  background: rgba(255,255,255,.92);
+  transform: translateX(-50%);
+}
+
+.phone-camera {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  left: 6px;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: #bfdbfe;
+  box-shadow: 0 0 3px rgba(96,165,250,.9);
+}
+
+.phone-home-indicator {
+  position: absolute;
+  z-index: 1;
+  bottom: 4px;
+  left: 50%;
+  width: 9px;
+  height: 2px;
+  border-radius: 99px;
+  background: rgba(255,255,255,.94);
+  transform: translateX(-50%);
+}
+
+.focusee-card:hover .phone-illustration { transform: translateY(-2px) scale(1.07); }
 
 /* Card footer strip — title label below thumbnail */
 .card-title-text {

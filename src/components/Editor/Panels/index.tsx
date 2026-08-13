@@ -445,15 +445,16 @@ export default function Panels({
             {config.zoomMovement.speed === "custom" && (
               <Slider label="Duration" value={config.zoomMovement.durationMs} min={100} max={3000} step={100} unit="ms" onChange={(v) => updateZoomMov({ durationMs: v })} />
             )}
-            {config.zoomMode === "manual" && (
+            <p className="panel-help-text">
+              {config.zoomMode === "auto"
+                ? "Regenerate Auto-Zoom analyzes the recording again and refreshes the automatic zoom regions in the timeline."
+                : "Add Zoom Region creates a bar at the playhead immediately. Move or trim the bar in the timeline, then drag directly in the preview to place its focus point."}
+            </p>
+            {config.zoomMode === "manual" ? (
               <button className="ss-drawer-action-btn primary" onClick={onAddManualZoom}>
                 + Add Zoom Region
               </button>
-            )}
-            <p className="panel-help-text">
-              Add Zoom Region creates a bar at the playhead immediately. Move or trim the bar in the timeline, then drag directly in the preview to place its focus point.
-            </p>
-            {config.zoomMode === "auto" && (
+            ) : (
               <button className="ss-drawer-action-btn" onClick={onRegenerateAutoZoom}>
                 Regenerate Auto-Zoom
               </button>

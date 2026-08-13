@@ -8,6 +8,7 @@ import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
+import DonateButton from "../shared/DonateButton";
 import type { EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
@@ -837,6 +838,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         </div>
 
         <div className="ss-topbar-right">
+          <DonateButton />
           {/* PROMINENT TOP-RIGHT EXPORT BUTTON */}
           <button
             className="ss-topbar-export-btn"
