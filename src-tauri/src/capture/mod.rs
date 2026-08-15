@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -107,6 +108,92 @@ pub fn get_videos_root() -> std::path::PathBuf {
     std::path::PathBuf::from(userprofile).join("Videos")
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingPreflight {
+    pub available_bytes: u64,
+    pub required_bytes: u64,
+    pub ffmpeg_available: bool,
+    pub writable: bool,
+}
+
+/// Fast preflight performed before hooks, audio devices, or capture sessions
+/// are opened. The estimate deliberately includes generous headroom for raw
+/// audio, temporary files, and encoder bitrate spikes.
+#[tauri::command]
+pub fn recording_preflight(
+    output_path: String,
+    expected_seconds: Option<u64>,
+) -> std::result::Result<RecordingPreflight, String> {
+    let output = std::path::PathBuf::from(&output_path);
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Cannot create recording folder: {error}"))?;
+    let probe = parent.join(".snap-write-test.tmp");
+    let writable = std::fs::write(&probe, b"snap").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    if !writable {
+        return Err(format!(
+            "Recording folder is not writable: {}",
+            parent.display()
+        ));
+    }
+    let available_bytes = fs2::available_space(parent)
+        .map_err(|error| format!("Cannot inspect free disk space: {error}"))?;
+    let seconds = expected_seconds.unwrap_or(3600).clamp(60, 86_400);
+    let required_bytes = (seconds * 3_000_000).max(1_073_741_824);
+    if available_bytes < required_bytes {
+        return Err(format!("Not enough disk space. Snap needs at least {:.1} GB free for this recording estimate; {:.1} GB is available.", required_bytes as f64 / 1_073_741_824.0, available_bytes as f64 / 1_073_741_824.0));
+    }
+    let ffmpeg_available = crate::process::background_command("ffmpeg")
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ffmpeg_available {
+        return Err(
+            "FFmpeg is unavailable. Install or bundle FFmpeg before recording.".to_string(),
+        );
+    }
+    Ok(RecordingPreflight {
+        available_bytes,
+        required_bytes,
+        ffmpeg_available,
+        writable,
+    })
+}
+
+#[tauri::command]
+pub async fn install_ffmpeg() -> std::result::Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let output = crate::process::background_command("winget.exe")
+            .args([
+                "install",
+                "--id",
+                "Gyan.FFmpeg.Essentials",
+                "--exact",
+                "--silent",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+                "--disable-interactivity",
+            ])
+            .output()
+            .map_err(|error| format!("Windows Package Manager is unavailable: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "FFmpeg installation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok("FFmpeg installed. Snap can now record and export video.".to_string())
+    })
+    .await
+    .map_err(|error| format!("FFmpeg installer failed: {error}"))?
+}
+
 // ── Capture handle (held by the Tauri command thread) ────────────────────────
 
 struct CaptureHandle {
@@ -177,6 +264,31 @@ fn enumerate_monitors(targets: &mut Vec<DisplayTarget>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn desktop_duplication_output_index(hmonitor: HMONITOR) -> Result<u32> {
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
+    let mut global_index = 0u32;
+    for adapter_idx in 0u32.. {
+        let adapter: IDXGIAdapter1 = match unsafe { factory.EnumAdapters1(adapter_idx) } {
+            Ok(value) => value,
+            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
+            Err(_) => continue,
+        };
+        for output_idx in 0u32.. {
+            let output: IDXGIOutput = match unsafe { adapter.EnumOutputs(output_idx) } {
+                Ok(value) => value,
+                Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
+                Err(_) => continue,
+            };
+            let description = unsafe { output.GetDesc()? };
+            if description.Monitor == hmonitor {
+                return Ok(global_index);
+            }
+            global_index += 1;
+        }
+    }
+    Err(Error::new(E_FAIL, "Selected display is unavailable to Desktop Duplication"))
 }
 
 fn enumerate_windows(targets: &mut Vec<DisplayTarget>) {
@@ -357,6 +469,22 @@ fn run_capture_thread(
         }
     }
 
+    // Windows.Graphics.Capture can stop invalidating frames for hardware-overlay
+    // browser/video content on some driver combinations. Full-display recording
+    // therefore uses DXGI Desktop Duplication through FFmpeg; window and region
+    // capture retain WGC because it provides their exact target geometry.
+    if crop.is_none() {
+        if let Some(monitor) = hmonitor_from_id(target_id) {
+            return run_desktop_duplication_capture(
+                monitor,
+                &abs_path,
+                is_recording,
+                is_paused,
+                startup_tx,
+            );
+        }
+    }
+
     let result = (|| -> Result<()> {
         // ── Step 1: COM initialization ──
         eprintln!("[Snap] Step 1/7: COM initializing (COINIT_MULTITHREADED)...");
@@ -395,6 +523,17 @@ fn run_capture_thread(
         let abs_path_str = abs_path.to_string_lossy().to_string();
         let (mut ffmpeg_child, ffmpeg_stdin, hardware_encoder) =
             spawn_ffmpeg(&abs_path_str, encode_w, encode_h)?;
+        // FFmpeg continuously writes progress and diagnostics. Leaving stderr
+        // attached to an unread pipe eventually fills its OS buffer and blocks
+        // the encoder, producing a video that appears frozen on one frame.
+        let ffmpeg_stderr = ffmpeg_child.stderr.take();
+        let stderr_reader = thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut stderr) = ffmpeg_stderr {
+                let _ = stderr.read_to_string(&mut text);
+            }
+            text
+        });
         eprintln!("[Snap] Step 4/7: FFmpeg spawned OK ({hardware_encoder} hardware encoder)");
 
         // ── Step 5: Frame pool + capture session ──
@@ -430,8 +569,28 @@ fn run_capture_thread(
         // Reusable staging texture — created once on first frame, reused for all
         // subsequent frames to avoid per-frame GPU allocation overhead.
         let mut staging_cache: Option<(ID3D11Texture2D, u32, u32)> = None;
+        let mut health_check = Instant::now();
+        let mut consecutive_write_errors = 0u8;
+        let mut capture_failure: Option<String> = None;
+        let mut last_frame_at = Instant::now();
 
         while is_recording.load(Ordering::Relaxed) {
+            if health_check.elapsed() >= Duration::from_secs(5) {
+                health_check = Instant::now();
+                if let Some(parent) = abs_path.parent() {
+                    if let Ok(free) = fs2::available_space(parent) {
+                        if free < 268_435_456 {
+                            capture_failure = Some(format!("Recording stopped safely because disk space fell below 256 MB ({} MB remaining)", free / 1_048_576));
+                            break;
+                        }
+                    }
+                }
+                if let Ok(Some(status)) = ffmpeg_child.try_wait() {
+                    capture_failure =
+                        Some(format!("Hardware encoder stopped unexpectedly: {status}"));
+                    break;
+                }
+            }
             // Pause gate: while paused, drain and drop frames so the paused
             // segment is omitted from the video entirely. On resume, reset the
             // pacing target to avoid a burst of catch-up frames.
@@ -450,6 +609,7 @@ fn run_capture_thread(
             let now = Instant::now();
             match frame_pool.TryGetNextFrame() {
                 Ok(frame) => {
+                    last_frame_at = now;
                     frame_count += 1;
 
                     // First frame == video time 0 — stamp it into the input log so
@@ -472,6 +632,14 @@ fn run_capture_thread(
                             active_crop,
                         ) {
                             eprintln!("[Snap] frame write error: {e}");
+                            consecutive_write_errors = consecutive_write_errors.saturating_add(1);
+                            if consecutive_write_errors >= 3 {
+                                capture_failure =
+                                    Some(format!("Frame pipeline failed repeatedly: {e}"));
+                                break;
+                            }
+                        } else {
+                            consecutive_write_errors = 0;
                         }
                         frames_sent += 1;
                         next_target += frame_interval;
@@ -497,6 +665,10 @@ fn run_capture_thread(
                             "capture timed out waiting for first frame (3s)",
                         ));
                     }
+                    if frame_count > 0 && last_frame_at.elapsed() > Duration::from_secs(5) {
+                        capture_failure = Some("Capture target stopped producing frames for 5 seconds. The window may have closed, the display may have disconnected, or the graphics device may have reset.".to_string());
+                        break;
+                    }
                 }
             }
             thread::sleep(Duration::from_millis(2));
@@ -513,7 +685,9 @@ fn run_capture_thread(
 
         // Wait for FFmpeg with timeout, then read its stderr
         let ffmpeg_status = wait_for_ffmpeg(&mut ffmpeg_child);
-        let stderr_text = read_ffmpeg_stderr(&mut ffmpeg_child);
+        let stderr_text = stderr_reader
+            .join()
+            .unwrap_or_else(|_| "FFmpeg diagnostics reader crashed".to_string());
 
         eprintln!("[Snap] FFmpeg stderr:\n{stderr_text}");
 
@@ -523,10 +697,119 @@ fn run_capture_thread(
         // ── File verification ──
         validate_output(&abs_path, ffmpeg_status, &stderr_text)?;
 
+        if let Some(failure) = capture_failure {
+            return Err(Error::new(E_FAIL, failure));
+        }
+
         Ok(())
     })();
 
     result.map_err(|e| format!("{e}"))
+}
+
+fn run_desktop_duplication_capture(
+    monitor: HMONITOR,
+    output_path: &Path,
+    is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
+    startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+) -> std::result::Result<(), String> {
+    let output_index = desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?;
+    let source = format!("ddagrab=output_idx={output_index}:framerate=60:draw_mouse=0,hwdownload,format=bgra");
+    let stem = output_path.file_stem().unwrap_or_default().to_string_lossy();
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut parts = Vec::new();
+    let mut part_index = 0usize;
+    let mut started = false;
+    let mut last_diagnostics = String::new();
+
+    while is_recording.load(Ordering::Relaxed) {
+        let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
+        let _ = std::fs::remove_file(&part);
+        let (mut child, mut control, encoder) = spawn_desktop_duplication(&source, &part)?;
+        let stderr = child.stderr.take();
+        let stderr_reader = thread::spawn(move || {
+            let mut diagnostics = String::new();
+            if let Some(mut stream) = stderr { let _ = stream.read_to_string(&mut diagnostics); }
+            diagnostics
+        });
+        if !started {
+            crate::input_hook::mark_capture_start();
+            let _ = startup_tx.send(Ok(()));
+            started = true;
+        }
+        eprintln!("[Snap] Full-display Desktop Duplication segment {part_index} started on output {output_index} ({encoder})");
+        let mut exited = false;
+        while is_recording.load(Ordering::Relaxed) {
+            if let Ok(Some(status)) = child.try_wait() {
+                eprintln!("[Snap] Desktop Duplication segment ended ({status}); attempting recovery");
+                exited = true;
+                break;
+            }
+            let _ = is_paused.load(Ordering::Relaxed); // audio and input keep their own pause clocks
+            thread::sleep(Duration::from_millis(20));
+        }
+        if !exited {
+            let _ = control.write_all(b"q\n");
+            drop(control);
+            let _ = wait_for_ffmpeg(&mut child);
+        }
+        last_diagnostics = stderr_reader.join().unwrap_or_default();
+        if std::fs::metadata(&part).map(|value| value.len() > 1_024).unwrap_or(false) {
+            parts.push(part);
+        }
+        if !is_recording.load(Ordering::Relaxed) { break; }
+        part_index += 1;
+        if part_index > 5 {
+            return Err(format!("Desktop capture could not recover after 5 display resets: {last_diagnostics}"));
+        }
+        thread::sleep(Duration::from_millis(350));
+    }
+
+    crate::input_hook::mark_capture_end(0);
+    finalize_capture_parts(&parts, output_path, &last_diagnostics)?;
+    for part in parts { let _ = std::fs::remove_file(part); }
+    Ok(())
+}
+
+fn spawn_desktop_duplication(source: &str, destination: &Path) -> std::result::Result<(Child, ChildStdin, &'static str), String> {
+    let destination = destination.to_string_lossy().to_string();
+    let encoders: [(&str, &[&str]); 3] = [
+        ("NVENC", &["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M"]),
+        ("AMD AMF", &["-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M"]),
+        ("Intel Quick Sync", &["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M"]),
+    ];
+    for (name, codec) in encoders {
+        let mut command = background_command("ffmpeg");
+        command.args(["-y", "-hide_banner", "-loglevel", "error", "-filter_complex", source]);
+        command.args(codec).args(["-pix_fmt", "yuv420p", &destination]);
+        command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        if let Ok(mut child) = command.spawn() {
+            thread::sleep(Duration::from_millis(500));
+            if matches!(child.try_wait(), Ok(None)) {
+                let stdin = child.stdin.take().ok_or_else(|| "Desktop capture control pipe is unavailable".to_string())?;
+                return Ok((child, stdin, name));
+            }
+            let _ = child.wait();
+        }
+    }
+    Err("Desktop capture could not start with any supported hardware H.264 encoder".to_string())
+}
+
+fn finalize_capture_parts(parts: &[std::path::PathBuf], output_path: &Path, diagnostics: &str) -> std::result::Result<(), String> {
+    if parts.is_empty() { return Err(format!("Desktop capture produced no usable video: {diagnostics}")); }
+    let _ = std::fs::remove_file(output_path);
+    if parts.len() == 1 {
+        std::fs::rename(&parts[0], output_path).map_err(|error| format!("Unable to finalize desktop recording: {error}"))?;
+    } else {
+        let list_path = output_path.with_extension("capture-parts.txt");
+        let list = parts.iter().map(|path| format!("file '{}'", path.to_string_lossy().replace('\'', "'\\''"))).collect::<Vec<_>>().join("\n");
+        std::fs::write(&list_path, list).map_err(|error| format!("Unable to prepare recovered recording: {error}"))?;
+        let output = background_command("ffmpeg").args(["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"]).arg(&list_path).args(["-c", "copy"]).arg(output_path).output().map_err(|error| format!("Unable to join recovered recording: {error}"))?;
+        let _ = std::fs::remove_file(&list_path);
+        if !output.status.success() { return Err(format!("Unable to join recovered desktop recording: {}", String::from_utf8_lossy(&output.stderr))); }
+    }
+    validate_output(output_path, true, diagnostics).map_err(|error| error.to_string())
 }
 
 // ── D3D11 device ─────────────────────────────────────────────────────────────
@@ -626,6 +909,10 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
         }
         let mut args = vec![
             "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostats",
             "-f",
             "rawvideo",
             "-pixel_format",
@@ -680,20 +967,6 @@ fn wait_for_ffmpeg(child: &mut Child) -> bool {
                 return false;
             }
         }
-    }
-}
-
-fn read_ffmpeg_stderr(child: &mut Child) -> String {
-    let mut stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => return "(no stderr captured)".to_string(),
-    };
-    let mut buf = String::new();
-    let _ = stderr.read_to_string(&mut buf);
-    if buf.is_empty() {
-        "(stderr empty)".to_string()
-    } else {
-        buf
     }
 }
 
@@ -807,9 +1080,15 @@ fn write_frame_to_ffmpeg(
 
     unsafe { context.Unmap(&staging, 0) };
 
-    if let Ok(mut writer) = stdin.lock() {
-        let _ = writer.write_all(&buf);
-    }
+    let mut writer = stdin
+        .lock()
+        .map_err(|_| Error::new(E_FAIL, "FFmpeg input pipe lock was poisoned"))?;
+    writer.write_all(&buf).map_err(|error| {
+        Error::new(
+            E_FAIL,
+            format!("FFmpeg input pipe rejected a frame: {error}"),
+        )
+    })?;
 
     Ok(())
 }

@@ -1,5 +1,49 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { ClickEffect, CursorStyle, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
+import type { CaptionTrack, ClickEffect, CursorStyle, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
+
+export function drawCaptionTrack(
+  ctx: CanvasRenderingContext2D,
+  track: CaptionTrack,
+  timeMs: number,
+  frame: { x: number; y: number; w: number; h: number }
+): void {
+  if (!track.visible) return;
+  const segment = track.segments.find((item) => timeMs >= item.startMs && timeMs < item.endMs);
+  if (!segment?.text.trim()) return;
+  const style = track.style;
+  const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
+  const maxWidth = Math.max(80, frame.w * style.maxWidth);
+  ctx.save();
+  ctx.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  ctx.textAlign = style.align;
+  ctx.textBaseline = "middle";
+  const words = segment.text.trim().split(/\s+/u);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(candidate).width > maxWidth) { lines.push(line); line = word; }
+    else line = candidate;
+  }
+  if (line) lines.push(line);
+  const lineHeight = fontSize * 1.22;
+  const paddingX = fontSize * 0.4;
+  const paddingY = fontSize * 0.24;
+  const widest = Math.min(maxWidth, Math.max(...lines.map((value) => ctx.measureText(value).width), 1));
+  const centerX = frame.x + frame.w * style.x;
+  const centerY = frame.y + frame.h * style.y;
+  ctx.fillStyle = style.backgroundColor;
+  roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * 0.18);
+  ctx.fill();
+  lines.forEach((value, index) => {
+    const y = centerY + (index - (lines.length - 1) / 2) * lineHeight;
+    if (style.shadow) { ctx.shadowColor = "rgba(0,0,0,.7)"; ctx.shadowBlur = fontSize * 0.18; ctx.shadowOffsetY = fontSize * 0.08; }
+    if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2; ctx.lineJoin = "round"; ctx.strokeText(value, centerX, y, maxWidth); }
+    ctx.fillStyle = style.color;
+    ctx.fillText(value, centerX, y, maxWidth);
+  });
+  ctx.restore();
+}
 
 export function assetSrc(path: string): string {
   // Web-root-relative paths (/Wallpapers/.., /Cursors/..) are served by Vite /
@@ -116,7 +160,7 @@ export function drawCursor(
     ctx.lineTo(s * 0.73, s * 1.02);
     ctx.lineTo(s * 1.25, s * 0.98);
     ctx.closePath();
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = style.color;
     ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.9)";
     ctx.lineJoin = "round";

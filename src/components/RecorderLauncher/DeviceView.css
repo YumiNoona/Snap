@@ -10,19 +10,19 @@
 }
 
 .mobile-header {
-  min-height: 68px;
+  min-height: 48px;
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) 120px;
   align-items: center;
   gap: 16px;
-  padding: 10px 22px;
+  padding: 5px 16px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .mobile-heading-copy { text-align: center; }
-.mobile-heading-copy h2 { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: -.35px; }
+.mobile-heading-copy h2 { margin: 0; font-size: 15px; line-height: 1.2; letter-spacing: -.2px; }
 .mobile-heading-copy p { margin: 4px 0 0; color: var(--text-tertiary); font-size: var(--text-xs); }
 .mobile-back-button, .mobile-refresh-button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 11px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: 9px; font-size: var(--text-sm); font-weight: 650; cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast); }
 .mobile-back-button { justify-self: start; }.mobile-refresh-button { justify-self: end; }
@@ -32,7 +32,7 @@
 .mobile-recovery-banner { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 9px 22px; color: #bbf7d0; background: rgba(34,197,94,.09); border-bottom: 1px solid rgba(74,222,128,.2); font-size: var(--text-xs); }
 .mobile-recovery-banner > span { flex: 1; }.mobile-recovery-banner button { padding: 6px 10px; color: #dcfce7; background: rgba(34,197,94,.14); border: 1px solid rgba(74,222,128,.25); border-radius: 7px; cursor: pointer; }
 
-.mobile-platform-picker { width: min(1040px, 100%); min-height: 0; flex: 1; align-self: center; display: grid; grid-template-columns: minmax(340px, .9fr) minmax(500px, 1.1fr); grid-template-areas: "hero heading" "hero cards" "hero safety"; grid-template-rows: auto 1fr auto; align-items: stretch; gap: 12px 18px; padding: 18px 24px; overflow-y: auto; }
+.mobile-platform-picker { width: 100%; min-height: 0; flex: 1; align-self: center; display: grid; grid-template-columns: minmax(340px, .9fr) minmax(500px, 1.1fr); grid-template-areas: "hero heading" "hero cards" "hero safety"; grid-template-rows: auto 1fr auto; align-items: stretch; gap: 10px 18px; padding: 14px 24px; overflow-y: auto; }
 .mobile-picker-hero { grid-area: hero; position: relative; min-height: 292px; overflow: hidden; display: flex; flex-direction: column; padding: 24px 24px 0; background: radial-gradient(circle at 76% 80%, rgba(59,130,246,.17), transparent 33%), linear-gradient(145deg, rgba(24,29,41,.98), rgba(10,13,20,.98)); border: 1px solid var(--border-subtle); border-radius: 20px; box-shadow: inset 0 1px rgba(255,255,255,.025); }
 .mobile-picker-hero::before { content: ""; position: absolute; inset: 0; opacity: .24; background-image: linear-gradient(rgba(148,163,184,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.08) 1px, transparent 1px); background-size: 26px 26px; mask-image: linear-gradient(to bottom, transparent, #000 40%); pointer-events: none; }
 .mobile-platform-intro { position: relative; z-index: 2; max-width: 370px; text-align: left; }

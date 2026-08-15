@@ -10,7 +10,32 @@ use std::os::windows::process::CommandExt;
 /// console applications. Without `CREATE_NO_WINDOW`, Windows can open a blank
 /// terminal whenever one of those tools is launched from the installed app.
 pub(crate) fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
-    let mut command = Command::new(program);
+    let requested = program.as_ref();
+    let mut resolved = None;
+    if requested.to_string_lossy().eq_ignore_ascii_case("ffmpeg") {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            for candidate in [
+                std::path::PathBuf::from(&local)
+                    .join("Snap")
+                    .join("tools")
+                    .join("ffmpeg.exe"),
+                std::path::PathBuf::from(local)
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links")
+                    .join("ffmpeg.exe"),
+            ] {
+                if candidate.is_file() {
+                    resolved = Some(candidate);
+                    break;
+                }
+            }
+        }
+    }
+    let mut command = match resolved {
+        Some(path) => Command::new(path),
+        None => Command::new(requested),
+    };
 
     #[cfg(target_os = "windows")]
     command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW

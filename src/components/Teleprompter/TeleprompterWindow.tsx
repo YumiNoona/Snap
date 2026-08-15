@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Grip, X, RotateCcw } from "lucide-react";
+import { ScrollText, X, RotateCcw } from "lucide-react";
 import { Play, Pause } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import "./TeleprompterWindow.css";
@@ -140,7 +140,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
       {/* Drag Titlebar */}
       <div className="tp-titlebar" data-tauri-drag-region>
         <div className="tp-drag-handle" data-tauri-drag-region>
-          <Grip size={15} />
+          <span className="tp-app-icon"><ScrollText size={14} /></span>
           <span className="tp-window-title" data-tauri-drag-region>Teleprompter</span>
         </div>
 

@@ -4,6 +4,7 @@ mod export;
 mod input_hook;
 mod mobile;
 mod process;
+mod transcription;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -183,6 +184,84 @@ fn window_ready(window: tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
+async fn open_module_window(
+    app: tauri::AppHandle,
+    label: &'static str,
+    url: &'static str,
+    title: &'static str,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_handle,
+            label,
+            tauri::WebviewUrl::App(url.into()),
+        )
+        .title(title)
+        .inner_size(width, height)
+        .center()
+        .decorations(false)
+        .resizable(false)
+        .maximizable(false)
+        .visible(false)
+        .background_color(Color(11, 13, 18, 255))
+        .devtools(true)
+        .build()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to create {title}: {error}"));
+        let _ = tx.send(result);
+    });
+    rx.recv()
+        .map_err(|error| format!("{title} creation thread died: {error}"))?
+}
+
+#[tauri::command]
+async fn open_device_window(app: tauri::AppHandle) -> Result<(), String> {
+    open_module_window(
+        app,
+        "device",
+        "index.html?window=device",
+        "Snap Device Capture",
+        1060.0,
+        440.0,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn open_library_window(app: tauri::AppHandle) -> Result<(), String> {
+    open_module_window(
+        app,
+        "library",
+        "index.html?window=library",
+        "Open Media",
+        760.0,
+        600.0,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn open_donate_window(app: tauri::AppHandle) -> Result<(), String> {
+    open_module_window(
+        app,
+        "donate",
+        "index.html?window=donate",
+        "Support Snap",
+        650.0,
+        440.0,
+    )
+    .await
+}
+
 /// Open the standalone teleprompter as its own OS-level window (not a DOM overlay),
 /// so it stays off-screen relative to the launcher and can be independently positioned.
 #[tauri::command]
@@ -308,7 +387,7 @@ fn end_region_selection(app: tauri::AppHandle) -> Result<(), String> {
         .ok_or("Main window not found")?;
     window.set_always_on_top(false).map_err(|e| e.to_string())?;
     window
-        .set_size(tauri::LogicalSize::new(1180.0, 440.0))
+        .set_size(tauri::LogicalSize::new(1180.0, 340.0))
         .map_err(|e| e.to_string())?;
     window.center().map_err(|e| e.to_string())
 }
@@ -594,7 +673,7 @@ fn set_overlay_paused(app: tauri::AppHandle, paused: bool) -> Result<(), String>
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct FileEntry {
     name: String,
     path: String,
@@ -605,6 +684,48 @@ struct FileEntry {
 #[tauri::command]
 fn read_text_file(path: String) -> std::result::Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))
+}
+
+#[tauri::command]
+fn read_optional_text_file(path: String) -> std::result::Result<Option<String>, String> {
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Cannot read {path}: {error}")),
+    }
+}
+
+/// Persist editor projects through a sibling temporary file. The previous
+/// valid document is retained as `.bak`, allowing recovery from interrupted
+/// writes or malformed project data.
+#[tauri::command]
+fn write_text_file_atomic(path: String, contents: String) -> std::result::Result<(), String> {
+    use std::io::Write;
+
+    let destination = PathBuf::from(&path);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| format!("Cannot resolve parent directory for {path}"))?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Cannot create {}: {error}", parent.display()))?;
+
+    let temporary = PathBuf::from(format!("{path}.tmp"));
+    let backup = PathBuf::from(format!("{path}.bak"));
+    let mut file = std::fs::File::create(&temporary)
+        .map_err(|error| format!("Cannot create {}: {error}", temporary.display()))?;
+    file.write_all(contents.as_bytes())
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("Cannot write {}: {error}", temporary.display()))?;
+
+    if destination.exists() {
+        std::fs::copy(&destination, &backup)
+            .map_err(|error| format!("Cannot back up {}: {error}", destination.display()))?;
+        std::fs::remove_file(&destination)
+            .map_err(|error| format!("Cannot replace {}: {error}", destination.display()))?;
+    }
+    std::fs::rename(&temporary, &destination)
+        .map_err(|error| format!("Cannot commit {}: {error}", destination.display()))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -867,6 +988,114 @@ fn prepare_recording_data(
     })
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingSessionManifest {
+    schema_version: u8,
+    status: String,
+    video_path: String,
+    updated_at_ms: u128,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveredRecordingSession {
+    video_path: String,
+    status: String,
+    message: String,
+}
+
+#[tauri::command]
+fn update_recording_session(
+    data_dir: String,
+    video_path: String,
+    status: String,
+    error: Option<String>,
+) -> std::result::Result<(), String> {
+    let directory = PathBuf::from(&data_dir);
+    std::fs::create_dir_all(&directory)
+        .map_err(|value| format!("Unable to create recording session folder: {value}"))?;
+    let manifest = RecordingSessionManifest {
+        schema_version: 1,
+        status,
+        video_path,
+        updated_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        error,
+    };
+    write_text_file_atomic(
+        directory
+            .join("recording-session.json")
+            .to_string_lossy()
+            .to_string(),
+        serde_json::to_string_pretty(&manifest).map_err(|value| value.to_string())?,
+    )
+}
+
+#[tauri::command]
+fn recover_recording_sessions() -> std::result::Result<Vec<RecoveredRecordingSession>, String> {
+    let library = PathBuf::from(capture::get_videos_dir()?);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut recovered = Vec::new();
+    for entry in std::fs::read_dir(&library)
+        .map_err(|error| format!("Unable to scan recording sessions: {error}"))?
+        .flatten()
+    {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let manifest_path = entry.path().join("recording-session.json");
+        let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(mut manifest) = serde_json::from_str::<RecordingSessionManifest>(&text) else {
+            continue;
+        };
+        if !matches!(manifest.status.as_str(), "starting" | "recording")
+            || now.saturating_sub(manifest.updated_at_ms) < 30_000
+        {
+            continue;
+        }
+        let video_size = std::fs::metadata(&manifest.video_path)
+            .map(|value| value.len())
+            .unwrap_or(0);
+        if video_size > 1024 {
+            manifest.status = "incomplete".to_string();
+            manifest.error =
+                Some("Snap closed before recording finalization completed".to_string());
+            recovered.push(RecoveredRecordingSession {
+                video_path: manifest.video_path.clone(),
+                status: manifest.status.clone(),
+                message: format!(
+                    "Recovered an interrupted recording ({:.1} MB)",
+                    video_size as f64 / 1_048_576.0
+                ),
+            });
+        } else {
+            manifest.status = "failed".to_string();
+            manifest.error =
+                Some("Recording stopped before a usable video was written".to_string());
+            recovered.push(RecoveredRecordingSession {
+                video_path: manifest.video_path.clone(),
+                status: manifest.status.clone(),
+                message: "An interrupted session did not contain a usable video".to_string(),
+            });
+        }
+        manifest.updated_at_ms = now;
+        write_text_file_atomic(
+            manifest_path.to_string_lossy().to_string(),
+            serde_json::to_string_pretty(&manifest).map_err(|value| value.to_string())?,
+        )?;
+    }
+    Ok(recovered)
+}
+
 /// Resolve current and legacy input-log layouts. This keeps old recordings,
 /// imported recordings, auto-zoom, and export working across the migration.
 #[tauri::command]
@@ -990,6 +1219,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
@@ -1000,12 +1230,18 @@ pub fn run() {
             capture::stop_recording,
             capture::set_paused,
             capture::get_videos_dir,
+            capture::recording_preflight,
+            capture::install_ffmpeg,
             audio::enumerate_audio_devices,
             enumerate_video_devices,
             audio::start_audio_capture,
             audio::stop_audio_capture,
             audio::set_audio_paused,
             audio::set_microphone_muted,
+            audio::audio_waveform,
+            transcription::transcription_environment,
+            transcription::install_transcription_dependencies,
+            transcription::transcribe_audio,
             mobile::mobile_environment,
             mobile::install_android_capture_support,
             mobile::enumerate_mobile_devices,
@@ -1025,6 +1261,9 @@ pub fn run() {
             open_editor_window,
             open_teleprompter_window,
             open_settings_window,
+            open_device_window,
+            open_library_window,
+            open_donate_window,
             window_ready,
             get_pending_editor_paths,
             begin_region_selection,
@@ -1039,8 +1278,12 @@ pub fn run() {
             set_overlay_paused,
             set_countdown,
             read_text_file,
+            read_optional_text_file,
+            write_text_file_atomic,
             list_directory,
             prepare_recording_data,
+            update_recording_session,
+            recover_recording_sessions,
             resolve_recording_log_path,
             organize_recording_data,
             list_cursor_packs,

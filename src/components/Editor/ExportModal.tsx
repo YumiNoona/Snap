@@ -7,6 +7,7 @@ interface Props {
   videoPath: string;
   duration: number;
   config: EditorConfig;
+  captionTrackCount: number;
   status: string;
   progress: number;
   onClose: () => void;
@@ -31,10 +32,10 @@ function formatEstimate(seconds: number) {
   return `about ${Math.ceil(seconds / 60)} min`;
 }
 
-export default function ExportModal({ videoPath, duration, config, status, progress, onClose, onExport }: Props) {
+export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, onClose, onExport }: Props) {
   const defaultPath = videoPath.replace(/\.mp4$/i, "_edited.mp4");
   const [settings, setSettings] = useState<ExportSettings>({
-    format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath,
+    format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false,
   });
   const activeDuration = Math.max(0.01, (config.trimEnd || duration) - config.trimStart);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
@@ -88,6 +89,17 @@ export default function ExportModal({ videoPath, duration, config, status, progr
               }}><option value="mp4">MP4 · H.264</option><option value="gif">Animated GIF</option></select></label>
               <label>Quality<select value={settings.quality} onChange={(e) => setSettings({ ...settings, quality: e.target.value as ExportSettings["quality"] })}><option value="high">High</option><option value="medium">Balanced</option><option value="low">Small file</option></select></label>
             </div>
+            {captionTrackCount > 0 && <div className="export-options-row">
+              <label>Captions<select value={settings.captions} onChange={(event) => setSettings({ ...settings, captions: event.target.value as ExportSettings["captions"] })}>
+                <option value="burned">Burn into video</option><option value="embedded">Embedded MP4 track</option><option value="srt">SRT sidecar only</option><option value="vtt">WebVTT sidecar only</option><option value="burned-srt">Burned + SRT</option><option value="none">No captions</option>
+              </select></label>
+            </div>}
+            {settings.format === "mp4" && <div className="export-options-row">
+              <label>Audio Tracks<select value={settings.audioMode} onChange={(event) => setSettings({ ...settings, audioMode: event.target.value as ExportSettings["audioMode"] })}>
+                <option value="mixed">Mixed · most compatible</option><option value="separate">Separate editable tracks</option>
+              </select></label>
+              <label>Normalization<select value={settings.normalizeAudio ? "on" : "off"} onChange={(event) => setSettings({ ...settings, normalizeAudio: event.target.value === "on" })}><option value="off">Preserve levels</option><option value="on">Normalize loudness</option></select></label>
+            </div>}
 
             <label className="export-path-label">Save as<input value={settings.outputPath} onChange={(e) => setSettings({ ...settings, outputPath: e.target.value })} /></label>
           </div>

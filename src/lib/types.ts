@@ -148,6 +148,81 @@ export interface AudioMixConfig {
   micMuted: boolean;
 }
 
+export type AutoZoomPreset = "gentle" | "balanced" | "dynamic" | "custom";
+
+export interface AutoZoomConfig {
+  preset: AutoZoomPreset;
+  minScale: number;
+  maxScale: number;
+  holdMs: number;
+  cooldownMs: number;
+  typingSensitivity: number;
+  scrollSensitivity: number;
+  edgePadding: number;
+}
+
+export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<AutoZoomConfig, "preset">> = {
+  gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025 },
+  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015 },
+  dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01 },
+};
+
+export type AudioTrackKind = "microphone" | "system" | "device";
+
+export interface AudioTrack {
+  id: string;
+  kind: AudioTrackKind;
+  path: string;
+  label: string;
+  muted: boolean;
+  volume: number;
+}
+
+export interface CaptionWord {
+  text: string;
+  startMs: number;
+  endMs: number;
+  confidence?: number;
+}
+
+export interface CaptionSegment {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  language: string;
+  sourceTrackIds: string[];
+  confidence?: number;
+  words?: CaptionWord[];
+  userEdited: boolean;
+}
+
+export interface CaptionStyle {
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: 400 | 500 | 600 | 700 | 800;
+  color: string;
+  backgroundColor: string;
+  outlineColor: string;
+  outlineWidth: number;
+  shadow: boolean;
+  align: "left" | "center" | "right";
+  x: number;
+  y: number;
+  maxWidth: number;
+}
+
+export interface CaptionTrack {
+  id: string;
+  name: string;
+  language: string;
+  sourceTrackIds: string[];
+  visible: boolean;
+  burnedIn: boolean;
+  style: CaptionStyle;
+  segments: CaptionSegment[];
+}
+
 export interface EditorConfig {
   backgroundColor: string;
   bgType: "wallpaper" | "gradient" | "color" | "image";
@@ -174,6 +249,7 @@ export interface EditorConfig {
   motionBlur: MotionBlurConfig;
   cursorMovement: MovementConfig;
   zoomMovement: MovementConfig;
+  autoZoom: AutoZoomConfig;
   audio: AudioMixConfig;
 }
 
@@ -184,6 +260,9 @@ export interface ExportSettings {
   height: number;
   quality: "high" | "medium" | "low";
   outputPath: string;
+  captions: "none" | "burned" | "srt" | "vtt" | "embedded" | "burned-srt";
+  audioMode: "mixed" | "separate";
+  normalizeAudio: boolean;
 }
 
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
@@ -240,6 +319,16 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     enabled: false,
     speed: "slow",
     durationMs: 800,
+  },
+  autoZoom: {
+    preset: "balanced",
+    minScale: 1.15,
+    maxScale: 1.9,
+    holdMs: 720,
+    cooldownMs: 520,
+    typingSensitivity: 4,
+    scrollSensitivity: 2,
+    edgePadding: 0.015,
   },
   audio: {
     systemVolume: 100,

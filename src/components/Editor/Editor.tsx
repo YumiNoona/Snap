@@ -3,16 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, Trash2, RotateCcw } from "lucide-react";
+import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, Trash2, RotateCcw, Captions } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
 import DonateButton from "../shared/DonateButton";
-import type { EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
+import type { CaptionTrack, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
 import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
+import { useEditorHistory } from "./hooks/useEditorHistory";
+import { useProjectPersistence } from "./hooks/useProjectPersistence";
+import { usePlaybackController } from "./hooks/usePlaybackController";
 import "./Editor.css";
 
 interface Props {
@@ -21,7 +24,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "audio";
+export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_PRESETS_STORAGE_KEY = "snap.editorPresets.v1";
@@ -31,6 +34,7 @@ type PresetSettings = Pick<EditorConfig,
   "borderRadius" | "inset" | "insetColor" | "shadow" | "cursorStyle" |
   "showCursor" | "zoomEnabled" | "zoomMode" | "zoomLevel" | "fixedZoomPart" |
   "aspectRatio" | "motionBlur" | "cursorMovement" | "zoomMovement" | "audio"
+  | "autoZoom"
 >;
 
 interface SavedEditorPreset {
@@ -61,6 +65,7 @@ function snapshotPresetSettings(config: EditorConfig): PresetSettings {
     motionBlur: { ...config.motionBlur },
     cursorMovement: { ...config.cursorMovement },
     zoomMovement: { ...config.zoomMovement },
+    autoZoom: { ...config.autoZoom },
     audio: { ...config.audio },
   };
 }
@@ -84,28 +89,6 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
-function waitForPlayable(video: HTMLVideoElement, timeoutMs = 1400): Promise<void> {
-  if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return Promise.resolve();
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      video.removeEventListener("canplay", finish);
-      video.removeEventListener("loadeddata", finish);
-      video.removeEventListener("seeked", finish);
-      video.removeEventListener("error", finish);
-      resolve();
-    };
-    const timer = window.setTimeout(finish, timeoutMs);
-    video.addEventListener("canplay", finish, { once: true });
-    video.addEventListener("loadeddata", finish, { once: true });
-    video.addEventListener("seeked", finish, { once: true });
-    video.addEventListener("error", finish, { once: true });
-  });
-}
-
 export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const isBrowserPreview =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
@@ -114,10 +97,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     cursorHotspots: loadCursorHotspots(),
   }));
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
+  const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
   const [cropMode, setCropMode] = useState(false);
@@ -131,71 +112,32 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const [savedPresets, setSavedPresets] = useState<SavedEditorPreset[]>(loadEditorPresets);
   const [exportProgress, setExportProgress] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
-  const [, setHistoryVersion] = useState(0);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const appWindow = isBrowserPreview ? null : getCurrentWindow();
-  const historyRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
-  const futureRef = useRef<Array<{ config: EditorConfig; keyframes: Keyframe[] }>>([]);
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
-  const playbackCommandRef = useRef(0);
-  const desiredPlayingRef = useRef(false);
-  const playbackRecoveryTimerRef = useRef<number | null>(null);
-  const playbackProgressRef = useRef({ mediaTime: 0, changedAt: performance.now() });
-  const playbackRecoveryInFlightRef = useRef(false);
-  const playbackBoundsRef = useRef({ start: config.trimStart, end: config.trimEnd || duration });
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
-  const lastSnapshotRef = useRef({ config, keyframes });
-  const applyingHistoryRef = useRef(false);
+  const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
+    config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
+  });
+  const { currentTime, playing, setMediaElement, setCurrentTime, togglePlay, pausePlayback, seekTo } = usePlaybackController({
+    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
+  });
 
-  playbackBoundsRef.current = {
-    start: config.trimStart,
-    end: config.trimEnd || duration,
-  };
+  const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
+    ...restored,
+    cursorHotspots: { ...restored.cursorHotspots, ...loadCursorHotspots() },
+  }), []);
+  const { projectReady, hasSavedProject, projectStatus } = useProjectPersistence({
+    disabled: isBrowserPreview,
+    videoPath,
+    inputLogPath,
+    duration,
+    config,
+    keyframes,
+    captions: captionTracks,
+    restore: replaceWithoutHistory,
+    decorateRestoredConfig,
+  });
 
-  useEffect(() => {
-    const current = { config, keyframes };
-    if (applyingHistoryRef.current) {
-      applyingHistoryRef.current = false;
-      lastSnapshotRef.current = current;
-      setHistoryVersion((value) => value + 1);
-      return;
-    }
-    const previous = lastSnapshotRef.current;
-    if (previous.config === config && previous.keyframes === keyframes) return;
-    historyRef.current.push(previous);
-    if (historyRef.current.length > 80) historyRef.current.shift();
-    futureRef.current = [];
-    lastSnapshotRef.current = current;
-    setHistoryVersion((value) => value + 1);
-  }, [config, keyframes]);
-
-  const undo = useCallback(() => {
-    const snapshot = historyRef.current.pop();
-    if (!snapshot) return;
-    futureRef.current.push({ config, keyframes });
-    applyingHistoryRef.current = true;
-    setConfig(snapshot.config);
-    setKeyframes(snapshot.keyframes);
-  }, [config, keyframes]);
-
-  const redo = useCallback(() => {
-    const snapshot = futureRef.current.pop();
-    if (!snapshot) return;
-    historyRef.current.push({ config, keyframes });
-    applyingHistoryRef.current = true;
-    setConfig(snapshot.config);
-    setKeyframes(snapshot.keyframes);
-  }, [config, keyframes]);
-
-  useEffect(() => {
-    const handleHistoryShortcut = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
-      event.preventDefault();
-      if (event.shiftKey) redo(); else undo();
-    };
-    window.addEventListener("keydown", handleHistoryShortcut);
-    return () => window.removeEventListener("keydown", handleHistoryShortcut);
-  }, [undo, redo]);
 
   // Persist per-pack cursor hotspot nudges across sessions
   useEffect(() => {
@@ -232,6 +174,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
       motionBlur: { ...settings.motionBlur },
       cursorMovement: { ...settings.cursorMovement },
       zoomMovement: { ...settings.zoomMovement },
+      autoZoom: { ...settings.autoZoom },
       audio: { ...settings.audio },
       // These are recording-specific and must never be overwritten by a look preset.
       cursorHotspots: current.cursorHotspots,
@@ -262,193 +205,6 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     });
   }, []);
 
-  const clearPlaybackRecovery = useCallback(() => {
-    if (playbackRecoveryTimerRef.current !== null) {
-      window.clearTimeout(playbackRecoveryTimerRef.current);
-      playbackRecoveryTimerRef.current = null;
-    }
-    playbackRecoveryInFlightRef.current = false;
-  }, []);
-
-  /** Stop playback and invalidate every older asynchronous play request. */
-  const pausePlayback = useCallback(() => {
-    desiredPlayingRef.current = false;
-    playbackCommandRef.current += 1;
-    clearPlaybackRecovery();
-    const el = videoRef.current;
-    if (el && !el.paused) el.pause();
-    setPlaying(false);
-  }, [clearPlaybackRecovery]);
-
-  // Media events are the source of truth for the transport UI. Decoder
-  // recovery is seek-only: load() resets the resource and aborts outstanding
-  // play promises, which caused the editor to remain stuck after layer edits.
-  useEffect(() => {
-    const el = mediaElement;
-    if (!el) return;
-    videoRef.current = el;
-
-    const onPlaying = () => {
-      playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
-      if (desiredPlayingRef.current) setPlaying(true);
-    };
-    const onPause = () => {
-      setPlaying(false);
-      if (!playbackRecoveryInFlightRef.current) desiredPlayingRef.current = false;
-    };
-    const onEnded = () => {
-      desiredPlayingRef.current = false;
-      playbackCommandRef.current += 1;
-      setPlaying(false);
-    };
-    const onProgress = () => {
-      if (Math.abs(el.currentTime - playbackProgressRef.current.mediaTime) >= 0.015) {
-        playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
-      }
-      setCurrentTime(el.currentTime);
-    };
-    const scheduleRecovery = () => {
-      if (!desiredPlayingRef.current || playbackRecoveryInFlightRef.current) return;
-      clearPlaybackRecovery();
-      const command = playbackCommandRef.current;
-      const stalledAt = el.currentTime;
-      playbackRecoveryTimerRef.current = window.setTimeout(async () => {
-        playbackRecoveryTimerRef.current = null;
-        if (!desiredPlayingRef.current || command !== playbackCommandRef.current || el.ended) return;
-        if (Math.abs(el.currentTime - stalledAt) >= 0.015) return;
-
-        playbackRecoveryInFlightRef.current = true;
-        const { start, end: configuredEnd } = playbackBoundsRef.current;
-        const end = configuredEnd || el.duration || Number.POSITIVE_INFINITY;
-        try {
-          // Refresh the decoder at the same logical frame without replacing
-          // the media source or skipping visible content.
-          el.currentTime = Math.max(start, Math.min(end - 0.04, stalledAt));
-          await waitForPlayable(el, 1000);
-          if (!desiredPlayingRef.current || command !== playbackCommandRef.current) return;
-          await el.play();
-        } catch (error) {
-          if (!(error instanceof DOMException && error.name === "AbortError")) {
-            console.warn("[Snap] Preview decoder recovery failed:", error);
-          }
-        } finally {
-          playbackRecoveryInFlightRef.current = false;
-          if (desiredPlayingRef.current && command === playbackCommandRef.current && !el.paused) {
-            playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
-            setPlaying(true);
-          }
-        }
-      }, 900);
-    };
-
-    el.addEventListener("play", onPlaying);
-    el.addEventListener("playing", onPlaying);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("ended", onEnded);
-    el.addEventListener("timeupdate", onProgress);
-    el.addEventListener("waiting", scheduleRecovery);
-    el.addEventListener("stalled", scheduleRecovery);
-
-    const watchdog = window.setInterval(() => {
-      if (!desiredPlayingRef.current || el.paused || el.ended) return;
-      if (performance.now() - playbackProgressRef.current.changedAt > 1800) scheduleRecovery();
-    }, 700);
-
-    return () => {
-      desiredPlayingRef.current = false;
-      playbackCommandRef.current += 1;
-      clearPlaybackRecovery();
-      window.clearInterval(watchdog);
-      el.removeEventListener("play", onPlaying);
-      el.removeEventListener("playing", onPlaying);
-      el.removeEventListener("pause", onPause);
-      el.removeEventListener("ended", onEnded);
-      el.removeEventListener("timeupdate", onProgress);
-      el.removeEventListener("waiting", scheduleRecovery);
-      el.removeEventListener("stalled", scheduleRecovery);
-      videoRef.current = null;
-    };
-  }, [clearPlaybackRecovery, mediaElement, videoPath]);
-
-  const togglePlay = useCallback(() => {
-    const el = videoRef.current;
-    if (!el) return;
-    if (desiredPlayingRef.current || (!el.paused && !el.ended)) {
-      pausePlayback();
-      return;
-    }
-
-    clearPlaybackRecovery();
-    const command = ++playbackCommandRef.current;
-    desiredPlayingRef.current = true;
-    const start = Math.max(0, config.trimStart);
-    const end = config.trimEnd || el.duration || duration;
-    if (el.ended || (end > start && el.currentTime >= end - 0.025) || el.currentTime < start) {
-      el.currentTime = start;
-      setCurrentTime(start);
-    }
-    playbackProgressRef.current = { mediaTime: el.currentTime, changedAt: performance.now() };
-
-    // A seek may delay play() resolution. Keep this request detached so Pause
-    // and edit actions remain immediate; their command token invalidates it.
-    void el.play().then(() => {
-      // A superseded promise must never pause or otherwise control a newer
-      // playback command. The explicit pause path already handled its state.
-      if (command !== playbackCommandRef.current || !desiredPlayingRef.current) return;
-      setPlaying(!el.paused);
-    }).catch((error) => {
-      if (command !== playbackCommandRef.current) return;
-      desiredPlayingRef.current = false;
-      setPlaying(false);
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
-        console.warn("[Snap] Preview playback could not start:", error);
-      }
-    });
-  }, [clearPlaybackRecovery, config.trimEnd, config.trimStart, duration, pausePlayback]);
-
-  useEffect(() => {
-    const handlePlaybackShortcut = (event: KeyboardEvent) => {
-      if (event.code !== "Space" || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (
-        target.isContentEditable
-        || !!target.closest("input, textarea, select, button, [role='textbox'], [role='slider']")
-      )) return;
-      event.preventDefault();
-      void togglePlay();
-    };
-    window.addEventListener("keydown", handlePlaybackShortcut);
-    return () => window.removeEventListener("keydown", handlePlaybackShortcut);
-  }, [togglePlay]);
-
-  // Pause playback at the trim end / keep playhead inside the trim range
-  useEffect(() => {
-    const el = videoRef.current ?? document.querySelector("video");
-    if (!el) return;
-    const onTime = () => {
-      const end = config.trimEnd || el.duration || 0;
-      if (!el.paused && end > 0 && el.currentTime >= end) {
-        pausePlayback();
-        el.currentTime = end;
-        setCurrentTime(end);
-      }
-    };
-    el.addEventListener("timeupdate", onTime);
-    return () => el.removeEventListener("timeupdate", onTime);
-  }, [config.trimEnd, config.trimStart, pausePlayback, videoPath]);
-
-  const seekTo = useCallback(
-    (t: number) => {
-      const el = videoRef.current;
-      if (!el) return;
-      const end = config.trimEnd || el.duration || t;
-      const clamped = Math.max(config.trimStart, Math.min(t, end));
-      el.currentTime = clamped;
-      setCurrentTime(clamped);
-    },
-    [config.trimStart, config.trimEnd]
-  );
-
   const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
 
   const handleCropApply = useCallback(
@@ -463,20 +219,12 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
 
   const handleTrimStart = (t: number) => {
     setConfig({ ...config, trimStart: t });
-    const el = videoRef.current;
-    if (el && el.currentTime < t) {
-      el.currentTime = t;
-      setCurrentTime(t);
-    }
+    if (currentTime < t) seekTo(t);
   };
 
   const handleTrimEnd = (t: number) => {
     setConfig({ ...config, trimEnd: t });
-    const el = videoRef.current;
-    if (el && el.currentTime > t) {
-      el.currentTime = t;
-      setCurrentTime(t);
-    }
+    if (currentTime > t) seekTo(t);
   };
 
   const handleExport = async (settings: ExportSettings) => {
@@ -488,6 +236,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         inputLogPath,
         keyframes,
         config,
+        captionTracks,
         settings,
         config.trimStart,
         config.trimEnd > 0 ? config.trimEnd : duration,
@@ -765,6 +514,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           <span className="ss-file-title">
             {videoPath.split("\\").pop()}
           </span>
+          {projectStatus && <span className="ss-project-status" title="Non-destructive project autosave status">{projectStatus}</span>}
         </div>
 
         <div className="ss-topbar-center">
@@ -839,7 +589,6 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
 
         <div className="ss-topbar-right">
           <DonateButton />
-          {/* PROMINENT TOP-RIGHT EXPORT BUTTON */}
           <button
             className="ss-topbar-export-btn"
             onClick={() => setShowExport(true)}
@@ -910,6 +659,15 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             <AudioWaveform size={21} />
           </button>
 
+          <button
+            className={`ss-tool-icon-btn ${activeTool === "captions" ? "active" : ""}`}
+            onClick={() => setActiveTool("captions")}
+            title="Captions & Subtitles"
+            aria-label="Captions and subtitles"
+          >
+            <Captions size={21} />
+          </button>
+
         </aside>
 
         {/* Center Preview Workspace */}
@@ -943,7 +701,10 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
             zoomFocusPoint={activeTool === "motion" && zoomTargetMode && resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
             zoomFocusSource={resolvedSelectedZoom?.source ?? config.zoomMode}
             onZoomTargetPick={updateManualZoomTarget}
-            autoZoomRevision={autoZoomRevision}
+          autoZoomRevision={autoZoomRevision}
+          autoZoomReady={projectReady}
+            preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
+            captionTracks={captionTracks}
           />
         </div>
 
@@ -972,6 +733,9 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           selectedZoomRegion={resolvedSelectedZoom}
           onSelectedZoomChange={updateSelectedZoom}
           onDeleteSelectedZoom={deleteSelectedZoom}
+          videoPath={videoPath}
+          captionTracks={captionTracks}
+          onCaptionTracksChange={setCaptionTracks}
         />
       </div>
 
@@ -993,11 +757,12 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
-        canUndo={historyRef.current.length > 0}
-        canRedo={futureRef.current.length > 0}
+        canUndo={canUndo}
+        canRedo={canRedo}
         onUndo={undo}
         onRedo={redo}
         onKeyframesChange={setKeyframes}
+        onAddManualZoom={handleAddManualZoom}
         selectedZoomRegion={selectedZoomRegion}
         onZoomRegionSelect={(region) => {
           // Selecting a bar enters focus editing at the beginning of that
@@ -1034,12 +799,15 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         }))}
         onLayerDuplicate={duplicateLayer}
         onLayerDelete={deleteLayer}
+        captionTracks={captionTracks}
+        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.map((item) => item.id === segment.id ? segment : item) } : track))}
       />
       {showExport && (
         <ExportModal
           videoPath={videoPath}
           duration={duration}
           config={config}
+          captionTrackCount={captionTracks.length}
           status={exportStatus}
           progress={exportProgress}
           onClose={() => setShowExport(false)}

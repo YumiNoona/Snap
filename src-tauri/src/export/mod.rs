@@ -37,6 +37,14 @@ pub struct ExportSettings {
     pub quality: String,
     #[serde(rename = "outputPath")]
     pub output_path: String,
+    #[serde(rename = "audioMode", default = "default_audio_mode")]
+    pub audio_mode: String,
+    #[serde(rename = "normalizeAudio", default)]
+    pub normalize_audio: bool,
+}
+
+fn default_audio_mode() -> String {
+    "mixed".to_string()
 }
 
 #[derive(Deserialize)]
@@ -354,6 +362,8 @@ pub struct CanvasExportRequest {
     pub trim_start_seconds: f64,
     #[serde(rename = "exportDurationSeconds", default)]
     pub export_duration_seconds: f64,
+    #[serde(rename = "captionSrt", default)]
+    pub caption_srt: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -472,6 +482,19 @@ pub async fn finalize_canvas_export(
             .map(|m| m.len() > 0)
             .unwrap_or(false);
     let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
+    let caption_srt = std::path::PathBuf::from(format!("{}.captions.srt", request.temp_webm_path));
+    let has_embedded_captions = request
+        .caption_srt
+        .as_ref()
+        .is_some_and(|contents| !contents.trim().is_empty());
+    if let Some(contents) = request
+        .caption_srt
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        std::fs::write(&caption_srt, contents)
+            .map_err(|error| format!("Unable to prepare embedded captions: {error}"))?;
+    }
     let has_clicks = !request.click_times_ms.is_empty();
     if has_clicks {
         write_click_track(
@@ -496,7 +519,7 @@ pub async fn finalize_canvas_export(
         args.push("-f".into());
         args.push("gif".into());
     } else {
-        let mut audio_sources: Vec<(usize, f64)> = Vec::new();
+        let mut audio_sources: Vec<(usize, f64, &str)> = Vec::new();
         let mut input_index = 1usize;
         if has_sys && !request.audio_mix.system_muted {
             if request.trim_start_seconds > 0.0 {
@@ -505,7 +528,11 @@ pub async fn finalize_canvas_export(
             }
             args.push("-i".into());
             args.push(sys_wav.to_string_lossy().to_string());
-            audio_sources.push((input_index, request.audio_mix.system_volume / 100.0));
+            audio_sources.push((
+                input_index,
+                request.audio_mix.system_volume / 100.0,
+                "Desktop audio",
+            ));
             input_index += 1;
         }
         if has_mic && !request.audio_mix.mic_muted {
@@ -515,25 +542,71 @@ pub async fn finalize_canvas_export(
             }
             args.push("-i".into());
             args.push(mic_wav.to_string_lossy().to_string());
-            audio_sources.push((input_index, request.audio_mix.mic_volume / 100.0));
+            audio_sources.push((
+                input_index,
+                request.audio_mix.mic_volume / 100.0,
+                "Microphone",
+            ));
             input_index += 1;
         }
         if has_clicks {
             args.push("-i".into());
             args.push(click_wav.to_string_lossy().to_string());
-            audio_sources.push((input_index, 1.0));
+            audio_sources.push((input_index, 1.0, "Click effects"));
+            input_index += 1;
         }
 
-        if audio_sources.len() > 1 {
+        let subtitle_index = if has_embedded_captions {
+            args.push("-i".into());
+            args.push(caption_srt.to_string_lossy().to_string());
+            Some(input_index)
+        } else {
+            None
+        };
+
+        if request.export_settings.audio_mode == "separate" && !audio_sources.is_empty() {
             let mut filter = String::new();
-            for (slot, (idx, volume)) in audio_sources.iter().enumerate() {
+            for (slot, (idx, volume, _)) in audio_sources.iter().enumerate() {
+                let normalize = if settings.normalize_audio {
+                    ",loudnorm=I=-16:LRA=11:TP=-1.5"
+                } else {
+                    ""
+                };
+                filter.push_str(&format!(
+                    "[{idx}:a]volume={volume:.3}{normalize},apad[a{slot}];"
+                ));
+            }
+            args.push("-filter_complex".into());
+            args.push(filter.trim_end_matches(';').to_string());
+            args.push("-map".into());
+            args.push("0:v".into());
+            for slot in 0..audio_sources.len() {
+                args.push("-map".into());
+                args.push(format!("[a{slot}]"));
+            }
+            args.push("-c:a".into());
+            args.push("aac".into());
+            args.push("-b:a".into());
+            args.push("192k".into());
+            for (slot, (_, _, label)) in audio_sources.iter().enumerate() {
+                args.push(format!("-metadata:s:a:{slot}"));
+                args.push(format!("title={label}"));
+            }
+        } else if audio_sources.len() > 1 {
+            let mut filter = String::new();
+            for (slot, (idx, volume, _)) in audio_sources.iter().enumerate() {
                 filter.push_str(&format!("[{idx}:a]volume={volume:.3}[a{slot}];"));
             }
             for slot in 0..audio_sources.len() {
                 filter.push_str(&format!("[a{slot}]"));
             }
+            let normalize = if settings.normalize_audio {
+                ",loudnorm=I=-16:LRA=11:TP=-1.5"
+            } else {
+                ""
+            };
             filter.push_str(&format!(
-                "amix=inputs={}:duration=longest,apad[a]",
+                "amix=inputs={}:duration=longest{normalize},apad[a]",
                 audio_sources.len()
             ));
             args.push("-filter_complex".into());
@@ -546,9 +619,14 @@ pub async fn finalize_canvas_export(
             args.push("aac".into());
             args.push("-b:a".into());
             args.push("192k".into());
-        } else if let Some((idx, volume)) = audio_sources.first() {
+        } else if let Some((idx, volume, _)) = audio_sources.first() {
             args.push("-filter_complex".into());
-            args.push(format!("[{idx}:a]volume={volume:.3},apad[a]"));
+            let normalize = if settings.normalize_audio {
+                ",loudnorm=I=-16:LRA=11:TP=-1.5"
+            } else {
+                ""
+            };
+            args.push(format!("[{idx}:a]volume={volume:.3}{normalize},apad[a]"));
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-map".into());
@@ -561,6 +639,15 @@ pub async fn finalize_canvas_export(
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-an".into());
+        }
+
+        if let Some(index) = subtitle_index {
+            args.push("-map".into());
+            args.push(format!("{index}:s:0"));
+            args.push("-c:s".into());
+            args.push("mov_text".into());
+            args.push("-metadata:s:s:0".into());
+            args.push("language=und".into());
         }
 
         args.extend_from_slice(&[
@@ -609,6 +696,9 @@ pub async fn finalize_canvas_export(
     let _ = std::fs::remove_file(&request.temp_webm_path);
     if has_clicks {
         let _ = std::fs::remove_file(&click_wav);
+    }
+    if has_embedded_captions {
+        let _ = std::fs::remove_file(&caption_srt);
     }
 
     let output = request.export_settings.output_path.clone();

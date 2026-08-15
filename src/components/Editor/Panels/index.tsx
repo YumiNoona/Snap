@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, type LucideIcon } from "lucide-react";
-import type { EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings } from "../../../lib/types";
+import type { CaptionTrack, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
+import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
+import { createAudioTrack, getTranscriptionEnvironment, transcribeTrack, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
@@ -24,6 +27,9 @@ interface Props {
   selectedZoomRegion: ZoomRegionSettings | null;
   onSelectedZoomChange: (patch: Partial<ZoomRegionSettings>) => void;
   onDeleteSelectedZoom: () => void;
+  videoPath: string;
+  captionTracks: CaptionTrack[];
+  onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
 }
 
 const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
@@ -55,11 +61,20 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onDeleteSelectedZoom,
+  videoPath, captionTracks, onCaptionTracksChange,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
   const annotationDrawerRef = useRef<HTMLDivElement>(null);
+  const [captionSource, setCaptionSource] = useState<AudioTrackKind>("microphone");
+  const [captionLanguage, setCaptionLanguage] = useState<TranscriptionLanguage>("auto");
+  const [transcriptionEnv, setTranscriptionEnv] = useState<TranscriptionEnvironment | null>(null);
+  const [captionStatus, setCaptionStatus] = useState("");
+  const [transcribing, setTranscribing] = useState(false);
+  const [installingTranscription, setInstallingTranscription] = useState(false);
+  const [installProgress, setInstallProgress] = useState(0);
+  const [installPhase, setInstallPhase] = useState("");
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
   const updateCursor = (patch: Partial<EditorConfig["cursorStyle"]>) =>
@@ -72,6 +87,12 @@ export default function Panels({
     onConfigChange({ ...config, cursorMovement: { ...config.cursorMovement, ...patch } });
   const updateZoomMov = (patch: Partial<EditorConfig["zoomMovement"]>) =>
     onConfigChange({ ...config, zoomMovement: { ...config.zoomMovement, ...patch } });
+  const updateAutoZoom = (patch: Partial<EditorConfig["autoZoom"]>) =>
+    onConfigChange({ ...config, autoZoom: { ...config.autoZoom, ...patch, preset: patch.preset ?? "custom" } });
+  const applyAutoZoomPreset = (preset: AutoZoomPreset) => {
+    if (preset === "custom") return updateAutoZoom({ preset });
+    onConfigChange({ ...config, autoZoom: { preset, ...AUTO_ZOOM_PRESETS[preset] } });
+  };
   const updateAudio = (patch: Partial<EditorConfig["audio"]>) =>
     onConfigChange({ ...config, audio: { ...config.audio, ...patch } });
 
@@ -83,6 +104,51 @@ export default function Panels({
     })();
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "captions" || transcriptionEnv) return;
+    void getTranscriptionEnvironment()
+      .then(setTranscriptionEnv)
+      .catch((error) => setCaptionStatus(`Unable to inspect transcription engine: ${error}`));
+  }, [activeTab, transcriptionEnv]);
+
+  const generateCaptions = async () => {
+    setTranscribing(true);
+    setCaptionStatus(`Transcribing ${captionSource === "microphone" ? "microphone" : captionSource} audio…`);
+    try {
+      const track = await transcribeTrack(createAudioTrack(videoPath, captionSource), captionLanguage);
+      onCaptionTracksChange([...captionTracks, track]);
+      setCaptionStatus(`Created ${track.segments.length} editable caption segments`);
+    } catch (error) {
+      setCaptionStatus(`Transcription failed: ${error}`);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const installTranscription = async () => {
+    setInstallingTranscription(true);
+    setInstallProgress(0);
+    setCaptionStatus("Downloading the offline engine and multilingual model…");
+    const unlisten = await listen<{ percent: number; phase: string }>("transcription-install-progress", ({ payload }) => {
+      setInstallProgress(payload.percent);
+      setInstallPhase(payload.phase);
+    });
+    try {
+      const environment = await invoke<TranscriptionEnvironment>("install_transcription_dependencies");
+      setTranscriptionEnv(environment);
+      setCaptionStatus("Offline captions are ready");
+    } catch (error) {
+      setCaptionStatus(`Installation failed: ${error}`);
+    } finally {
+      unlisten();
+      setInstallingTranscription(false);
+    }
+  };
+
+  const updateCaptionTrack = (trackId: string, updater: (track: CaptionTrack) => CaptionTrack) => {
+    onCaptionTracksChange(captionTracks.map((track) => track.id === trackId ? updater(track) : track));
+  };
 
   useEffect(() => {
     // The 4K/8K originals remain available to export, while the editor warms
@@ -440,6 +506,16 @@ export default function Panels({
               <button className={`seg-btn ${config.zoomMode === "auto" ? "active" : ""}`} onClick={() => onZoomModeChange("auto")}>Auto</button>
               <button className={`seg-btn ${config.zoomMode === "manual" ? "active" : ""}`} onClick={() => onZoomModeChange("manual")}>Manual</button>
             </div>
+            {config.zoomMode === "auto" && (
+              <>
+                <SelectRow label="Camera Style" value={config.autoZoom.preset} options={["gentle", "balanced", "dynamic", "custom"]} optionLabels={{ gentle: "Gentle", balanced: "Balanced", dynamic: "Dynamic", custom: "Custom" }} onChange={(value) => applyAutoZoomPreset(value as AutoZoomPreset)} />
+                <Slider label="Maximum Zoom" value={config.autoZoom.maxScale} min={1.2} max={3} step={0.05} unit="×" onChange={(maxScale) => updateAutoZoom({ maxScale })} />
+                <Slider label="Hold Time" value={config.autoZoom.holdMs} min={300} max={2500} step={50} unit="ms" onChange={(holdMs) => updateAutoZoom({ holdMs })} />
+                <Slider label="Camera Cooldown" value={config.autoZoom.cooldownMs} min={0} max={1800} step={50} unit="ms" onChange={(cooldownMs) => updateAutoZoom({ cooldownMs })} />
+                <Slider label="Typing Intent" value={config.autoZoom.typingSensitivity} min={2} max={12} step={1} unit=" keys" onChange={(typingSensitivity) => updateAutoZoom({ typingSensitivity })} />
+                <Slider label="Scroll Intent" value={config.autoZoom.scrollSensitivity} min={1} max={8} step={1} unit=" ticks" onChange={(scrollSensitivity) => updateAutoZoom({ scrollSensitivity })} />
+              </>
+            )}
             <CheckRow label="Zoom Movement" checked={config.zoomMovement.enabled} onChange={(v) => updateZoomMov({ enabled: v })} />
             <SpeedPills speed={config.zoomMovement.speed} onChange={(speed) => updateZoomMov({ speed })} />
             {config.zoomMovement.speed === "custom" && (
@@ -487,6 +563,73 @@ export default function Panels({
             <CheckRow label="Mute Microphone" checked={config.audio.micMuted} onChange={(v) => updateAudio({ micMuted: v })} />
             <Slider label="Volume" value={config.audio.micVolume} min={0} max={200} step={5} unit="%" onChange={(v) => updateAudio({ micVolume: v })} disabled={config.audio.micMuted} />
           </Section>
+        </div>
+      )}
+
+      {activeTab === "captions" && (
+        <div className="ss-drawer-content">
+          <Section title="Automatic Captions">
+            <div className="caption-source-heading">Transcribe audio from</div>
+            <div className="caption-source-grid" role="radiogroup" aria-label="Caption audio source">
+              {([
+                ["microphone", "Microphone", "Your voice only. Desktop music and videos are excluded."],
+                ["system", "Desktop audio", "Browser videos, meetings, games, and other computer sound."],
+                ["device", "Device audio", "Audio captured from an imported phone or capture device."],
+              ] as const).map(([value, label, description]) => (
+                <button key={value} type="button" role="radio" aria-checked={captionSource === value} className={`caption-source-card ${captionSource === value ? "selected" : ""}`} onClick={() => setCaptionSource(value)}>
+                  <span className="caption-source-radio" />
+                  <span><strong>{label}</strong><small>{description}</small></span>
+                </button>
+              ))}
+            </div>
+            <SelectRow label="Language" value={captionLanguage} options={["auto", "en", "hi"]} optionLabels={{ auto: "Auto detect", en: "English", hi: "Hindi" }} onChange={(value) => setCaptionLanguage(value as TranscriptionLanguage)} />
+            <p className="panel-help-text">Snap transcribes only the selected independent track. Choose Auto detect for Hindi-English mixed speech. Captions remain editable and movable after generation.</p>
+            {transcriptionEnv && <p className={`panel-help-text ${transcriptionEnv.available ? "" : "panel-warning"}`}>{transcriptionEnv.message}</p>}
+            {transcriptionEnv?.available === false && <>
+              <button className="ss-drawer-action-btn" disabled={installingTranscription} onClick={() => void installTranscription()}>{installingTranscription ? `${installPhase || "Installing offline captions"} — ${installProgress}%` : "Install Offline Captions"}</button>
+              {installingTranscription && <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>}
+            </>}
+            <button className="ss-drawer-action-btn primary" disabled={transcribing || transcriptionEnv?.available === false} onClick={() => void generateCaptions()}>
+              {transcribing ? "Transcribing…" : "Generate Captions"}
+            </button>
+            {captionStatus && <p className="panel-help-text" role="status">{captionStatus}</p>}
+          </Section>
+          {captionTracks.map((track) => (
+            <Section key={track.id} title={track.name}>
+              <CheckRow label="Show Captions" checked={track.visible} onChange={(visible) => updateCaptionTrack(track.id, (current) => ({ ...current, visible }))} />
+              <Slider label="Vertical Position" value={Math.round(track.style.y * 100)} min={10} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, y: value / 100 } }))} />
+              <Slider label="Font Size" value={track.style.fontSize} min={18} max={96} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, fontSize } }))} />
+              <div className="caption-segment-list">
+                {track.segments.map((segment, segmentIndex) => (
+                  <div className="caption-segment-editor" key={segment.id}>
+                    <div className="caption-time-row">
+                      <input aria-label="Caption start time" type="number" step="0.05" value={(segment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, startMs: Math.max(0, Number(event.target.value) * 1000), userEdited: true } : item) }))} />
+                      <span>–</span>
+                      <input aria-label="Caption end time" type="number" step="0.05" value={(segment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, endMs: Math.max(item.startMs + 100, Number(event.target.value) * 1000), userEdited: true } : item) }))} />
+                    </div>
+                    <textarea value={segment.text} aria-label="Caption text" onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, text: event.target.value, userEdited: true } : item) }))} />
+                    <div className="caption-edit-actions">
+                      <button onClick={() => updateCaptionTrack(track.id, (current) => {
+                        const middle = Math.round((segment.startMs + segment.endMs) / 2);
+                        const words = segment.text.trim().split(/\s+/u);
+                        const pivot = Math.max(1, Math.ceil(words.length / 2));
+                        const replacement = [
+                          { ...segment, endMs: middle, text: words.slice(0, pivot).join(" "), userEdited: true },
+                          { ...segment, id: `${segment.id}-split-${Date.now()}`, startMs: middle, text: words.slice(pivot).join(" "), userEdited: true },
+                        ];
+                        return { ...current, segments: current.segments.flatMap((item) => item.id === segment.id ? replacement : [item]) };
+                      })}>Split</button>
+                      {segmentIndex > 0 && <button onClick={() => updateCaptionTrack(track.id, (current) => {
+                        const previous = current.segments[segmentIndex - 1];
+                        return { ...current, segments: current.segments.filter((_, index) => index !== segmentIndex).map((item) => item.id === previous.id ? { ...item, endMs: segment.endMs, text: `${item.text} ${segment.text}`.trim(), userEdited: true } : item) };
+                      })}>Merge previous</button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button className="ss-drawer-action-btn danger" onClick={() => onCaptionTracksChange(captionTracks.filter((item) => item.id !== track.id))}><Trash2 size={14} /> Delete Caption Track</button>
+            </Section>
+          ))}
         </div>
       )}
 

@@ -1,11 +1,10 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal } from "lucide-react";
-import type { Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
+import type { CaptionSegment, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
 import "./Timeline.css";
@@ -30,6 +29,7 @@ interface Props {
   onUndo: () => void;
   onRedo: () => void;
   onKeyframesChange: (keyframes: Keyframe[]) => void;
+  onAddManualZoom: () => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
   onZoomRegionSelect: (region: ZoomRegionSelection) => void;
@@ -41,6 +41,8 @@ interface Props {
   onLayerChange: (layer: Layer) => void;
   onLayerDuplicate: (id: string) => void;
   onLayerDelete: (id: string) => void;
+  captionTracks: CaptionTrack[];
+  onCaptionSegmentChange: (trackId: string, segment: CaptionSegment) => void;
 }
 
 interface ZoomSegment {
@@ -75,6 +77,7 @@ export default function Timeline({
   onUndo,
   onRedo,
   onKeyframesChange,
+  onAddManualZoom,
   onAudioMuteChange,
   selectedZoomRegion,
   onZoomRegionSelect,
@@ -86,6 +89,8 @@ export default function Timeline({
   onLayerChange,
   onLayerDuplicate,
   onLayerDelete,
+  captionTracks,
+  onCaptionSegmentChange,
 }: Props) {
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -368,6 +373,38 @@ export default function Timeline({
     dragCleanupRef.current = cleanup;
   };
 
+  const beginCaptionEdit = (event: React.PointerEvent, trackId: string, segment: CaptionSegment, mode: "move" | "start" | "end") => {
+    if (event.button !== 0 || duration <= 0) return;
+    event.preventDefault(); event.stopPropagation();
+    const bar = (event.currentTarget as HTMLElement).closest<HTMLElement>(".caption-clip-bar");
+    if (!bar) return;
+    const startX = event.clientX;
+    const initialStart = segment.startMs / 1000;
+    const initialEnd = segment.endMs / 1000;
+    const clipDuration = Math.max(0.1, initialEnd - initialStart);
+    const minTime = config.trimStart;
+    const maxTime = config.trimEnd || duration;
+    let visualStart = initialStart, visualEnd = initialEnd;
+    let pending: CaptionSegment | null = null;
+    const move = (moveEvent: PointerEvent) => {
+      const area = timeAreaRef.current; if (!area) return;
+      const delta = ((moveEvent.clientX - startX) / area.getBoundingClientRect().width) * duration;
+      if (mode === "move") {
+        const bounded = Math.max(minTime - initialStart, Math.min(maxTime - initialEnd, delta));
+        visualStart = initialStart + bounded; visualEnd = initialEnd + bounded;
+      } else if (mode === "start") visualStart = Math.max(minTime, Math.min(initialEnd - 0.1, initialStart + delta));
+      else visualEnd = Math.max(initialStart + 0.1, Math.min(maxTime, initialEnd + delta));
+      pending = { ...segment, startMs: Math.round(visualStart * 1000), endMs: Math.round(visualEnd * 1000), userEdited: true };
+      bar.style.left = `${x(visualStart)}px`; bar.style.width = `${Math.max(18, w(visualEnd - visualStart))}px`;
+    };
+    const cleanup = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); bar.classList.remove("editing"); };
+    const up = () => { cleanup(); if (pending) onCaptionSegmentChange(trackId, pending); };
+    bar.classList.add("editing");
+    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+    dragCleanupRef.current = cleanup;
+    void clipDuration;
+  };
+
   const beginResize = (event: React.MouseEvent) => {
     event.preventDefault();
     const startY = event.clientY;
@@ -581,6 +618,7 @@ export default function Timeline({
             </button>
           </div>
           <div className="track-label zoom-label">Zoom</div>
+          {captionTracks.map((track) => <div className="track-label caption-label" key={track.id}>{track.name}</div>)}
           {visibleLayerTypes.map((type) => (
             <div key={type} className={`track-label layer-label ${type}-label`}>
               {type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}
@@ -616,12 +654,12 @@ export default function Timeline({
 
           {/* System Audio layer */}
           <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}>
-            {hasSys ? <WaveRow data={waveforms.sys ?? pseudoWaveform()} /> : <span className="empty-track-label">No desktop audio</span>}
+            {hasSys ? (waveforms.sys ? <WaveRow data={waveforms.sys} /> : <span className="empty-track-label">Reading desktop audio…</span>) : <span className="empty-track-label">No desktop audio</span>}
           </div>
 
           {/* Mic Audio layer */}
           <div className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`} title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}>
-            {hasMic ? <WaveRow data={waveforms.mic ?? pseudoWaveform()} /> : <span className="empty-track-label">No microphone audio</span>}
+            {hasMic ? (waveforms.mic ? <WaveRow data={waveforms.mic} /> : <span className="empty-track-label">Reading microphone audio…</span>) : <span className="empty-track-label">No microphone audio</span>}
           </div>
 
           {/* Zoom / Animation layer */}
@@ -655,7 +693,24 @@ export default function Timeline({
                 <button className="zoom-bar-handle right" onPointerDown={(event) => beginZoomEdit(event, segment, "end")} aria-label="Change zoom end" />
               </div>
             ))}
+            {zoomSegments.length === 0 && (
+              <button className="zoom-empty-action" onClick={(event) => { event.stopPropagation(); onAddManualZoom(); }} title="Add a zoom region at the playhead">
+                <ZoomIn size={12} /> No zooms — add one
+              </button>
+            )}
           </div>
+
+          {captionTracks.map((track) => (
+            <div className="ss-track-row caption-track" key={track.id}>
+              {track.segments.map((segment) => (
+                <div className="caption-clip-bar" key={segment.id} style={{ left: x(segment.startMs / 1000), width: Math.max(18, w((segment.endMs - segment.startMs) / 1000)) }} onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "move")} onClick={(event) => event.stopPropagation()} title="Drag to move · drag edges to change timing">
+                  <button className="layer-bar-handle left" onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "start")} aria-label="Change caption start" />
+                  <span>{segment.text}</span>
+                  <button className="layer-bar-handle right" onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "end")} aria-label="Change caption end" />
+                </div>
+              ))}
+            </div>
+          ))}
 
           {visibleLayerTypes.map((type) => (
             <div key={type} className={`ss-track-row layer-track ${type}-track`}>
@@ -797,84 +852,8 @@ function WaveRow({ data }: { data: number[] }) {
   return <canvas ref={ref} className="wave-canvas" />;
 }
 
-/** Deterministic pseudo-waveform fallback so empty/locked tracks still read clearly. */
-function pseudoWaveform(): number[] {
-  return Array.from({ length: 220 }, (_, i) => {
-    const t = i / 220;
-    const v =
-      0.32 +
-      0.26 * Math.abs(Math.sin(t * Math.PI * 9)) +
-      0.18 * Math.abs(Math.sin(t * Math.PI * 23) * Math.exp(-t * 4)) +
-      0.06 * Math.sin(t * Math.PI * 47);
-    return Math.max(0.05, Math.min(1, v));
-  });
-}
-
 async function loadWaveform(path: string): Promise<number[]> {
-  try {
-    const res = await fetch(convertFileSrc(path));
-    const buf = await res.arrayBuffer();
-    const rms = parseWavRms(buf, 220);
-    if (rms.length > 0) return rms;
-  } catch {
-    // fall through to pseudo waveform
-  }
-  return pseudoWaveform();
-}
-
-function parseWavRms(buffer: ArrayBuffer, buckets: number): number[] {
-  const dv = new DataView(buffer);
-  if (dv.byteLength < 44 || dv.getUint32(0, true) !== 0x52494646) return []; // "RIFF"
-
-  let offset = 12;
-  let channels = 1;
-  let bits = 16;
-  let dataOffset = 0;
-  let dataLen = 0;
-
-  while (offset + 8 <= dv.byteLength) {
-    const id = dv.getUint32(offset, true);
-    const size = dv.getUint32(offset + 4, true);
-    if (id === 0x666d7420) {
-      // "fmt "
-      channels = dv.getUint16(offset + 10, true);
-      bits = dv.getUint16(offset + 22, true);
-    } else if (id === 0x64617461) {
-      // "data"
-      dataOffset = offset + 8;
-      dataLen = size;
-      break;
-    }
-    offset += 8 + size + (size % 2);
-  }
-
-  if (!dataLen) return [];
-  const bytesPerSample = bits / 8;
-  const frames = Math.floor(dataLen / bytesPerSample / channels);
-
-  const out = new Array<number>(buckets).fill(0);
-  const ofs = (f: number) => dataOffset + f * bytesPerSample * channels;
-
-  for (let i = 0; i < buckets; i++) {
-    const start = Math.floor((frames / buckets) * i);
-    const end = Math.floor((frames / buckets) * (i + 1));
-    let sum = 0;
-    let count = 0;
-    for (let f = start; f < end; f += 12) {
-      const off = ofs(f);
-      let sample = 0;
-      if (bits === 16) sample = dv.getInt16(off, true) / 32768;
-      else if (bits === 8) sample = (dv.getUint8(off) - 128) / 128;
-      else if (bits === 24) {
-        sample = ((dv.getUint8(off + 2) << 16) | (dv.getUint8(off + 1) << 8) | dv.getUint8(off)) / 8388607;
-        if (sample > 1) sample -= 2;
-      } else if (bits === 32) sample = Math.min(1, Math.abs(dv.getFloat32(off, true)));
-      sum += sample * sample;
-      count++;
-    }
-    out[i] = count ? Math.min(1, Math.sqrt(sum / Math.max(1, count))) : 0;
-  }
-  return out;
+  return invoke<number[]>("audio_waveform", { path, buckets: 220 });
 }
 
 function formatTimecode(s: number): string {

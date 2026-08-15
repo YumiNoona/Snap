@@ -1,4 +1,4 @@
-import type { InputEvent, Keyframe } from "./types";
+import type { AutoZoomConfig, InputEvent, Keyframe } from "./types";
 
 interface ActivityCluster {
   startTime: number;
@@ -29,7 +29,8 @@ function findClusters(
   events: InputEvent[],
   videoWidth: number,
   videoHeight: number,
-  videoDurationMs: number
+  videoDurationMs: number,
+  options: AutoZoomConfig
 ): ActivityCluster[] {
   const ordered = events
     .filter((event) => Number.isFinite(event.ts) && event.ts >= 0 && event.ts <= videoDurationMs + 250)
@@ -83,7 +84,7 @@ function findClusters(
       current.endTime = e.ts;
       current.events.push({ x: posX, y: posY, ts: e.ts, type: e.type });
     } else {
-      if (isSignificantCluster(current)) {
+      if (isSignificantCluster(current, options)) {
         rawClusters.push(current);
       }
       current = {
@@ -94,11 +95,11 @@ function findClusters(
     }
   }
 
-  if (current && isSignificantCluster(current)) {
+  if (current && isSignificantCluster(current, options)) {
     rawClusters.push(current);
   }
 
-  return mergeNearbyClusters(rawClusters, videoWidth, videoHeight);
+  return mergeNearbyClusters(rawClusters, videoWidth, videoHeight, options.cooldownMs);
 }
 
 /**
@@ -106,14 +107,14 @@ function findClusters(
  * Any deliberate click focuses the camera; sustained typing or dense mixed
  * activity qualifies too.
  */
-function isSignificantCluster(cluster: ActivityCluster): boolean {
+function isSignificantCluster(cluster: ActivityCluster, options: AutoZoomConfig): boolean {
   const keydownCount = cluster.events.filter((e) => e.type === "keydown").length;
   const clickCount = cluster.events.filter((e) => e.type === "mousedown").length;
 
   if (clickCount >= 1) return true;
-  if (keydownCount >= MIN_TYPING_BURST) return true;
+  if (keydownCount >= options.typingSensitivity) return true;
   const wheelCount = cluster.events.filter((e) => e.type === "wheel").length;
-  return wheelCount >= 2 || cluster.events.length >= 5;
+  return wheelCount >= options.scrollSensitivity || cluster.events.length >= 5;
 }
 
 /**
@@ -121,7 +122,7 @@ function isSignificantCluster(cluster: ActivityCluster): boolean {
  * This prevents rapid clicks on opposite sides of the screen from collapsing
  * into one weak, nearly full-screen zoom.
  */
-function mergeNearbyClusters(clusters: ActivityCluster[], videoWidth: number, videoHeight: number): ActivityCluster[] {
+function mergeNearbyClusters(clusters: ActivityCluster[], videoWidth: number, videoHeight: number, mergeGapMs: number): ActivityCluster[] {
   if (clusters.length <= 1) return clusters;
 
   const merged: ActivityCluster[] = [];
@@ -137,7 +138,7 @@ function mergeNearbyClusters(clusters: ActivityCluster[], videoWidth: number, vi
       ? Math.hypot((nextCenter.x - currentCenter.x) / Math.max(1, videoWidth), (nextCenter.y - currentCenter.y) / Math.max(1, videoHeight))
       : 0;
 
-    if (gap <= MERGE_GAP_MS && spatialDistance <= MERGE_FOCUS_DISTANCE) {
+    if (gap <= mergeGapMs && spatialDistance <= MERGE_FOCUS_DISTANCE) {
       current.endTime = next.endTime;
       current.events.push(...next.events);
     } else {
@@ -181,7 +182,8 @@ function transitionForDistance(
 function clusterFocus(
   cluster: ActivityCluster,
   videoWidth: number,
-  videoHeight: number
+  videoHeight: number,
+  options: AutoZoomConfig
 ): { cx: number; cy: number; scale: number } {
   const clicks = cluster.events.filter(
     (e) => e.type === "mousedown" && e.x >= 0 && e.y >= 0 && e.x <= videoWidth && e.y <= videoHeight
@@ -194,10 +196,10 @@ function clusterFocus(
     const anchors = cluster.events.filter(
       (event) => event.type === "keydown" && event.x >= 0 && event.y >= 0 && event.x <= videoWidth && event.y <= videoHeight
     );
-    if (anchors.length === 0) return { cx: 0.5, cy: 0.5, scale: MIN_SCALE };
+    if (anchors.length === 0) return { cx: 0.5, cy: 0.5, scale: options.minScale };
     const anchor = anchors[anchors.length - 1];
-    const scale = 1.28;
-    const safeEdge = Math.min(0.48, 0.5 / scale + 0.015);
+    const scale = clamp(1.28, options.minScale, options.maxScale);
+    const safeEdge = Math.min(0.48, 0.5 / scale + options.edgePadding);
     return {
       cx: clamp(anchor.x / videoWidth, safeEdge, 1 - safeEdge),
       cy: clamp(anchor.y / videoHeight, safeEdge, 1 - safeEdge),
@@ -237,10 +239,10 @@ function clusterFocus(
   // clicks use their robust bounding box so toolbars/forms remain in frame.
   const fit = Math.min(videoWidth / activityW, videoHeight / activityH);
   const scale = focusClicks.length === 1
-    ? Math.min(MAX_SCALE, 1.62)
-    : clamp(fit * 0.76, MIN_SCALE, MAX_SCALE);
+    ? Math.min(options.maxScale, Math.max(options.minScale, 1.62))
+    : clamp(fit * 0.76, options.minScale, options.maxScale);
 
-  const safeEdge = Math.min(0.48, 0.5 / scale + 0.015);
+  const safeEdge = Math.min(0.48, 0.5 / scale + options.edgePadding);
   const cx = clamp((weightedX / totalWeight) / videoWidth, safeEdge, 1 - safeEdge);
   const cy = clamp((weightedY / totalWeight) / videoHeight, safeEdge, 1 - safeEdge);
 
@@ -256,13 +258,26 @@ export function generateKeyframes(
   videoWidth: number,
   videoHeight: number,
   videoDurationMs: number,
-  transitionDurationMs: number = 600
+  transitionDurationMs: number = 600,
+  requestedOptions: Partial<AutoZoomConfig> = {}
 ): Keyframe[] {
   const safeWidth = Math.max(1, videoWidth);
   const safeHeight = Math.max(1, videoHeight);
   const safeDuration = Math.max(0, videoDurationMs);
   const baseTransitionMs = clamp(transitionDurationMs, 180, 1600);
-  const clusters = findClusters(events, safeWidth, safeHeight, safeDuration);
+  const options: AutoZoomConfig = {
+    preset: "balanced", minScale: MIN_SCALE, maxScale: MAX_SCALE, holdMs: MIN_HOLD_MS,
+    cooldownMs: MERGE_GAP_MS, typingSensitivity: MIN_TYPING_BURST,
+    scrollSensitivity: 2, edgePadding: 0.015, ...requestedOptions,
+  };
+  options.minScale = clamp(options.minScale, 1.05, 3);
+  options.maxScale = clamp(options.maxScale, options.minScale, 4);
+  options.holdMs = clamp(options.holdMs, 300, 4000);
+  options.cooldownMs = clamp(options.cooldownMs, 0, 2500);
+  options.typingSensitivity = clamp(Math.round(options.typingSensitivity), 2, 20);
+  options.scrollSensitivity = clamp(Math.round(options.scrollSensitivity), 1, 20);
+  options.edgePadding = clamp(options.edgePadding, 0, 0.15);
+  const clusters = findClusters(events, safeWidth, safeHeight, safeDuration, options);
 
   // Default: unzoomed full-screen 1.0x
   if (clusters.length === 0 || safeDuration === 0) {
@@ -288,7 +303,7 @@ export function generateKeyframes(
 
   for (let i = 0; i < clusters.length; i++) {
     const cluster = clusters[i];
-    const target = clusterFocus(cluster, safeWidth, safeHeight);
+    const target = clusterFocus(cluster, safeWidth, safeHeight, options);
     const previousTarget = keyframes[keyframes.length - 1];
     const targetDistance = Math.hypot(target.cx - previousTarget.x, target.cy - previousTarget.y);
     const targetScaleDistance = Math.abs(target.scale - previousTarget.scale);
@@ -341,7 +356,7 @@ export function generateKeyframes(
     const zoomInTime = Math.round(transitionStart + moveDuration);
     const holdEndTime = Math.round(Math.min(
       safeDuration,
-      Math.max(zoomInTime + MIN_HOLD_MS, cluster.endTime + LEAD_OUT_MS)
+      Math.max(zoomInTime + options.holdMs, cluster.endTime + LEAD_OUT_MS)
     ));
 
     keyframes.push({
@@ -395,7 +410,7 @@ export function generateKeyframes(
 
   let activeRegionId: string | undefined;
   let regionSequence = 0;
-  const normalized = normalizeTrajectory(keyframes, safeDuration).map((frame) => {
+  const normalized = normalizeTrajectory(keyframes, safeDuration, options.maxScale).map((frame) => {
     if (frame.scale > 1.02) {
       activeRegionId ??= `auto-${regionSequence++}-${Math.round(frame.time)}`;
       return { ...frame, source: "auto" as const, regionId: activeRegionId };
@@ -411,7 +426,7 @@ export function generateKeyframes(
   return normalized;
 }
 
-function normalizeTrajectory(keyframes: Keyframe[], videoDurationMs: number): Keyframe[] {
+function normalizeTrajectory(keyframes: Keyframe[], videoDurationMs: number, maxScale: number): Keyframe[] {
   const sorted = [...keyframes].sort((a, b) => a.time - b.time);
   const normalized: Keyframe[] = [];
   for (const raw of sorted) {
@@ -421,7 +436,7 @@ function normalizeTrajectory(keyframes: Keyframe[], videoDurationMs: number): Ke
       duration: Math.max(0, Math.round(raw.duration || 0)),
       x: clamp(raw.x, 0, 1),
       y: clamp(raw.y, 0, 1),
-      scale: clamp(raw.scale, 1, MAX_SCALE),
+      scale: clamp(raw.scale, 1, maxScale),
     };
     const previous = normalized[normalized.length - 1];
     if (previous && frame.time === previous.time) {

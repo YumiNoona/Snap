@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Copy, Heart, ShieldCheck, X } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 
 const UPI_ID = "rushikeshingale2001@okicici";
 
@@ -41,7 +42,7 @@ export default function DonateButton({ compact = false }: Props) {
       <button
         type="button"
         className={`snap-donate-button ${compact ? "compact" : ""}`}
-        onClick={() => setOpen(true)}
+        onClick={() => { void invoke("open_donate_window").catch(() => setOpen(true)); }}
         title="Support Snap development"
         aria-label="Donate to support Snap development"
       >

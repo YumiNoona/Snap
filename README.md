@@ -1,21 +1,38 @@
-# Snap 2.0.0
+<div align="center">
+  <img src="src-tauri/icons/snap.png" width="96" height="96" alt="Snap logo" />
+  <h1>Snap</h1>
+  <p><strong>Record clearly. Edit beautifully. Move with purpose.</strong></p>
+  <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
-Snap is a local-first Windows screen recorder and motion editor built with
-Tauri 2, Rust, React, and TypeScript. It captures video, cursor input,
-microphone audio, and desktop audio as synchronized sources, then turns the
-recording into an editable project with automatic camera movement.
+  <p>
+    <img src="https://img.shields.io/badge/version-3.0.0-3b82f6?style=flat-square" alt="Version 3.0.0" />
+    <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
+    <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
+    <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
+    <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT license" />
+  </p>
+</div>
+
+Snap captures video, cursor input, microphone audio, and Windows desktop audio
+as synchronized editable sources. Its editor adds automatic or manual camera
+movement, captions, cursor styling, backgrounds, annotations, and polished
+exports without uploading recordings to a cloud service.
 
 ## What Snap includes
 
 - Full-screen, custom-region, window, Android USB, and iPhone/iPad UVC capture
 - Hardware-oriented native recording with a lightweight floating control dock
 - Independent microphone, desktop, and supported mobile-device audio tracks
+- Offline English, Hindi, and multilingual transcription with editable captions
+- Burned-in captions plus SRT, VTT, and embedded MP4 subtitle export
 - Editable Auto Zoom plus manual zoom regions with focus points and easing
 - Timeline clips for zoom, text, shapes, masks, video, and separate audio
 - Cursor themes, click effects, cursor smoothing, and motion blur
 - Canvas backgrounds, crop, aspect ratio, padding, corners, inset, and shadow
 - Presets, undo/redo, keyboard transport controls, trimming, and layer actions
 - FFmpeg-based MP4 export with progress, size, and time estimates
+- Editing for ordinary videos not recorded with Snap, including manual zoom and CC
+- Versioned projects, autosave, backup recovery, and missing-sidecar handling
 - Disconnect-safe mobile recording recovery and automatic mobile zoom analysis
 - Signed in-app updates delivered through GitHub Releases
 
@@ -25,8 +42,12 @@ recording into an editable project with automatic camera movement.
 
 - Windows 10 or Windows 11, 64-bit
 - Microsoft WebView2 Runtime
-- FFmpeg and FFprobe available on `PATH` for export and media inspection
+- Internet access on first use if FFmpeg or offline caption dependencies need installation
 - A supported GPU/driver for hardware-accelerated capture where available
+
+Snap can install FFmpeg and the offline whisper.cpp caption engine when they
+are missing. The multilingual speech model is stored per user rather than
+embedded in every installer.
 
 ### To develop Snap
 
@@ -77,7 +98,7 @@ npm run dev
 
 ```powershell
 npm run build
-npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+npm test
 cd src-tauri
 cargo check --locked
 ```
@@ -91,7 +112,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 ## Build the Windows installer
 
 ```powershell
-npm run tauri build -- --bundles nsis
+npm run tauri -- build --bundles nsis
 ```
 
 The NSIS installer is created under:
@@ -132,6 +153,7 @@ layouts when opening previous recordings.
 | --- | --- | --- |
 | Capture | `src-tauri/src/capture/` | Native Windows screen and window capture |
 | Audio | `src-tauri/src/audio/` | WASAPI microphone and desktop loopback capture |
+| Captions | `src-tauri/src/transcription.rs` | Offline whisper.cpp installation and transcription |
 | Input | `src-tauri/src/input_hook/` | Timestamped pointer and keyboard telemetry |
 | Mobile | `src-tauri/src/mobile.rs` | Android/iOS capture, audio, telemetry, and recovery |
 | Native API | `src-tauri/src/lib.rs` | Tauri commands, windows, settings, and paths |

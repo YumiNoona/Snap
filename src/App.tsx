@@ -3,11 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
+import DeviceView from "./components/RecorderLauncher/DeviceView";
 import RecordingDock from "./components/RecorderLauncher/RecordingDock";
 import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
 import Editor from "./components/Editor/Editor";
 import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
 import SettingsWindow from "./components/Settings/SettingsWindow";
+import LibraryWindow from "./components/LibraryWindow";
+import DonateWindow from "./components/DonateWindow";
 import "./App.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
 
@@ -81,6 +84,9 @@ function App() {
   const isOverlayWindow = windowLabel === "recorder-overlay";
   const isTeleprompterWindow = windowLabel === "teleprompter";
   const isSettingsWindow = windowLabel === "settings";
+  const isDeviceWindow = windowLabel === "device";
+  const isLibraryWindow = windowLabel === "library";
+  const isDonateWindow = windowLabel === "donate";
 
   const [editorVideo, setEditorVideo] = useState(isEditorPreview ? editorPreviewVideo : "");
   const [editorLog, setEditorLog] = useState("");
@@ -147,10 +153,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isEditorPreview && (isEditorWindow || isTeleprompterWindow || isSettingsWindow)) {
+    if (!isEditorPreview && (windowLabel === "main" || isEditorWindow || isTeleprompterWindow || isSettingsWindow || isDeviceWindow || isLibraryWindow || isDonateWindow)) {
       invoke("window_ready").catch(() => {});
     }
-  }, [isEditorPreview, isEditorWindow, isTeleprompterWindow, isSettingsWindow]);
+  }, [isEditorPreview, windowLabel, isEditorWindow, isTeleprompterWindow, isSettingsWindow, isDeviceWindow, isLibraryWindow, isDonateWindow]);
 
   if (isDockWindow) {
     return (
@@ -182,6 +188,18 @@ function App() {
         <SettingsWindow />
       </ErrorBoundary>
     );
+  }
+
+  if (isDeviceWindow) {
+    return <ErrorBoundary onReset={closeEditorWindow}><DeviceView onBack={closeEditorWindow} onOpenEditor={openInEditorWindow} /></ErrorBoundary>;
+  }
+
+  if (isLibraryWindow) {
+    return <ErrorBoundary onReset={closeEditorWindow}><LibraryWindow onOpen={openInEditorWindow} /></ErrorBoundary>;
+  }
+
+  if (isDonateWindow) {
+    return <ErrorBoundary onReset={closeEditorWindow}><DonateWindow /></ErrorBoundary>;
   }
 
   if (isEditorWindow) {

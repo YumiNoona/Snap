@@ -1,12 +1,12 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { EditorConfig, Keyframe } from "./types";
+import type { CaptionTrack, EditorConfig, Keyframe } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
-  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur,
+  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
 } from "./canvasDraw";
 
 export interface ExportCompositor {
@@ -30,6 +30,7 @@ export async function createExportCompositor(
   inputLogPath: string,
   keyframes: Keyframe[],
   config: EditorConfig,
+  captionTracks: CaptionTrack[],
   outputW: number,
   outputH: number
 ): Promise<ExportCompositor> {
@@ -348,6 +349,9 @@ export async function createExportCompositor(
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
       else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
       ctx.restore();
+    }
+    for (const track of captionTracks) {
+      if (track.burnedIn) drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     }
 
     // Click-ripple spawning — export always plays forward in real time, so

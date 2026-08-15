@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+.npm/
 
 # Frontend build output
 dist/
@@ -12,6 +13,8 @@ dist-ssr/
 # Rust / Cargo build output
 src-tauri/target/
 src-tauri/gen/
+target/
+**/*.rs.bk
 
 # Editor / IDE
 .vscode/*
@@ -28,6 +31,7 @@ src-tauri/gen/
 *.temp
 *~
 .agents/
+.history/
 
 # Logs
 logs/
@@ -66,3 +70,18 @@ release-artifacts/
 latest.json
 *.key
 *.key.pub
+*.pfx
+*.p12
+*.pem
+
+# Local transcription / media tooling
+ggml-*.bin
+whisper-cli.exe
+ffmpeg.exe
+ffprobe.exe
+whisper-bin-*/
+
+# Coverage and profiling
+coverage/
+lcov.info
+*.profraw

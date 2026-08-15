@@ -19,7 +19,12 @@ export interface LoadedInputLog {
  * exact same cursor data the exact same way.
  */
 export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog> {
-  const text = await invoke<string>("read_text_file", { path: inputLogPath });
+  const text = await invoke<string | null>("read_optional_text_file", { path: inputLogPath });
+  if (!text) {
+    // Imported videos do not have Snap's input-event sidecar. The editor is
+    // still fully usable for manual zooms, captions, styling, audio and export.
+    return { allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null };
+  }
   const raw: any[] = text
     .split("\n")
     .filter((l) => l.trim())

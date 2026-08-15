@@ -1,4 +1,3 @@
-import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
@@ -46,9 +45,7 @@ window.addEventListener("unhandledrejection", (e) => showError("Unhandled Promis
 
 try {
   ReactDOM.createRoot(rootEl).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
+    <App />,
   );
 } catch (err) {
   showError("React Mount Failed", err);

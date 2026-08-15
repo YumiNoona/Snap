@@ -241,13 +241,12 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
 
   return (
     <div className="mobile-view">
-      <header className="mobile-header">
+      <header className="mobile-header" data-tauri-drag-region>
         <button className="mobile-back-button" onClick={platform === "none" ? onBack : () => setPlatform("none")} disabled={recordingActive}>
           <ChevronLeft size={17} /> {platform === "none" ? "Back" : "Platforms"}
         </button>
-        <div className="mobile-heading-copy">
-          <h2>Mobile recording</h2>
-          <p>Capture a phone with synchronized video, a separate audio track, Auto Zoom, and disconnect-safe recovery.</p>
+        <div className="mobile-heading-copy" data-tauri-drag-region>
+          <h2 data-tauri-drag-region>Device capture</h2>
         </div>
         <button className="mobile-refresh-button" onClick={() => void refreshConnections(true)} disabled={loading || recordingActive} title="Refresh connected devices">
           <RefreshCw size={16} className={loading ? "mobile-spin" : ""} /> Refresh

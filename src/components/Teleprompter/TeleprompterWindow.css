@@ -7,7 +7,6 @@
   font-family: var(--font-family);
   user-select: none;
   overflow: hidden;
-  animation: tp-window-in 360ms var(--ease-standard) both;
 }
 
 /* Legacy floating overlay (non-standalone, rendered inside launcher) */
@@ -43,6 +42,17 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--text-secondary);
+}
+
+.tp-app-icon {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, .14);
+  border: 1px solid rgba(96, 165, 250, .2);
+  border-radius: 7px;
 }
 
 .tp-window-title {
@@ -105,7 +115,7 @@
   background: var(--bg-app);
 }
 
-.tp-mode-panel { animation: tp-mode-in 280ms var(--ease-standard) both; }
+.tp-mode-panel { min-height: 0; }
 
 .tp-script-textarea {
   flex: 1;
@@ -166,7 +176,7 @@
 
 .tp-reading-marker {
   position: absolute;
-  top: 50%;
+  top: calc((100% - 53px) / 2);
   left: 0;
   right: 0;
   height: 48px;
@@ -182,7 +192,7 @@
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding: clamp(90px, 26vh, 150px) clamp(20px, 5vw, 42px);
+  padding: 0 clamp(20px, 5vw, 42px);
   scroll-behavior: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(148,163,184,.26) transparent;
@@ -196,6 +206,13 @@
   line-height: 1.62;
   color: var(--text-tertiary);
   text-align: center;
+}
+
+.tp-text-wrapper::before,
+.tp-text-wrapper::after {
+  content: "";
+  display: block;
+  height: calc((100vh - 93px - 1.62em) / 2);
 }
 
 .tp-word {

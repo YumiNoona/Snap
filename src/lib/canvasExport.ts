@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditorConfig, ExportSettings, Keyframe } from "./types";
+import type { CaptionTrack, EditorConfig, ExportSettings, Keyframe } from "./types";
 import { createExportCompositor } from "./exportCompositor";
+import { captionsToSrt, captionsToVtt } from "./captions";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
@@ -30,6 +31,7 @@ export async function runCanvasExport(
   inputLogPath: string,
   keyframes: Keyframe[],
   config: EditorConfig,
+  captionTracks: CaptionTrack[],
   exportSettings: ExportSettings,
   trimStart: number,
   trimEnd: number,
@@ -42,6 +44,7 @@ export async function runCanvasExport(
     inputLogPath,
     keyframes,
     config,
+    exportSettings.captions === "burned" || exportSettings.captions === "burned-srt" ? captionTracks : [],
     exportSettings.width,
     exportSettings.height
   );
@@ -138,6 +141,7 @@ export async function runCanvasExport(
         tempWebmPath,
         inputVideo: videoPath,
         exportSettings,
+        captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(captionTracks, trimStart, trimEnd) : null,
         clickTimesMs: config.cursorStyle.clickSound
           ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => time - trimStart * 1000)
           : [],
@@ -146,6 +150,13 @@ export async function runCanvasExport(
         exportDurationSeconds: Math.max(0.01, trimEnd - trimStart),
       },
     });
+
+    const basePath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "");
+    if (exportSettings.captions === "srt" || exportSettings.captions === "burned-srt") {
+      await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(captionTracks, trimStart, trimEnd) });
+    } else if (exportSettings.captions === "vtt") {
+      await invoke("write_text_file_atomic", { path: `${basePath}.vtt`, contents: captionsToVtt(captionTracks, trimStart, trimEnd) });
+    }
 
     onProgress({ phase: "done", progress: 1, message: result });
     return result;

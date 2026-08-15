@@ -462,6 +462,25 @@
 .layer-clip-bar.text { background: linear-gradient(105deg, #0ea5e9, #2563eb); }
 .layer-clip-bar.shape { background: linear-gradient(105deg, #f43f5e, #a855f7); }
 .layer-clip-bar.mask { background: linear-gradient(105deg, #d97706, #eab308); color: #160c00; }
+.caption-label { color: #d8b4fe; }
+.ss-track-row.caption-track { position: relative; min-height: 34px; }
+.caption-clip-bar {
+  position: absolute;
+  top: 4px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(255,255,255,.5);
+  border-radius: 6px;
+  background: linear-gradient(105deg, #7c3aed, #c026d3);
+  color: white;
+  cursor: grab;
+  overflow: hidden;
+  user-select: none;
+}
+.caption-clip-bar.editing { cursor: grabbing; border-color: #fff; transition: none; }
+.caption-clip-bar > span { padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; pointer-events: none; }
+.caption-clip-bar:hover .layer-bar-handle { opacity: 1; }
 .layer-clip-bar:hover { border-color: rgba(255,255,255,.9); filter: brightness(1.08); }
 .layer-clip-bar.selected,
 .layer-clip-bar.editing { border-color: #fff; box-shadow: 0 0 0 2px rgba(96,165,250,.34), 0 5px 16px rgba(0,0,0,.28); }
@@ -591,6 +610,24 @@
   background: rgba(59, 130, 246, 0.35);
   transform: translateY(-50%);
 }
+
+.zoom-empty-action {
+  position: absolute;
+  inset: 3px auto 3px 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--text-tertiary);
+  background: color-mix(in srgb, var(--bg-surface-raised) 82%, transparent);
+  border: 1px dashed rgba(96, 165, 250, .38);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.zoom-empty-action:hover { color: var(--text-primary); border-color: var(--accent); }
 
 /* ── Cut Markers ────────────────────────────────────── */
 

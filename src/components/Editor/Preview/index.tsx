@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
+import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
@@ -11,6 +11,7 @@ import {
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
   clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
   drawMaskLayer, drawVideoWithMotionBlur,
+  drawCaptionTrack,
 } from "../../../lib/canvasDraw";
 import "./Preview.css";
 
@@ -35,6 +36,9 @@ interface Props {
   zoomFocusSource?: "auto" | "manual";
   onZoomTargetPick?: (point: { x: number; y: number }, commit?: boolean) => void;
   autoZoomRevision?: number;
+  autoZoomReady?: boolean;
+  preserveProjectKeyframes?: boolean;
+  captionTracks?: CaptionTrack[];
 }
 
 type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -106,6 +110,9 @@ export default function Preview({
   zoomFocusSource = "manual",
   onZoomTargetPick,
   autoZoomRevision = 0,
+  autoZoomReady = true,
+  preserveProjectKeyframes = false,
+  captionTracks = [],
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -216,7 +223,12 @@ export default function Preview({
 
   // Generate keyframes when ready
   useEffect(() => {
-    if (!videoReady || !eventsReady) return;
+    if (!videoReady || !eventsReady || !autoZoomReady) return;
+    if (preserveProjectKeyframes && autoZoomRevision === 0) {
+      kfGenerated.current = true;
+      generatedRevision.current = autoZoomRevision;
+      return;
+    }
     if (kfGenerated.current && generatedRevision.current === autoZoomRevision) return;
     const meta = videoMetaRef.current;
     if (!meta) return;
@@ -242,12 +254,13 @@ export default function Preview({
         meta.w,
         meta.h,
         meta.d * 1000,
-        getMovementDuration(config.zoomMovement)
+        getMovementDuration(config.zoomMovement),
+        config.autoZoom
       );
       if (!cancelled) onKeyframesChange(kf);
     })();
     return () => { cancelled = true; };
-  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement, videoPath]);
+  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement, config.autoZoom, videoPath, autoZoomReady, preserveProjectKeyframes]);
 
   const playClickSound = useCallback(() => {
     if (!config.cursorStyle.clickSound || !playing) return;
@@ -698,6 +711,10 @@ export default function Preview({
       ctx.restore();
     }
 
+    for (const track of captionTracks) {
+      drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+    }
+
     // Selection affordance is drawn last so every layer type can be moved and
     // resized even when its effect changes the underlying pixels.
     for (const layer of activeLayers) {
@@ -843,7 +860,7 @@ export default function Preview({
       prevTimeRef.current = ts;
     }
   }, [
-    canvasSize, config, keyframes, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
+    canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
     getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
   ]);
   renderRef.current = render;
