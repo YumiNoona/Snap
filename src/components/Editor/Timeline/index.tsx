@@ -4,13 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal } from "lucide-react";
-import type { CaptionSegment, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
+import type { AudioTrack, CaptionSegment, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
 import "./Timeline.css";
 
 interface Props {
-  videoPath: string;
+  audioTracks: AudioTrack[];
   duration: number;
   currentTime: number;
   keyframes: Keyframe[];
@@ -58,7 +58,7 @@ interface ZoomSegment {
 }
 
 export default function Timeline({
-  videoPath,
+  audioTracks,
   duration,
   currentTime,
   keyframes,
@@ -96,6 +96,7 @@ export default function Timeline({
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
   const [waveforms, setWaveforms] = useState<{ sys?: number[]; mic?: number[] }>({});
+  const [waveformErrors, setWaveformErrors] = useState<{ sys?: boolean; mic?: boolean }>({});
   const [contentWidth, setContentWidth] = useState(600);
   const [timelineHeight, setTimelineHeight] = useState(240);
   const [contextMenu, setContextMenu] = useState<
@@ -130,44 +131,35 @@ export default function Timeline({
       window.removeEventListener("resize", close);
     };
   }, [contextMenu]);
-  const [hasSys, setHasSys] = useState(false);
-  const [hasMic, setHasMic] = useState(false);
-  const [hasDeviceAudio, setHasDeviceAudio] = useState(false);
+  const deviceTrack = audioTracks.find((track) => track.kind === "device");
+  const systemTrack = deviceTrack ?? audioTracks.find((track) => track.kind === "system");
+  const micTrack = audioTracks.find((track) => track.kind === "microphone");
+  const hasSys = !!systemTrack;
+  const hasMic = !!micTrack;
+  const hasDeviceAudio = !!deviceTrack;
+  const waveformBuckets = Math.max(64, Math.min(2000, Math.round(contentWidth * zoomScale / 3)));
 
-  // Detect sidecar audio files + build RMS waveforms for each track
+  // Build RMS waveforms from the same validated tracks used by playback,
+  // captions, project persistence, and export.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      try {
-        const lastSlash = Math.max(videoPath.lastIndexOf("\\"), videoPath.lastIndexOf("/"));
-        const dir = lastSlash >= 0 ? videoPath.substring(0, lastSlash) : ".";
-        const fileName = lastSlash >= 0 ? videoPath.substring(lastSlash + 1) : videoPath;
-        const baseName = fileName.replace(/\.[^.]+$/, "");
-        const audioDir = `${dir}\\${baseName}`;
-        const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: audioDir });
-
-        const sysPath = `${audioDir}\\system_audio.wav`;
-        const devicePath = `${audioDir}\\device_audio.wav`;
-        const micPath = `${audioDir}\\mic_audio.wav`;
-        const hasDeviceFile = files.some((f) => f.path === devicePath && f.size > 44);
-        const hasSysFile = hasDeviceFile || files.some((f) => f.path === sysPath && f.size > 44);
-        const hasMicFile = files.some((f) => f.path === micPath && f.size > 0);
-
-        setHasSys(hasSysFile);
-        setHasMic(hasMicFile);
-        setHasDeviceAudio(hasDeviceFile);
-
-        const wfs: { sys?: number[]; mic?: number[] } = {};
-        if (hasSysFile) wfs.sys = await loadWaveform(hasDeviceFile ? devicePath : sysPath);
-        if (hasMicFile) wfs.mic = await loadWaveform(micPath);
-        setWaveforms(wfs);
-      } catch {
-        setHasSys(false);
-        setHasMic(false);
-        setHasDeviceAudio(false);
-        setWaveforms({});
-      }
+      const [systemResult, micResult] = await Promise.allSettled([
+        systemTrack ? loadWaveformWithRetry(systemTrack.path, waveformBuckets) : Promise.resolve(undefined),
+        micTrack ? loadWaveformWithRetry(micTrack.path, waveformBuckets) : Promise.resolve(undefined),
+      ]);
+      if (cancelled) return;
+      setWaveforms({
+        sys: systemResult.status === "fulfilled" ? systemResult.value : undefined,
+        mic: micResult.status === "fulfilled" ? micResult.value : undefined,
+      });
+      setWaveformErrors({
+        sys: systemResult.status === "rejected",
+        mic: micResult.status === "rejected",
+      });
     })();
-  }, [videoPath]);
+    return () => { cancelled = true; };
+  }, [micTrack?.path, systemTrack?.path, waveformBuckets]);
 
   // Track the timeline width once so px-per-second stays stable
   useEffect(() => {
@@ -654,12 +646,12 @@ export default function Timeline({
 
           {/* System Audio layer */}
           <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}>
-            {hasSys ? (waveforms.sys ? <WaveRow data={waveforms.sys} /> : <span className="empty-track-label">Reading desktop audio…</span>) : <span className="empty-track-label">No desktop audio</span>}
+            {hasSys ? (waveforms.sys ? <WaveRow data={waveforms.sys} /> : <span className="empty-track-label">{waveformErrors.sys ? "Waveform unavailable" : "Reading desktop audio…"}</span>) : <span className="empty-track-label">No desktop audio</span>}
           </div>
 
           {/* Mic Audio layer */}
           <div className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`} title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}>
-            {hasMic ? (waveforms.mic ? <WaveRow data={waveforms.mic} /> : <span className="empty-track-label">Reading microphone audio…</span>) : <span className="empty-track-label">No microphone audio</span>}
+            {hasMic ? (waveforms.mic ? <WaveRow data={waveforms.mic} /> : <span className="empty-track-label">{waveformErrors.mic ? "Waveform unavailable" : "Reading microphone audio…"}</span>) : <span className="empty-track-label">No microphone audio</span>}
           </div>
 
           {/* Zoom / Animation layer */}
@@ -852,8 +844,21 @@ function WaveRow({ data }: { data: number[] }) {
   return <canvas ref={ref} className="wave-canvas" />;
 }
 
-async function loadWaveform(path: string): Promise<number[]> {
-  return invoke<number[]>("audio_waveform", { path, buckets: 220 });
+async function loadWaveform(path: string, buckets: number): Promise<number[]> {
+  return invoke<number[]>("audio_waveform", { path, buckets });
+}
+
+async function loadWaveformWithRetry(path: string, buckets: number): Promise<number[]> {
+  let lastError: unknown;
+  for (const delay of [0, 200, 600, 1_200]) {
+    if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    try {
+      return await loadWaveform(path, buckets);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function formatTimecode(s: number): string {

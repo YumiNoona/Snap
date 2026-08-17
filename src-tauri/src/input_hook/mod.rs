@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -40,6 +41,18 @@ static SESSION_START: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Ensures the rdev::listen thread is spawned exactly once.
 static HOOK_STARTED: OnceLock<()> = OnceLock::new();
+static EVENT_TX: OnceLock<SyncSender<WriterMessage>> = OnceLock::new();
+static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
+static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+fn active_session_elapsed_ms() -> Option<u64> {
+    let session_start = (*SESSION_START.lock().ok()?)?;
+    let mut paused_ms = PAUSED_ACCUM_MS.load(Ordering::Relaxed);
+    if let Some(pause_started) = *PAUSE_STARTED.lock().ok()? {
+        paused_ms = paused_ms.saturating_add(pause_started.elapsed().as_millis() as u64);
+    }
+    Some((session_start.elapsed().as_millis() as u64).saturating_sub(paused_ms))
+}
 
 // ── Log event struct ─────────────────────────────────────────────────────────
 
@@ -58,6 +71,17 @@ struct LogEvent {
     button: Option<String>,
 }
 
+enum WriterMessage {
+    Event {
+        generation: u64,
+        event: LogEvent,
+    },
+    Flush {
+        generation: u64,
+        done: std::sync::mpsc::Sender<()>,
+    },
+}
+
 fn key_name(key: &rdev::Key) -> String {
     format!("{key:?}")
 }
@@ -70,6 +94,42 @@ fn button_name(btn: &rdev::Button) -> String {
 
 fn ensure_hook_started() {
     HOOK_STARTED.get_or_init(|| {
+        // The Windows low-level hook must return immediately. JSON encoding and
+        // disk writes happen on this bounded worker instead of inside the hook
+        // callback, so a slow disk can never stall mouse/keyboard delivery.
+        let (event_tx, event_rx) = sync_channel::<WriterMessage>(8_192);
+        let _ = EVENT_TX.set(event_tx.clone());
+        thread::spawn(move || {
+            while let Ok(message) = event_rx.recv() {
+                match message {
+                    WriterMessage::Event { generation, event } => {
+                        if generation != SESSION_GENERATION.load(Ordering::Acquire) {
+                            continue;
+                        }
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            if let Ok(mut guard) = ACTIVE_WRITER.lock() {
+                                if let Some(ref mut writer) = *guard {
+                                    if writeln!(writer, "{json}").is_ok() {
+                                        EVENT_COUNT.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    WriterMessage::Flush { generation, done } => {
+                        if generation == SESSION_GENERATION.load(Ordering::Acquire) {
+                            if let Ok(mut guard) = ACTIVE_WRITER.lock() {
+                                if let Some(ref mut writer) = *guard {
+                                    let _ = writer.flush();
+                                }
+                            }
+                        }
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+
         thread::spawn(move || {
             eprintln!("[Snap Input] rdev::listen hook started (once, persistent)");
 
@@ -164,13 +224,12 @@ fn ensure_hook_started() {
                     },
                 };
 
-                if let Ok(json) = serde_json::to_string(&log_event) {
-                    if let Ok(mut guard) = ACTIVE_WRITER.lock() {
-                        if let Some(ref mut w) = *guard {
-                            let _ = writeln!(w, "{json}");
-                            EVENT_COUNT.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
+                let message = WriterMessage::Event {
+                    generation: SESSION_GENERATION.load(Ordering::Acquire),
+                    event: log_event,
+                };
+                if let Err(TrySendError::Full(_)) = event_tx.try_send(message) {
+                    DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
                 }
             };
 
@@ -179,6 +238,22 @@ fn ensure_hook_started() {
             }
         });
     });
+}
+
+fn flush_event_queue() -> std::result::Result<(), String> {
+    let Some(sender) = EVENT_TX.get() else {
+        return Ok(());
+    };
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    sender
+        .send(WriterMessage::Flush {
+            generation: SESSION_GENERATION.load(Ordering::Acquire),
+            done: done_tx,
+        })
+        .map_err(|_| "Input event writer is unavailable".to_string())?;
+    done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .map_err(|_| "Timed out while flushing input events".to_string())
 }
 
 // ── Start input logging (async) ──────────────────────────────────────────────
@@ -194,12 +269,10 @@ pub async fn start_input_logging(
 ) -> std::result::Result<(), String> {
     // If already active, stop the previous session first.
     if IS_ACTIVE.load(Ordering::Relaxed) {
-        let mut guard = ACTIVE_WRITER.lock().map_err(|e| e.to_string())?;
-        if let Some(ref mut w) = *guard {
-            let _ = w.flush();
-        }
-        *guard = None;
         IS_ACTIVE.store(false, Ordering::SeqCst);
+        flush_event_queue()?;
+        let mut guard = ACTIVE_WRITER.lock().map_err(|e| e.to_string())?;
+        *guard = None;
     }
 
     eprintln!("[Snap Input] Step 1: opening log file -> {output_path}");
@@ -207,6 +280,8 @@ pub async fn start_input_logging(
     let file = File::create(&output_path).map_err(|e| format!("Cannot create log file: {e}"))?;
 
     EVENT_COUNT.store(0, Ordering::SeqCst);
+    DROPPED_EVENTS.store(0, Ordering::SeqCst);
+    SESSION_GENERATION.fetch_add(1, Ordering::SeqCst);
 
     // Reset session start time so timestamps begin from 0 for this recording
     *SESSION_START.lock().map_err(|e| e.to_string())? = Some(Instant::now());
@@ -253,20 +328,38 @@ pub async fn start_input_logging(
 /// Called by the capture module; writes a `meta` line the editor uses to align
 /// input-event timestamps with video time.
 pub fn mark_capture_start() {
+    mark_capture_start_with_lead(Duration::ZERO);
+}
+
+/// Desktop Duplication begins producing frames immediately after FFmpeg is
+/// spawned, before its short health check completes. Backdate time zero by
+/// that measured startup interval so input and delayed audio startup remain
+/// aligned to the actual first video segment.
+pub fn mark_capture_start_with_lead(startup_lead: Duration) {
     if !IS_ACTIVE.load(Ordering::Relaxed) {
         return;
     }
-    let ts = match *SESSION_START.lock().unwrap() {
-        Some(start) => (start.elapsed().as_millis() as u64)
-            .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed)),
-        None => return,
+    let Some(now_ms) = active_session_elapsed_ms() else {
+        return;
     };
+    let ts = now_ms.saturating_sub(startup_lead.as_millis() as u64);
     CAPTURE_START_MS.store(ts, Ordering::SeqCst);
     if let Ok(mut guard) = ACTIVE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
             let _ = writeln!(w, "{{\"type\":\"meta\",\"captureStartMs\":{ts}}}");
         }
     }
+}
+
+/// Active wall-clock position of the encoded recording, excluding pauses.
+/// Audio capture starts on a separate thread after the video session has been
+/// created, so this offset lets each WAV begin on the same time-zero instead
+/// of silently shifting toward the start of the clip.
+pub fn capture_timeline_elapsed_ms() -> u64 {
+    let Some(now_ms) = active_session_elapsed_ms() else {
+        return 0;
+    };
+    now_ms.saturating_sub(CAPTURE_START_MS.load(Ordering::Relaxed))
 }
 
 /// Record the relationship between wall-clock capture time and the encoded
@@ -277,10 +370,8 @@ pub fn mark_capture_end(frames_sent: u64) {
     if !IS_ACTIVE.load(Ordering::Relaxed) {
         return;
     }
-    let now_ms = match *SESSION_START.lock().unwrap() {
-        Some(start) => (start.elapsed().as_millis() as u64)
-            .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed)),
-        None => return,
+    let Some(now_ms) = active_session_elapsed_ms() else {
+        return;
     };
     let start_ms = CAPTURE_START_MS.load(Ordering::Relaxed);
     let capture_elapsed_ms = now_ms.saturating_sub(start_ms);
@@ -323,6 +414,10 @@ pub async fn stop_input_logging() -> std::result::Result<u64, String> {
 
     IS_ACTIVE.store(false, Ordering::SeqCst);
 
+    // A FIFO barrier guarantees every event accepted by the hook has reached
+    // the buffered writer before we finalize and drop the file.
+    flush_event_queue()?;
+
     // Explicitly flush the writer before dropping to surface any I/O errors.
     let mut guard = ACTIVE_WRITER.lock().map_err(|e| e.to_string())?;
     if let Some(ref mut w) = *guard {
@@ -332,7 +427,8 @@ pub async fn stop_input_logging() -> std::result::Result<u64, String> {
     *guard = None;
 
     let count = EVENT_COUNT.load(Ordering::Relaxed);
+    let dropped = DROPPED_EVENTS.load(Ordering::Relaxed);
 
-    eprintln!("[Snap Input] Logging stopped — {count} events written");
+    eprintln!("[Snap Input] Logging stopped — {count} events written, {dropped} throttled");
     Ok(count)
 }

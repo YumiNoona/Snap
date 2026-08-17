@@ -67,6 +67,13 @@ const AUDIO_FILENAMES: Record<AudioTrackKind, string> = {
   device: "device_audio.wav",
 };
 
+interface DirectoryEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+}
+
 export function audioTrackPath(videoPath: string, kind: AudioTrackKind): string {
   return `${recordingDataPaths(videoPath).dataDir}\\${AUDIO_FILENAMES[kind]}`;
 }
@@ -74,6 +81,50 @@ export function audioTrackPath(videoPath: string, kind: AudioTrackKind): string 
 export function createAudioTrack(videoPath: string, kind: AudioTrackKind): AudioTrack {
   const labels: Record<AudioTrackKind, string> = { microphone: "Microphone", system: "System audio", device: "Device audio" };
   return { id: `audio-${kind}`, kind, path: audioTrackPath(videoPath, kind), label: labels[kind], muted: false, volume: 1 };
+}
+
+/**
+ * Find the editable WAV sidecars that actually exist for a recording.
+ *
+ * This is intentionally the single discovery path used by playback, the
+ * timeline, captions, project persistence, and export UI. A 44-byte WAV is
+ * only a header and therefore is not exposed as a playable track.
+ */
+export async function discoverAudioTracks(videoPath: string): Promise<AudioTrack[]> {
+  const dataDir = recordingDataPaths(videoPath).dataDir;
+  let entries: DirectoryEntry[];
+  try {
+    entries = await invoke<DirectoryEntry[]>("list_directory", { path: dataDir });
+  } catch {
+    return [];
+  }
+
+  const files = new Map(
+    entries
+      .filter((entry) => !entry.is_dir && entry.size > 44)
+      .map((entry) => [entry.name.toLowerCase(), entry] as const)
+  );
+
+  // A mobile/device capture can retain an embedded stream and an extracted
+  // device WAV. It is the primary desktop-equivalent track and must replace,
+  // not stack with, system audio to avoid doubled playback/export.
+  const primaryKind: AudioTrackKind = files.has(AUDIO_FILENAMES.device) ? "device" : "system";
+  return ([primaryKind, "microphone"] as AudioTrackKind[])
+    .flatMap((kind) => {
+      const entry = files.get(AUDIO_FILENAMES[kind]);
+      if (!entry) return [];
+      return [{ ...createAudioTrack(videoPath, kind), path: entry.path }];
+    });
+}
+
+export function mergeAudioTracks(discovered: AudioTrack[], saved: AudioTrack[]): AudioTrack[] {
+  const savedByKind = new Map(saved.map((track) => [track.kind, track]));
+  return discovered.map((track) => {
+    const previous = savedByKind.get(track.kind);
+    return previous
+      ? { ...track, id: previous.id || track.id, label: previous.label || track.label, muted: previous.muted, volume: previous.volume }
+      : track;
+  });
 }
 
 export async function getTranscriptionEnvironment(): Promise<TranscriptionEnvironment> {

@@ -51,6 +51,13 @@ interface CameraDevice {
   name: string;
 }
 
+interface RecordingSessionSnapshot {
+  sessionId: string;
+  phase: "preparing" | "armed" | "countingDown" | "starting" | "recording" | "pausing" | "paused" | "resuming" | "stopping" | "finalizing" | "completed" | "cancelled" | "failed";
+  countdown?: number | null;
+  error?: string | null;
+}
+
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void;
   onOpenTeleprompter: () => void;
@@ -110,9 +117,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const [lastLog, setLastLog] = useState(lastLogRef.current);
 
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const pausedRef = useRef(false);
+  const startingRef = useRef(false);
+  const pauseTransitionRef = useRef(false);
+  const activeSessionIdRef = useRef("");
 
   // Keep the ref in sync so the elapsed interval can pause without re-creating.
   useEffect(() => {
@@ -136,6 +145,19 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   useEffect(() => {
     const unlisten = listen<AppSettings>("settings-changed", (event) => setSettings(event.payload));
+    return () => { unlisten.then((stop) => stop()); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<RecordingSessionSnapshot>("recording-session-state", ({ payload }) => {
+      if (payload.sessionId !== activeSessionIdRef.current) return;
+      if (payload.phase === "countingDown") setRecordStatus(`Recording in ${payload.countdown ?? "…"}`);
+      else if (payload.phase === "starting") setRecordStatus("Starting capture…");
+      else if (payload.phase === "pausing") setRecordStatus("Pausing…");
+      else if (payload.phase === "resuming") setRecordStatus("Resuming…");
+      else if (payload.phase === "finalizing") setRecordStatus("Finalizing recording…");
+      else if (payload.phase === "failed" && payload.error) setRecordStatus(`Error: ${payload.error}`);
+    });
     return () => { unlisten.then((stop) => stop()); };
   }, []);
 
@@ -227,26 +249,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.autoCheckUpdates]);
 
-  // Countdown-then-record: shows 3→2→1 then starts actual recording.
-  // Respects the "countdown" setting — off starts immediately.
+  // Rust owns both countdown and media startup. React sends one intent so a
+  // delayed timer or duplicate click cannot start the sources independently.
   const startWithCountdown = (targetId: string, captureRegion: { x: number; y: number; w: number; h: number } | null = null) => {
-    if (!settings.countdown) {
-      startRecording(targetId, captureRegion);
-      return;
-    }
-    invoke("set_countdown", { value: 3 }).catch(() => {});
-    let count = 3;
-    const tick = () => {
-      count -= 1;
-      if (count > 0) {
-        invoke("set_countdown", { value: count }).catch(() => {});
-        countdownRef.current = setTimeout(tick, 1000);
-      } else {
-        invoke("set_countdown", { value: null }).catch(() => {});
-        startRecording(targetId, captureRegion);
-      }
-    };
-    countdownRef.current = setTimeout(tick, 1000);
+    void startRecording(targetId, captureRegion);
   };
 
   // ── Load devices ───────────────────────────────────────────────────────
@@ -284,10 +290,14 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   // ── Recording Actions ──────────────────────────────────────────────────
   const startRecording = async (targetId: string, captureRegion: { x: number; y: number; w: number; h: number } | null = null) => {
+    if (startingRef.current || recording) return;
+    startingRef.current = true;
     lastDataDirRef.current = "";
     try {
       const videosDir = await invoke<string>("get_videos_dir");
       const stamp = Date.now();
+      const sessionId = `desktop-${stamp}`;
+      activeSessionIdRef.current = sessionId;
       const videoPath = `${videosDir}\\snap_${stamp}.mp4`;
       try {
         await invoke("recording_preflight", { outputPath: videoPath, expectedSeconds: 3600 });
@@ -316,7 +326,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         localStorage.setItem("snap.lastLog", logPath);
       } catch {}
 
-      setRecordStatus("Starting...");
+      setRecordStatus("Preparing recording…");
       let region: { x: number; y: number; w: number; h: number } | null = null;
       if (captureRegion) {
         region = captureRegion;
@@ -326,27 +336,20 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         // region unknown — editor falls back to full-desktop mapping
       }
       regionRef.current = region;
-      await invoke("start_input_logging", {
-        outputPath: logPath,
-        sessionStartTime: "0",
-        regionX: region?.x,
-        regionY: region?.y,
-        regionW: region?.w,
-        regionH: region?.h,
+      await invoke<RecordingSessionSnapshot>("start_recording_session", {
+        request: {
+          sessionId,
+          targetId,
+          videoPath,
+          logPath,
+          audioDir,
+          micDeviceId: selectedMic,
+          speakerDeviceId: selectedSpeaker,
+          region: captureRegion,
+          inputRegion: region,
+          countdownSeconds: settings.countdown ? 3 : 0,
+        },
       });
-      try {
-        await invoke("start_recording", { targetId, outputPath: videoPath, region: captureRegion });
-      } catch (error) {
-        await invoke("stop_input_logging").catch(() => {});
-        throw error;
-      }
-      try {
-        await invoke("start_audio_capture", { micDeviceId: selectedMic, speakerDeviceId: selectedSpeaker, outputDir: audioDir });
-      } catch (e) {
-        await invoke("stop_recording").catch(() => {});
-        await invoke("stop_input_logging").catch(() => {});
-        throw new Error(`Audio capture failed: ${e}`);
-      }
 
       // Single 120ms soft amber shutter pulse micro-interaction when recording starts
       setShutterFlash(true);
@@ -361,6 +364,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         1000
       );
       setRecordStatus("Recording");
+      startingRef.current = false;
       await invoke("update_recording_session", { dataDir: audioDir, videoPath, status: "recording", error: null }).catch(() => {});
 
       // Optionally move the launcher out of the way while recording.
@@ -381,6 +385,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         }).catch(() => {});
       }
     } catch (e) {
+      startingRef.current = false;
+      activeSessionIdRef.current = "";
       console.error("[Snap] startRecording failed:", e);
       setRecordStatus(`Error: ${e}`);
       if (lastDataDirRef.current && lastVideoRef.current) {
@@ -391,17 +397,22 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   const stopRecording = async () => {
     if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
-    if (countdownRef.current) { clearTimeout(countdownRef.current); countdownRef.current = null; }
     setRecordStatus("Stopping...");
 
     const failures: string[] = [];
-    try { await invoke("stop_recording"); } catch (e) { console.error("stop_recording failed:", e); failures.push(`Video: ${e}`); }
-    try { await invoke<number>("stop_input_logging"); } catch { /* input logging may not have started */ }
-    try { await invoke("stop_audio_capture"); } catch (e) { failures.push(`Audio: ${e}`); }
+    try {
+      await invoke<RecordingSessionSnapshot>("stop_recording_session", {
+        sessionId: activeSessionIdRef.current,
+      });
+    } catch (error) {
+      failures.push(String(error));
+    }
 
     setRecording(false);
     setIsPaused(false);
     pausedRef.current = false;
+    pauseTransitionRef.current = false;
+    activeSessionIdRef.current = "";
     setRecordStatus(failures.length > 0 ? `Recording needs attention: ${failures.join(" · ")}` : "");
     if (lastDataDirRef.current && lastVideoRef.current) {
       await invoke("update_recording_session", {
@@ -528,17 +539,23 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   // Pause (true) / resume (false) the recording on all capture backends, and
   // keep the dock + overlay UI in sync. The paused segment is omitted from the
   // video, input log, and audio tracks entirely.
-  const togglePause = () => {
+  const togglePause = async () => {
+    if (pauseTransitionRef.current || !activeSessionIdRef.current) return;
+    pauseTransitionRef.current = true;
     const next = !isPaused;
-    setIsPaused(next);
-    pausedRef.current = next;
-    invoke("set_paused", { paused: next }).catch(() => {});
-    invoke("set_input_paused", { paused: next }).catch(() => {});
-    invoke("set_audio_paused", { paused: next }).catch(() => {});
-    // Update the capture border immediately instead of waiting for the next
-    // elapsed-time dock sync tick.
-    invoke("set_overlay_paused", { paused: next }).catch(() => {});
-    setRecordStatus(next ? "Paused" : "Recording");
+    try {
+      await invoke<RecordingSessionSnapshot>("set_recording_session_paused", {
+        sessionId: activeSessionIdRef.current,
+        paused: next,
+      });
+      setIsPaused(next);
+      pausedRef.current = next;
+      setRecordStatus(next ? "Paused" : "Recording");
+    } catch (error) {
+      setRecordStatus(`Pause failed: ${error}`);
+    } finally {
+      pauseTransitionRef.current = false;
+    }
   };
 
   // Keep the floating dock window in sync with recording state.
@@ -547,7 +564,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     invoke("update_dock_state", {
       snapshot: { recording: true, elapsed, paused: isPaused, mic_muted: micMuted },
     }).catch(() => {});
-    invoke("set_overlay_paused", { paused: isPaused }).catch(() => {});
   }, [recording, elapsed, isPaused, micMuted]);
 
   // Relay dock button presses (stop / pause / mic) back to this window.
@@ -584,7 +600,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   useEffect(() => {
     return () => {
       if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
-      if (countdownRef.current) { clearTimeout(countdownRef.current); countdownRef.current = null; }
     };
   }, []);
 

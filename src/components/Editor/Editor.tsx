@@ -9,13 +9,14 @@ import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
 import DonateButton from "../shared/DonateButton";
-import type { CaptionTrack, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
+import type { AudioTrack, CaptionTrack, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
 import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
 import { useEditorHistory } from "./hooks/useEditorHistory";
 import { useProjectPersistence } from "./hooks/useProjectPersistence";
 import { usePlaybackController } from "./hooks/usePlaybackController";
+import { discoverAudioTracks, mergeAudioTracks } from "../../lib/captions";
 import "./Editor.css";
 
 interface Props {
@@ -98,6 +99,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   }));
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
+  const [audioStatus, setAudioStatus] = useState("Finding recorded audio…");
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
@@ -119,7 +122,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
   const { currentTime, playing, setMediaElement, setCurrentTime, togglePlay, pausePlayback, seekTo } = usePlaybackController({
-    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
+    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration, audioTracks, audioMix: config.audio,
   });
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
@@ -134,9 +137,26 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     config,
     keyframes,
     captions: captionTracks,
+    audioTracks,
     restore: replaceWithoutHistory,
+    restoreAudioTracks: (saved) => setAudioTracks((current) => current.length > 0 ? mergeAudioTracks(current, saved) : saved),
     decorateRestoredConfig,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    setAudioStatus("Finding recorded audio…");
+    void discoverAudioTracks(videoPath).then((discovered) => {
+      if (cancelled) return;
+      setAudioTracks((current) => mergeAudioTracks(discovered, current));
+      setAudioStatus(discovered.length > 0
+        ? `${discovered.length} editable audio ${discovered.length === 1 ? "track" : "tracks"} ready`
+        : "No separate audio tracks were found for this recording");
+    }).catch((error) => {
+      if (!cancelled) setAudioStatus(`Audio could not be loaded: ${error}`);
+    });
+    return () => { cancelled = true; };
+  }, [videoPath]);
 
 
   // Persist per-pack cursor hotspot nudges across sessions
@@ -705,6 +725,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           autoZoomReady={projectReady}
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
             captionTracks={captionTracks}
+            hasExternalAudio={audioTracks.length > 0}
           />
         </div>
 
@@ -733,7 +754,8 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
           selectedZoomRegion={resolvedSelectedZoom}
           onSelectedZoomChange={updateSelectedZoom}
           onDeleteSelectedZoom={deleteSelectedZoom}
-          videoPath={videoPath}
+          audioTracks={audioTracks}
+          audioStatus={audioStatus}
           captionTracks={captionTracks}
           onCaptionTracksChange={setCaptionTracks}
         />
@@ -741,7 +763,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
       <Timeline
-        videoPath={videoPath}
+        audioTracks={audioTracks}
         duration={duration}
         currentTime={currentTime}
         keyframes={keyframes}

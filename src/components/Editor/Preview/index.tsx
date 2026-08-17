@@ -39,6 +39,7 @@ interface Props {
   autoZoomReady?: boolean;
   preserveProjectKeyframes?: boolean;
   captionTracks?: CaptionTrack[];
+  hasExternalAudio?: boolean;
 }
 
 type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -113,6 +114,7 @@ export default function Preview({
   autoZoomReady = true,
   preserveProjectKeyframes = false,
   captionTracks = [],
+  hasExternalAudio = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -341,9 +343,12 @@ export default function Preview({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    video.muted = config.audio.systemMuted;
+    // Desktop recordings keep audio in independent WAV sidecars. Mobile
+    // recordings can also retain an embedded recovery stream, which must be
+    // muted when the editable sidecar is present to avoid doubled audio.
+    video.muted = hasExternalAudio || config.audio.systemMuted;
     video.volume = Math.max(0, Math.min(1, config.audio.systemVolume / 100));
-  }, [config.audio.systemMuted, config.audio.systemVolume, videoReady]);
+  }, [config.audio.systemMuted, config.audio.systemVolume, hasExternalAudio, videoReady]);
 
   // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {

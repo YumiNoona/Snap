@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack } from "./captions";
-import type { CaptionTrack } from "./types";
+import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack, mergeAudioTracks } from "./captions";
+import type { AudioTrack, CaptionTrack } from "./types";
 
 describe("caption audio source selection", () => {
   it("keeps microphone transcription independent from system audio", () => {
@@ -13,6 +13,22 @@ describe("caption audio source selection", () => {
 
   it("resolves device audio without falling back to the final video mix", () => {
     expect(audioTrackPath("D:\\recording.mp4", "device")).toBe("D:\\recording\\device_audio.wav");
+  });
+
+  it("refreshes file paths while preserving saved per-track controls", () => {
+    const discovered = createAudioTrack("D:\\new-location\\recording.mp4", "microphone");
+    const saved: AudioTrack = {
+      ...createAudioTrack("D:\\old-location\\recording.mp4", "microphone"),
+      id: "saved-mic",
+      muted: true,
+      volume: 0.65,
+    };
+    expect(mergeAudioTracks([discovered], [saved])).toEqual([{
+      ...discovered,
+      id: "saved-mic",
+      muted: true,
+      volume: 0.65,
+    }]);
   });
 
   it("exports trimmed Unicode captions with rebased timestamps", () => {

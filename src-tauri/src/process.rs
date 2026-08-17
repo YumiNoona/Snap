@@ -42,3 +42,15 @@ pub(crate) fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
 
     command
 }
+
+/// Creates a hidden, below-normal-priority process for live recording work.
+/// Export keeps normal priority, while capture must always yield to the app or
+/// game being recorded.
+pub(crate) fn recording_command<S: AsRef<OsStr>>(program: S) -> Command {
+    let mut command = background_command(program);
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000 | 0x0000_4000); // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+
+    command
+}

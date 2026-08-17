@@ -109,11 +109,11 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
     let mic_wav = audio_dir.join("mic_audio.wav");
     let has_sys = sys_wav.exists()
         && std::fs::metadata(&sys_wav)
-            .map(|m| m.len() > 0)
+            .map(|m| m.len() > 44)
             .unwrap_or(false);
     let has_mic = mic_wav.exists()
         && std::fs::metadata(&mic_wav)
-            .map(|m| m.len() > 0)
+            .map(|m| m.len() > 44)
             .unwrap_or(false);
 
     let mut audio_inputs = 0;
@@ -475,11 +475,11 @@ pub async fn finalize_canvas_export(
     let mic_wav = audio_dir.join("mic_audio.wav");
     let has_sys = sys_wav.exists()
         && std::fs::metadata(&sys_wav)
-            .map(|m| m.len() > 0)
+            .map(|m| m.len() > 44)
             .unwrap_or(false);
     let has_mic = mic_wav.exists()
         && std::fs::metadata(&mic_wav)
-            .map(|m| m.len() > 0)
+            .map(|m| m.len() > 44)
             .unwrap_or(false);
     let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
     let caption_srt = std::path::PathBuf::from(format!("{}.captions.srt", request.temp_webm_path));

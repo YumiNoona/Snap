@@ -4,6 +4,7 @@ mod export;
 mod input_hook;
 mod mobile;
 mod process;
+mod recording_session;
 mod transcription;
 
 use serde::{Deserialize, Serialize};
@@ -550,6 +551,13 @@ static OVERLAY_PAUSED: AtomicBool = AtomicBool::new(false);
 /// window so it renders full-screen, not clipped to the small launcher window.
 #[tauri::command]
 fn set_countdown(app: tauri::AppHandle, value: Option<u32>) -> Result<(), String> {
+    set_countdown_internal(app, value)
+}
+
+pub(crate) fn set_countdown_internal(
+    app: tauri::AppHandle,
+    value: Option<u32>,
+) -> Result<(), String> {
     let win = app
         .get_webview_window("recorder-overlay")
         .ok_or_else(|| "Overlay window not found".to_string())?;
@@ -658,6 +666,13 @@ fn set_recording_overlay(
 /// turns green while paused. Re-emits the current overlay state.
 #[tauri::command]
 fn set_overlay_paused(app: tauri::AppHandle, paused: bool) -> Result<(), String> {
+    set_overlay_paused_internal(app, paused)
+}
+
+pub(crate) fn set_overlay_paused_internal(
+    app: tauri::AppHandle,
+    paused: bool,
+) -> Result<(), String> {
     OVERLAY_PAUSED.store(paused, Ordering::SeqCst);
     let appearance = OVERLAY_APPEARANCE.lock().map_err(|e| e.to_string())?;
     if let Some((style, region)) = appearance.as_ref() {
@@ -1226,17 +1241,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,
-            capture::start_recording,
-            capture::stop_recording,
-            capture::set_paused,
             capture::get_videos_dir,
             capture::recording_preflight,
             capture::install_ffmpeg,
             audio::enumerate_audio_devices,
             enumerate_video_devices,
-            audio::start_audio_capture,
-            audio::stop_audio_capture,
-            audio::set_audio_paused,
             audio::set_microphone_muted,
             audio::audio_waveform,
             transcription::transcription_environment,
@@ -1250,9 +1259,11 @@ pub fn run() {
             mobile::mobile_recording_status,
             mobile::stop_mobile_recording,
             mobile::recover_mobile_recordings,
-            input_hook::start_input_logging,
-            input_hook::stop_input_logging,
-            input_hook::set_input_paused,
+            recording_session::start_recording_session,
+            recording_session::cancel_recording_countdown,
+            recording_session::set_recording_session_paused,
+            recording_session::stop_recording_session,
+            recording_session::get_recording_session_state,
             export::export_video,
             export::open_export_sink,
             export::write_export_chunk,

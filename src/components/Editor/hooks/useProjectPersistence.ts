@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createProject, loadProject, saveProject, type SnapProject } from "../../../lib/project";
-import type { CaptionTrack, EditorConfig, Keyframe } from "../../../lib/types";
+import type { AudioTrack, CaptionTrack, EditorConfig, Keyframe } from "../../../lib/types";
 import type { EditorSnapshot } from "./useEditorHistory";
 
 interface Options {
@@ -11,12 +11,15 @@ interface Options {
   config: EditorConfig;
   keyframes: Keyframe[];
   captions: CaptionTrack[];
+  audioTracks: AudioTrack[];
   restore: (snapshot: EditorSnapshot) => void;
+  restoreAudioTracks?: (tracks: AudioTrack[]) => void;
   decorateRestoredConfig?: (config: EditorConfig) => EditorConfig;
 }
 
 export function useProjectPersistence({
-  disabled, videoPath, inputLogPath, duration, config, keyframes, captions, restore, decorateRestoredConfig,
+  disabled, videoPath, inputLogPath, duration, config, keyframes, captions, audioTracks,
+  restore, restoreAudioTracks, decorateRestoredConfig,
 }: Options) {
   const [ready, setReady] = useState(disabled);
   const [restored, setRestored] = useState(false);
@@ -24,8 +27,10 @@ export function useProjectPersistence({
   const projectRef = useRef<SnapProject | null>(null);
   const restoreRef = useRef(restore);
   const decorateRef = useRef(decorateRestoredConfig);
+  const restoreAudioRef = useRef(restoreAudioTracks);
   restoreRef.current = restore;
   decorateRef.current = decorateRestoredConfig;
+  restoreAudioRef.current = restoreAudioTracks;
 
   useEffect(() => {
     if (disabled) return;
@@ -39,6 +44,7 @@ export function useProjectPersistence({
         const project = existing ?? createProject(videoPath, inputLogPath);
         projectRef.current = project;
         if (existing) {
+          restoreAudioRef.current?.(project.audioTracks);
           restoreRef.current({
             config: decorateRef.current?.(project.editor) ?? project.editor,
             keyframes: project.keyframes,
@@ -67,6 +73,7 @@ export function useProjectPersistence({
         editor: config,
         keyframes,
         captions,
+        audioTracks,
       };
       projectRef.current = project;
       void saveProject(project)
@@ -77,7 +84,7 @@ export function useProjectPersistence({
         });
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [captions, config, duration, disabled, inputLogPath, keyframes, ready, videoPath]);
+  }, [audioTracks, captions, config, duration, disabled, inputLogPath, keyframes, ready, videoPath]);
 
   return { projectReady: ready, hasSavedProject: restored, projectStatus: status };
 }

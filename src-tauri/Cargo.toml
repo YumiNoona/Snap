@@ -25,7 +25,7 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "0.4"
-tokio = { version = "1", features = ["sync", "time", "rt"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 wasapi = "0.23"
 rdev = { version = "0.5", features = ["serialize"] }
 

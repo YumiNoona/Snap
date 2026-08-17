@@ -519,11 +519,46 @@
 }
 .caption-source-card:hover { border-color: var(--border-default); background: var(--bg-surface-raised); }
 .caption-source-card.selected { color: var(--text-primary); border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.caption-source-card:disabled { cursor: not-allowed; opacity: .48; filter: saturate(.55); }
+.caption-source-card:disabled:hover { border-color: var(--border-subtle); background: var(--bg-surface); }
 .caption-source-card strong, .caption-source-card small { display: block; }
 .caption-source-card strong { margin-bottom: 3px; font-size: 12px; }
+.caption-source-card strong { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.caption-source-card strong em { color: var(--accent); font-size: 9px; font-style: normal; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.caption-source-card:disabled strong em { color: var(--text-tertiary); }
 .caption-source-card small { color: var(--text-tertiary); font-size: 10px; line-height: 1.4; }
 .caption-source-radio { width: 12px; height: 12px; margin-top: 2px; flex: 0 0 auto; border: 2px solid var(--text-tertiary); border-radius: 50%; }
 .caption-source-card.selected .caption-source-radio { border: 3px solid var(--accent); background: white; }
+
+.audio-load-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-subtle));
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-surface));
+  font-size: 11px;
+  line-height: 1.45;
+}
+.audio-load-status svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+.audio-load-status.warning { border-color: var(--border-subtle); background: var(--bg-surface); }
+.audio-load-status.warning svg { color: var(--text-tertiary); }
+
+.caption-style-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 2px 0 7px; }
+.caption-style-presets button {
+  min-width: 0;
+  padding: 8px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  font-size: 10px;
+  transition: color .16s ease, border-color .16s ease, transform .16s ease;
+}
+.caption-style-presets button:hover { color: var(--text-primary); border-color: var(--accent); transform: translateY(-1px); }
 
 .ss-drawer-action-btn.danger {
   gap: 7px;

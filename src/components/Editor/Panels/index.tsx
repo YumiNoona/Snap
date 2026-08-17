@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, type LucideIcon } from "lucide-react";
-import type { CaptionTrack, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
+import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, type LucideIcon } from "lucide-react";
+import type { AudioTrack, CaptionTrack, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
-import { createAudioTrack, getTranscriptionEnvironment, transcribeTrack, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
+import { getTranscriptionEnvironment, transcribeTrack, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
@@ -27,7 +27,8 @@ interface Props {
   selectedZoomRegion: ZoomRegionSettings | null;
   onSelectedZoomChange: (patch: Partial<ZoomRegionSettings>) => void;
   onDeleteSelectedZoom: () => void;
-  videoPath: string;
+  audioTracks: AudioTrack[];
+  audioStatus: string;
   captionTracks: CaptionTrack[];
   onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
 }
@@ -61,7 +62,7 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onDeleteSelectedZoom,
-  videoPath, captionTracks, onCaptionTracksChange,
+  audioTracks, audioStatus, captionTracks, onCaptionTracksChange,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -112,11 +113,19 @@ export default function Panels({
       .catch((error) => setCaptionStatus(`Unable to inspect transcription engine: ${error}`));
   }, [activeTab, transcriptionEnv]);
 
+  useEffect(() => {
+    if (audioTracks.some((track) => track.kind === captionSource)) return;
+    const preferred = audioTracks.find((track) => track.kind === "microphone") ?? audioTracks[0];
+    if (preferred) setCaptionSource(preferred.kind);
+  }, [audioTracks, captionSource]);
+
   const generateCaptions = async () => {
     setTranscribing(true);
     setCaptionStatus(`Transcribing ${captionSource === "microphone" ? "microphone" : captionSource} audio…`);
     try {
-      const track = await transcribeTrack(createAudioTrack(videoPath, captionSource), captionLanguage);
+      const sourceTrack = audioTracks.find((track) => track.kind === captionSource);
+      if (!sourceTrack) throw new Error(`No ${captionSource} audio track is available in this recording`);
+      const track = await transcribeTrack(sourceTrack, captionLanguage);
       onCaptionTracksChange([...captionTracks, track]);
       setCaptionStatus(`Created ${track.segments.length} editable caption segments`);
     } catch (error) {
@@ -555,6 +564,10 @@ export default function Panels({
       {/* ═══ AUDIO TAB ═══════════════════════════════════════════════ */}
       {activeTab === "audio" && (
         <div className="ss-drawer-content">
+          <div className={`audio-load-status ${audioTracks.length > 0 ? "ready" : "warning"}`} role="status">
+            <AudioWaveform size={16} />
+            <span>{audioStatus}</span>
+          </div>
           <Section title="System Audio">
             <CheckRow label="Mute System Audio" checked={config.audio.systemMuted} onChange={(v) => updateAudio({ systemMuted: v })} />
             <Slider label="Volume" value={config.audio.systemVolume} min={0} max={200} step={5} unit="%" onChange={(v) => updateAudio({ systemVolume: v })} disabled={config.audio.systemMuted} />
@@ -569,6 +582,10 @@ export default function Panels({
       {activeTab === "captions" && (
         <div className="ss-drawer-content">
           <Section title="Automatic Captions">
+            <div className={`audio-load-status ${audioTracks.length > 0 ? "ready" : "warning"}`} role="status">
+              <AudioWaveform size={16} />
+              <span>{audioStatus}</span>
+            </div>
             <div className="caption-source-heading">Transcribe audio from</div>
             <div className="caption-source-grid" role="radiogroup" aria-label="Caption audio source">
               {([
@@ -576,9 +593,9 @@ export default function Panels({
                 ["system", "Desktop audio", "Browser videos, meetings, games, and other computer sound."],
                 ["device", "Device audio", "Audio captured from an imported phone or capture device."],
               ] as const).map(([value, label, description]) => (
-                <button key={value} type="button" role="radio" aria-checked={captionSource === value} className={`caption-source-card ${captionSource === value ? "selected" : ""}`} onClick={() => setCaptionSource(value)}>
+                <button key={value} type="button" role="radio" aria-checked={captionSource === value} disabled={!audioTracks.some((track) => track.kind === value)} className={`caption-source-card ${captionSource === value ? "selected" : ""}`} onClick={() => setCaptionSource(value)}>
                   <span className="caption-source-radio" />
-                  <span><strong>{label}</strong><small>{description}</small></span>
+                  <span><strong>{label}<em>{audioTracks.some((track) => track.kind === value) ? "Ready" : "Not recorded"}</em></strong><small>{description}</small></span>
                 </button>
               ))}
             </div>
@@ -589,7 +606,7 @@ export default function Panels({
               <button className="ss-drawer-action-btn" disabled={installingTranscription} onClick={() => void installTranscription()}>{installingTranscription ? `${installPhase || "Installing offline captions"} — ${installProgress}%` : "Install Offline Captions"}</button>
               {installingTranscription && <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>}
             </>}
-            <button className="ss-drawer-action-btn primary" disabled={transcribing || transcriptionEnv?.available === false} onClick={() => void generateCaptions()}>
+            <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0 || transcriptionEnv?.available === false} onClick={() => void generateCaptions()}>
               {transcribing ? "Transcribing…" : "Generate Captions"}
             </button>
             {captionStatus && <p className="panel-help-text" role="status">{captionStatus}</p>}
@@ -597,8 +614,15 @@ export default function Panels({
           {captionTracks.map((track) => (
             <Section key={track.id} title={track.name}>
               <CheckRow label="Show Captions" checked={track.visible} onChange={(visible) => updateCaptionTrack(track.id, (current) => ({ ...current, visible }))} />
+              <CheckRow label="Burn Into Export" checked={track.burnedIn} onChange={(burnedIn) => updateCaptionTrack(track.id, (current) => ({ ...current, burnedIn }))} />
+              <div className="caption-style-presets" aria-label="Caption style preset">
+                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0.72)", outlineWidth: 0, fontWeight: 700 } }))}>Classic</button>
+                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0)", outlineColor: "#000000", outlineWidth: 4, fontWeight: 800 } }))}>Impact</button>
+                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#0b0d12", backgroundColor: "rgba(255,214,10,0.94)", outlineWidth: 0, fontWeight: 800 } }))}>Highlight</button>
+              </div>
               <Slider label="Vertical Position" value={Math.round(track.style.y * 100)} min={10} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, y: value / 100 } }))} />
               <Slider label="Font Size" value={track.style.fontSize} min={18} max={96} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, fontSize } }))} />
+              <ColorInput label="Text Color" value={track.style.color} onChange={(color) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color } }))} />
               <div className="caption-segment-list">
                 {track.segments.map((segment, segmentIndex) => (
                   <div className="caption-segment-editor" key={segment.id}>

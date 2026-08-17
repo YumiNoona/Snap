@@ -46,36 +46,83 @@ struct InstallProgress {
     total_bytes: Option<u64>,
 }
 
-fn emit_install_progress(window: &tauri::Window, percent: u8, phase: &str, downloaded: Option<u64>, total: Option<u64>) {
-    let _ = window.emit("transcription-install-progress", InstallProgress {
-        percent,
-        phase: phase.to_string(),
-        downloaded_bytes: downloaded,
-        total_bytes: total,
-    });
+fn emit_install_progress(
+    window: &tauri::Window,
+    percent: u8,
+    phase: &str,
+    downloaded: Option<u64>,
+    total: Option<u64>,
+) {
+    let _ = window.emit(
+        "transcription-install-progress",
+        InstallProgress {
+            percent,
+            phase: phase.to_string(),
+            downloaded_bytes: downloaded,
+            total_bytes: total,
+        },
+    );
 }
 
-fn run_installer_step(window: &tauri::Window, script: &str, path: &Path, start: u8, end: u8, total: Option<u64>, phase: &str) -> Result<(), String> {
+fn run_installer_step(
+    window: &tauri::Window,
+    script: &str,
+    path: &Path,
+    start: u8,
+    end: u8,
+    total: Option<u64>,
+    phase: &str,
+) -> Result<(), String> {
     let mut child = background_command("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("Unable to start dependency installer: {error}"))?;
     loop {
-        match child.try_wait().map_err(|error| format!("Unable to monitor dependency installer: {error}"))? {
+        match child
+            .try_wait()
+            .map_err(|error| format!("Unable to monitor dependency installer: {error}"))?
+        {
             Some(status) => {
-                let output = child.wait_with_output().map_err(|error| format!("Unable to finish dependency installer: {error}"))?;
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("Unable to finish dependency installer: {error}"))?;
                 if !status.success() {
-                    return Err(format!("Transcription installation failed: {}", String::from_utf8_lossy(&output.stderr)));
+                    return Err(format!(
+                        "Transcription installation failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    ));
                 }
                 emit_install_progress(window, end, phase, total, total);
                 return Ok(());
             }
             None => {
-                let downloaded = std::fs::metadata(path).map(|value| value.len()).unwrap_or(0);
-                let percent = total.map(|bytes| start.saturating_add(((downloaded.min(bytes) as f64 / bytes as f64) * (end - start) as f64).round() as u8)).unwrap_or(start);
-                emit_install_progress(window, percent.min(end.saturating_sub(1)), phase, Some(downloaded), total);
+                let downloaded = std::fs::metadata(path)
+                    .map(|value| value.len())
+                    .unwrap_or(0);
+                let percent = total
+                    .map(|bytes| {
+                        start.saturating_add(
+                            ((downloaded.min(bytes) as f64 / bytes as f64) * (end - start) as f64)
+                                .round() as u8,
+                        )
+                    })
+                    .unwrap_or(start);
+                emit_install_progress(
+                    window,
+                    percent.min(end.saturating_sub(1)),
+                    phase,
+                    Some(downloaded),
+                    total,
+                );
                 std::thread::sleep(Duration::from_millis(250));
             }
         }
@@ -127,7 +174,9 @@ fn resolve_model() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub async fn install_transcription_dependencies(window: tauri::Window) -> Result<TranscriptionEnvironment, String> {
+pub async fn install_transcription_dependencies(
+    window: tauri::Window,
+) -> Result<TranscriptionEnvironment, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let root = user_transcription_root();
         let models = root.join("models");
