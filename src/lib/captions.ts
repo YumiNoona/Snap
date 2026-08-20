@@ -153,7 +153,7 @@ export async function transcribeTrack(track: AudioTrack, language: Transcription
     style: {
       fontFamily: "Arial", fontSize: 42, fontWeight: 700, color: "#ffffff",
       backgroundColor: "rgba(0,0,0,0.68)", outlineColor: "#000000", outlineWidth: 2,
-      shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82,
+      shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82, animation: "reveal",
     },
     segments,
   };

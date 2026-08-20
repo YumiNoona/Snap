@@ -215,7 +215,6 @@ fn run_audio_threads(
     let out_dir = std::path::PathBuf::from(config.output_dir);
     let mic_id = config.mic_device_id;
     let speaker_id = config.speaker_device_id;
-    let timeline_offset = Duration::from_millis(crate::input_hook::capture_timeline_elapsed_ms());
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("Failed to create output dir: {e}"))?;
 
     let sys_path = out_dir.join("system_audio.wav");
@@ -243,7 +242,6 @@ fn run_audio_threads(
                 sys_file,
                 sys_rec,
                 sys_paused,
-                timeline_offset,
                 config.process_id,
                 startup.clone(),
             );
@@ -269,7 +267,6 @@ fn run_audio_threads(
                 mic_rec,
                 mic_paused,
                 mic_muted,
-                timeline_offset,
                 startup.clone(),
             );
             if let Err(error) = &result {
@@ -543,6 +540,10 @@ fn duration_frames(duration: Duration) -> u64 {
     (duration.as_nanos() * SAMPLE_RATE as u128 / 1_000_000_000) as u64
 }
 
+fn frames_duration(frames: u64) -> Duration {
+    Duration::from_nanos((frames as u128 * 1_000_000_000u128 / SAMPLE_RATE as u128) as u64)
+}
+
 fn write_silence_frames(
     file: &mut std::fs::File,
     frames: u64,
@@ -560,15 +561,15 @@ fn write_silence_frames(
     Ok(total)
 }
 
-/// Place a batch of WASAPI packets on the recording clock. Loopback produces
-/// no packets before the first sound, so concatenating packets destroys A/V
-/// sync. We insert silence for genuine gaps and keep small scheduler jitter
-/// continuous to avoid clicks.
+/// Place a batch of WASAPI packets at the timestamp of its first sample.
+/// Loopback produces no packets before the first sound, so concatenating
+/// packets destroys A/V sync. QPC-based placement also avoids scheduler delay
+/// when WASAPI returns multiple buffered packets in a single wake-up.
 fn write_timed_audio_batch(
     file: &mut std::fs::File,
     samples: &mut VecDeque<u8>,
     block_align: usize,
-    elapsed: Duration,
+    packet_start: Duration,
     total_data_bytes: &mut u64,
 ) -> std::result::Result<(), String> {
     let packet_frames = samples.len() as u64 / block_align as u64;
@@ -578,7 +579,7 @@ fn write_timed_audio_batch(
     }
 
     let written_frames = *total_data_bytes / block_align as u64;
-    let desired_start = duration_frames(elapsed).saturating_sub(packet_frames);
+    let desired_start = duration_frames(packet_start);
     let gap = desired_start.saturating_sub(written_frames);
     let tolerance = (SAMPLE_RATE as u64 / 50).max(1); // 20 ms
     if gap > tolerance {
@@ -640,7 +641,6 @@ fn capture_loopback(
     output_path: std::path::PathBuf,
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
-    timeline_offset: Duration,
     process_id: Option<u32>,
     startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
 ) -> std::result::Result<(), String> {
@@ -776,6 +776,11 @@ fn capture_loopback(
 
     let mut total_data_bytes: u64 = 0;
     let mut batch_count: u64 = 0;
+    // Sample the shared video clock only after WASAPI is initialized and its
+    // stream is live. Sampling in the parent before device initialization
+    // made every track early by the driver startup time (often 100–500 ms on
+    // laptops), so sound that began later appeared too close to clip start.
+    let timeline_offset = Duration::from_millis(crate::input_hook::capture_timeline_elapsed_ms());
     let mut timeline = AudioTimelineClock::new(timeline_offset);
 
     eprintln!("[Snap Audio] Loopback stream started, capturing...");
@@ -790,6 +795,7 @@ fn capture_loopback(
         }
         sample_queue.clear();
         let mut discontinuity = false;
+        let mut first_packet_qpc = None;
         while capture_client
             .get_next_packet_size()
             .map_err(|e| format!("Loopback packet size: {e}"))?
@@ -799,6 +805,7 @@ fn capture_loopback(
             let info = capture_client
                 .read_from_device_to_deque(&mut sample_queue)
                 .map_err(|e| format!("Loopback read: {e}"))?;
+            first_packet_qpc.get_or_insert(info.timestamp);
             if info.flags.silent {
                 for sample in sample_queue.iter_mut().skip(packet_start) {
                     *sample = 0;
@@ -817,15 +824,19 @@ fn capture_loopback(
             eprintln!("[Snap Audio] Loopback discontinuity detected; repairing timeline gap");
         }
         if !sample_queue.is_empty() {
+            let packet_frames = sample_queue.len() as u64 / blockalign as u64;
+            let packet_start = first_packet_qpc
+                .and_then(crate::input_hook::audio_packet_timeline)
+                .unwrap_or_else(|| elapsed.saturating_sub(frames_duration(packet_frames)));
             write_timed_audio_batch(
                 &mut file,
                 &mut sample_queue,
                 blockalign as usize,
-                elapsed,
+                packet_start,
                 &mut total_data_bytes,
             )?;
             batch_count += 1;
-            if batch_count.is_multiple_of(100) {
+            if batch_count.is_multiple_of(1_000) {
                 eprintln!(
                     "[Snap Audio] loopback batch {batch_count} captured ({:.1} KB)",
                     total_data_bytes as f64 / 1024.0
@@ -870,7 +881,6 @@ fn capture_microphone(
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
     is_muted: Arc<AtomicBool>,
-    timeline_offset: Duration,
     startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
 ) -> std::result::Result<(), String> {
     initialize_mta()
@@ -982,6 +992,7 @@ fn capture_microphone(
 
     let mut total_data_bytes: u64 = 0;
     let mut batch_count: u64 = 0;
+    let timeline_offset = Duration::from_millis(crate::input_hook::capture_timeline_elapsed_ms());
     let mut timeline = AudioTimelineClock::new(timeline_offset);
 
     eprintln!("[Snap Audio] Mic stream started, capturing...");
@@ -993,6 +1004,7 @@ fn capture_microphone(
         }
         sample_queue.clear();
         let mut discontinuity = false;
+        let mut first_packet_qpc = None;
         while capture_client
             .get_next_packet_size()
             .map_err(|e| format!("Mic packet size: {e}"))?
@@ -1002,6 +1014,7 @@ fn capture_microphone(
             let info = capture_client
                 .read_from_device_to_deque(&mut sample_queue)
                 .map_err(|e| format!("Mic read: {e}"))?;
+            first_packet_qpc.get_or_insert(info.timestamp);
             if info.flags.silent {
                 for sample in sample_queue.iter_mut().skip(packet_start) {
                     *sample = 0;
@@ -1023,15 +1036,19 @@ fn capture_microphone(
             eprintln!("[Snap Audio] Microphone discontinuity detected; repairing timeline gap");
         }
         if !sample_queue.is_empty() {
+            let packet_frames = sample_queue.len() as u64 / blockalign as u64;
+            let packet_start = first_packet_qpc
+                .and_then(crate::input_hook::audio_packet_timeline)
+                .unwrap_or_else(|| elapsed.saturating_sub(frames_duration(packet_frames)));
             write_timed_audio_batch(
                 &mut file,
                 &mut sample_queue,
                 blockalign as usize,
-                elapsed,
+                packet_start,
                 &mut total_data_bytes,
             )?;
             batch_count += 1;
-            if batch_count.is_multiple_of(100) {
+            if batch_count.is_multiple_of(1_000) {
                 eprintln!(
                     "[Snap Audio] mic batch {batch_count} captured ({:.1} KB)",
                     total_data_bytes as f64 / 1024.0
@@ -1097,7 +1114,7 @@ mod tests {
             &mut file,
             &mut samples,
             block_align,
-            Duration::from_millis(20_010),
+            Duration::from_millis(20_000),
             &mut written,
         )
         .unwrap();

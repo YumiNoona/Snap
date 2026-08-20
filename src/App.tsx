@@ -11,6 +11,7 @@ import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
 import SettingsWindow from "./components/Settings/SettingsWindow";
 import LibraryWindow from "./components/LibraryWindow";
 import DonateWindow from "./components/DonateWindow";
+import WindowPickerWindow from "./components/RecorderLauncher/WindowPickerWindow";
 import "./App.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
 
@@ -87,9 +88,11 @@ function App() {
   const isDeviceWindow = windowLabel === "device";
   const isLibraryWindow = windowLabel === "library";
   const isDonateWindow = windowLabel === "donate";
+  const isWindowPickerWindow = windowLabel === "window-picker";
 
   const [editorVideo, setEditorVideo] = useState(isEditorPreview ? editorPreviewVideo : "");
   const [editorLog, setEditorLog] = useState("");
+  const [editorProjectPath, setEditorProjectPath] = useState("");
   const [editorReady, setEditorReady] = useState(!isEditorWindow);
   const [editorError, setEditorError] = useState<string | null>(null);
 
@@ -101,6 +104,7 @@ function App() {
         const [video, log] = await invoke<[string, string]>("get_pending_editor_paths");
         setEditorVideo(video);
         setEditorLog(log);
+        setEditorProjectPath("");
       } catch {
         // nothing pending yet — wait for the editor-open event
       } finally {
@@ -111,6 +115,7 @@ function App() {
       const [video, log] = e.payload;
       setEditorVideo(video);
       setEditorLog(log);
+      setEditorProjectPath("");
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -153,10 +158,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isEditorPreview && (windowLabel === "main" || isEditorWindow || isTeleprompterWindow || isSettingsWindow || isDeviceWindow || isLibraryWindow || isDonateWindow)) {
+    if (!isEditorPreview && (windowLabel === "main" || isEditorWindow || isTeleprompterWindow || isSettingsWindow || isDeviceWindow || isLibraryWindow || isDonateWindow || isWindowPickerWindow)) {
       invoke("window_ready").catch(() => {});
     }
-  }, [isEditorPreview, windowLabel, isEditorWindow, isTeleprompterWindow, isSettingsWindow, isDeviceWindow, isLibraryWindow, isDonateWindow]);
+  }, [isEditorPreview, windowLabel, isEditorWindow, isTeleprompterWindow, isSettingsWindow, isDeviceWindow, isLibraryWindow, isDonateWindow, isWindowPickerWindow]);
 
   if (isDockWindow) {
     return (
@@ -202,11 +207,26 @@ function App() {
     return <ErrorBoundary onReset={closeEditorWindow}><DonateWindow /></ErrorBoundary>;
   }
 
+  if (isWindowPickerWindow) {
+    return <ErrorBoundary onReset={closeEditorWindow}><WindowPickerWindow /></ErrorBoundary>;
+  }
+
   if (isEditorWindow) {
     if (editorVideo) {
       return (
         <ErrorBoundary onReset={closeEditorWindow}>
-          <Editor videoPath={editorVideo} inputLogPath={editorLog || recordingDataPaths(editorVideo).logPath} onClose={closeEditorWindow} />
+          <Editor
+            key={`${editorVideo}|${editorProjectPath}`}
+            videoPath={editorVideo}
+            inputLogPath={editorLog || recordingDataPaths(editorVideo).logPath}
+            initialProjectPath={editorProjectPath}
+            onOpenProject={(projectPath, video, log) => {
+              setEditorProjectPath(projectPath);
+              setEditorVideo(video);
+              setEditorLog(log);
+            }}
+            onClose={closeEditorWindow}
+          />
         </ErrorBoundary>
       );
     }
@@ -234,6 +254,7 @@ function App() {
                 const jsonPath = await invoke<string>("resolve_recording_log_path", { videoPath: latest.path }).catch(() => recordingDataPaths(latest.path).logPath);
                 setEditorVideo(latest.path);
                 setEditorLog(jsonPath);
+                setEditorProjectPath("");
               }
             } catch (e) {
               console.error("Failed to find recordings:", e);

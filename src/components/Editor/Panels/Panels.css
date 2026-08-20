@@ -560,6 +560,107 @@
 }
 .caption-style-presets button:hover { color: var(--text-primary); border-color: var(--accent); transform: translateY(-1px); }
 
+.caption-control-label {
+  display: block;
+  margin: 8px 0 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.caption-language-field { position: relative; margin-top: 10px; }
+.caption-language-trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.caption-language-trigger:hover,
+.caption-language-trigger.open { border-color: var(--accent); background: var(--bg-surface-raised); }
+.caption-language-trigger.open { box-shadow: 0 0 0 2px var(--accent-glow); }
+.caption-language-trigger > svg:first-child { color: var(--accent); }
+.caption-language-trigger span,
+.caption-language-menu button span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.caption-language-trigger strong,
+.caption-language-menu strong { font-size: 11px; font-weight: 700; }
+.caption-language-trigger small,
+.caption-language-menu small { color: var(--text-tertiary); font-size: 9px; font-weight: 500; }
+.caption-language-chevron { color: var(--text-tertiary); transition: transform .18s ease; }
+.caption-language-trigger.open .caption-language-chevron { transform: rotate(180deg); }
+.caption-language-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  background: color-mix(in srgb, var(--bg-surface-raised) 96%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(0,0,0,.38);
+  animation: caption-menu-in .16s ease-out;
+}
+.caption-language-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 9px;
+  color: var(--text-secondary);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+}
+.caption-language-menu button:hover,
+.caption-language-menu button[aria-selected="true"] { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.caption-language-menu button > svg { flex: 0 0 auto; color: var(--accent); }
+@keyframes caption-menu-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: none; } }
+
+.caption-animation-presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; margin-bottom: 8px; }
+.caption-animation-presets button {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 2px 6px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: 8px;
+  transition: color .16s ease, border-color .16s ease, background .16s ease, transform .16s ease;
+}
+.caption-animation-presets button:hover { color: var(--text-primary); border-color: var(--border-default); transform: translateY(-1px); }
+.caption-animation-presets button.active { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
+.caption-animation-preview { display: grid; width: 28px; height: 20px; place-items: center; color: #fff; background: rgba(0,0,0,.64); border-radius: 5px; font-size: 10px; font-weight: 800; }
+.caption-animation-presets button:hover .caption-animation-preview.fade { animation: caption-demo-fade .65s ease both; }
+.caption-animation-presets button:hover .caption-animation-preview.reveal { animation: caption-demo-reveal .72s steps(5) both; }
+.caption-animation-presets button:hover .caption-animation-preview.pop { animation: caption-demo-pop .52s ease both; }
+.caption-animation-presets button:hover .caption-animation-preview.rise { animation: caption-demo-rise .55s ease both; }
+@keyframes caption-demo-fade { from { opacity: .1; } }
+@keyframes caption-demo-reveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
+@keyframes caption-demo-pop { 0% { opacity: 0; transform: scale(.6); } 70% { transform: scale(1.1); } }
+@keyframes caption-demo-rise { from { opacity: 0; transform: translateY(7px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .caption-language-menu,
+  .caption-animation-presets button:hover .caption-animation-preview { animation: none; }
+}
+
 .ss-drawer-action-btn.danger {
   gap: 7px;
   color: #fca5a5;

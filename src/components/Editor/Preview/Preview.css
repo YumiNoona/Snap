@@ -11,25 +11,30 @@
 }
 
 .preview-canvas {
+  position: relative;
+  z-index: 1;
   max-width: 100%;
   max-height: 100%;
 }
 
-/* Keep the decoder attached to a rendered element. WebView2 can throttle a
-   display:none video after pausing, which makes a later play() look successful
-   while frames remain frozen. */
+/* Keep the decoder inside the live compositor. WebView2 may cull an element
+   that is display:none, fully transparent, or positioned outside the painted
+   area; its clock can then advance while canvas.drawImage(video) keeps seeing
+   the last texture. The canvas covers this tiny nearly-transparent element. */
 .preview-media-source {
   position: absolute;
-  width: 1px;
-  height: 1px;
-  left: -2px;
-  bottom: -2px;
-  opacity: 0;
+  z-index: 0;
+  width: 2px;
+  height: 2px;
+  left: 0;
+  top: 0;
+  opacity: 0.001;
   pointer-events: none;
 }
 
 .preview-error {
   position: absolute;
+  z-index: 2;
   top: var(--space-4);
   color: var(--danger);
   font-size: var(--text-sm);
@@ -40,6 +45,7 @@
 
 .crop-hint {
   position: absolute;
+  z-index: 2;
   bottom: var(--space-4);
   left: 50%;
   transform: translateX(-50%);
@@ -53,6 +59,7 @@
 
 .zoom-badge {
   position: absolute;
+  z-index: 2;
   top: var(--space-3);
   right: var(--space-3);
   font-size: var(--text-xs);

@@ -175,6 +175,27 @@ async fn open_editor_window(
         .map_err(|e| format!("Editor window creation thread died: {e}"))?
 }
 
+/// Keep the heavy editor compositor out of the recording hot path. Hiding the
+/// WebView throttles its rendering while preserving the current project in
+/// memory; the editor is shown again when recording stops or startup fails.
+#[tauri::command]
+fn set_editor_suspended_for_recording(
+    app: tauri::AppHandle,
+    suspended: bool,
+) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("editor") else {
+        return Ok(());
+    };
+    if suspended {
+        let _ = window.emit("recording-starting", ());
+        window.hide().map_err(|error| error.to_string())?;
+    } else {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Called by the frontend after React mounts and the UI is rendered — the
 /// window stays hidden (.visible(false) on the builder) until this fires,
 /// eliminating any white pre-content frame.
@@ -259,6 +280,19 @@ async fn open_donate_window(app: tauri::AppHandle) -> Result<(), String> {
         "Support Snap",
         650.0,
         440.0,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn open_window_picker_window(app: tauri::AppHandle) -> Result<(), String> {
+    open_module_window(
+        app,
+        "window-picker",
+        "index.html?window=window-picker",
+        "Select a window",
+        680.0,
+        540.0,
     )
     .await
 }
@@ -1270,11 +1304,13 @@ pub fn run() {
             export::close_export_sink,
             export::finalize_canvas_export,
             open_editor_window,
+            set_editor_suspended_for_recording,
             open_teleprompter_window,
             open_settings_window,
             open_device_window,
             open_library_window,
             open_donate_window,
+            open_window_picker_window,
             window_ready,
             get_pending_editor_paths,
             begin_region_selection,
@@ -1303,4 +1339,39 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod project_file_tests {
+    use super::write_text_file_atomic;
+    use std::path::PathBuf;
+
+    #[test]
+    fn project_writes_are_atomic_and_keep_the_previous_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "snap-project-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("edit.snap");
+        let path_text = path.to_string_lossy().to_string();
+
+        write_text_file_atomic(path_text.clone(), "first".into()).unwrap();
+        write_text_file_atomic(path_text.clone(), "second".into()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(
+            std::fs::read_to_string(format!("{path_text}.bak")).unwrap(),
+            "first"
+        );
+        assert!(!PathBuf::from(format!("{path_text}.tmp")).exists());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(format!("{path_text}.bak")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
@@ -126,6 +126,10 @@ export default function Panels({
       const sourceTrack = audioTracks.find((track) => track.kind === captionSource);
       if (!sourceTrack) throw new Error(`No ${captionSource} audio track is available in this recording`);
       const track = await transcribeTrack(sourceTrack, captionLanguage);
+      if (track.segments.length === 0) {
+        setCaptionStatus("No audible speech was found on this track. No caption layer was added.");
+        return;
+      }
       onCaptionTracksChange([...captionTracks, track]);
       setCaptionStatus(`Created ${track.segments.length} editable caption segments`);
     } catch (error) {
@@ -599,7 +603,7 @@ export default function Panels({
                 </button>
               ))}
             </div>
-            <SelectRow label="Language" value={captionLanguage} options={["auto", "en", "hi"]} optionLabels={{ auto: "Auto detect", en: "English", hi: "Hindi" }} onChange={(value) => setCaptionLanguage(value as TranscriptionLanguage)} />
+            <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />
             <p className="panel-help-text">Snap transcribes only the selected independent track. Choose Auto detect for Hindi-English mixed speech. Captions remain editable and movable after generation.</p>
             {transcriptionEnv && <p className={`panel-help-text ${transcriptionEnv.available ? "" : "panel-warning"}`}>{transcriptionEnv.message}</p>}
             {transcriptionEnv?.available === false && <>
@@ -619,6 +623,20 @@ export default function Panels({
                 <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0.72)", outlineWidth: 0, fontWeight: 700 } }))}>Classic</button>
                 <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0)", outlineColor: "#000000", outlineWidth: 4, fontWeight: 800 } }))}>Impact</button>
                 <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#0b0d12", backgroundColor: "rgba(255,214,10,0.94)", outlineWidth: 0, fontWeight: 800 } }))}>Highlight</button>
+              </div>
+              <div className="caption-control-label">Entrance animation</div>
+              <div className="caption-animation-presets" aria-label="Caption entrance animation">
+                {(["none", "fade", "reveal", "pop", "rise"] as const).map((animation) => (
+                  <button
+                    type="button"
+                    key={animation}
+                    className={(track.style.animation ?? "none") === animation ? "active" : ""}
+                    onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, animation } }))}
+                  >
+                    <span className={`caption-animation-preview ${animation}`}>Aa</span>
+                    <span>{animation[0].toUpperCase() + animation.slice(1)}</span>
+                  </button>
+                ))}
               </div>
               <Slider label="Vertical Position" value={Math.round(track.style.y * 100)} min={10} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, y: value / 100 } }))} />
               <Slider label="Font Size" value={track.style.fontSize} min={18} max={96} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, fontSize } }))} />
@@ -669,6 +687,61 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function SelectRow({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
   return <label className="field-row select-row"><span className="field-label">{label}</span><select className="layer-select-input" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{optionLabels?.[option] ?? option.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase())}</option>)}</select></label>;
+}
+
+const CAPTION_LANGUAGES: Array<{ value: TranscriptionLanguage; label: string; description: string }> = [
+  { value: "auto", label: "Auto detect", description: "Hindi + English" },
+  { value: "en", label: "English", description: "English speech" },
+  { value: "hi", label: "Hindi", description: "हिंदी भाषण" },
+];
+
+function CaptionLanguagePicker({ value, onChange }: { value: TranscriptionLanguage; onChange: (value: TranscriptionLanguage) => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = CAPTION_LANGUAGES.find((language) => language.value === value) ?? CAPTION_LANGUAGES[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="caption-language-field" ref={rootRef}>
+      <span className="caption-control-label">Language</span>
+      <button type="button" className={`caption-language-trigger ${open ? "open" : ""}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <Languages size={17} />
+        <span><strong>{selected.label}</strong><small>{selected.description}</small></span>
+        <ChevronDown className="caption-language-chevron" size={16} />
+      </button>
+      {open && (
+        <div className="caption-language-menu" role="listbox" aria-label="Caption language">
+          {CAPTION_LANGUAGES.map((language) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={language.value === value}
+              key={language.value}
+              onClick={() => { onChange(language.value); setOpen(false); }}
+            >
+              <span><strong>{language.label}</strong><small>{language.description}</small></span>
+              {language.value === value && <Check size={16} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {

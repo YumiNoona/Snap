@@ -225,10 +225,146 @@ fn parse_timestamp(value: &serde_json::Value) -> Option<u64> {
         .or_else(|| value.as_f64().map(|number| number.max(0.0) as u64))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AudioActivityRange {
+    start_ms: u64,
+    end_ms: u64,
+}
+
+fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("Unable to inspect transcription audio: {error}"))?;
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("Prepared transcription audio is not a valid WAV file".to_string());
+    }
+    let mut cursor = 12usize;
+    let mut sample_rate = 16_000u32;
+    let mut channels = 1u16;
+    let mut bits_per_sample = 16u16;
+    let mut data = None;
+    while cursor + 8 <= bytes.len() {
+        let id = &bytes[cursor..cursor + 4];
+        let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
+        let start = cursor + 8;
+        let end = start.saturating_add(size).min(bytes.len());
+        if id == b"fmt " && end >= start + 16 {
+            channels = u16::from_le_bytes(bytes[start + 2..start + 4].try_into().unwrap());
+            sample_rate = u32::from_le_bytes(bytes[start + 4..start + 8].try_into().unwrap());
+            bits_per_sample = u16::from_le_bytes(bytes[start + 14..start + 16].try_into().unwrap());
+        } else if id == b"data" {
+            data = Some(&bytes[start..end]);
+            break;
+        }
+        cursor = start.saturating_add(size).saturating_add(size % 2);
+    }
+    if channels != 1 || bits_per_sample != 16 || sample_rate == 0 {
+        return Err("Transcription analysis expects 16-bit mono PCM audio".to_string());
+    }
+    let data = data.ok_or_else(|| "Prepared transcription WAV has no audio data".to_string())?;
+    let samples = data
+        .chunks_exact(2)
+        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0)
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let window_samples = (sample_rate as usize / 50).max(1); // 20 ms
+    let mut levels = Vec::with_capacity(samples.len().div_ceil(window_samples));
+    let mut peaks = Vec::with_capacity(levels.capacity());
+    for window in samples.chunks(window_samples) {
+        let sum_squares = window.iter().map(|sample| sample * sample).sum::<f64>();
+        levels.push((sum_squares / window.len().max(1) as f64).sqrt());
+        peaks.push(window.iter().map(|sample| sample.abs()).fold(0.0, f64::max));
+    }
+    let mut sorted = levels.clone();
+    sorted.sort_by(f64::total_cmp);
+    let noise_floor = sorted[sorted.len() / 5];
+    // Absolute floor rejects digital silence; the adaptive component rejects
+    // steady fan/static noise without making continuous speech impossible.
+    let threshold = (noise_floor * 3.2).clamp(0.0032, 0.015);
+    let mut active = levels
+        .iter()
+        .zip(peaks.iter())
+        .map(|(rms, peak)| *rms >= threshold || (*peak >= 0.02 && *rms >= 0.0025))
+        .collect::<Vec<_>>();
+
+    // Bridge natural gaps inside words/sentences, but not long silent spans.
+    let max_gap_windows = 15usize; // 300 ms
+    let mut index = 0usize;
+    while index < active.len() {
+        if active[index] {
+            index += 1;
+            continue;
+        }
+        let gap_start = index;
+        while index < active.len() && !active[index] {
+            index += 1;
+        }
+        if gap_start > 0 && index < active.len() && index - gap_start <= max_gap_windows {
+            active[gap_start..index].fill(true);
+        }
+    }
+
+    let mut ranges: Vec<AudioActivityRange> = Vec::new();
+    let mut start = 0usize;
+    while start < active.len() {
+        if !active[start] {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < active.len() && active[end] {
+            end += 1;
+        }
+        if end - start >= 6 {
+            let start_ms = (start as u64 * 20).saturating_sub(100);
+            let end_ms =
+                (end as u64 * 20 + 200).min(samples.len() as u64 * 1000 / sample_rate as u64);
+            if let Some(previous) = ranges.last_mut() {
+                if start_ms <= previous.end_ms {
+                    previous.end_ms = previous.end_ms.max(end_ms);
+                } else {
+                    ranges.push(AudioActivityRange { start_ms, end_ms });
+                }
+            } else {
+                ranges.push(AudioActivityRange { start_ms, end_ms });
+            }
+        }
+        start = end;
+    }
+    Ok(ranges)
+}
+
+fn align_to_audio_activity(
+    segments: Vec<TranscriptionSegment>,
+    activity: &[AudioActivityRange],
+) -> Vec<TranscriptionSegment> {
+    segments
+        .into_iter()
+        .filter_map(|segment| {
+            let overlaps = activity
+                .iter()
+                .filter(|range| range.end_ms > segment.start_ms && range.start_ms < segment.end_ms)
+                .collect::<Vec<_>>();
+            let first = overlaps.first()?;
+            let last = overlaps.last()?;
+            let start_ms = segment.start_ms.max(first.start_ms);
+            let end_ms = segment.end_ms.min(last.end_ms);
+            (end_ms.saturating_sub(start_ms) >= 120).then_some(TranscriptionSegment {
+                start_ms,
+                end_ms,
+                text: segment.text,
+            })
+        })
+        .collect()
+}
+
 fn parse_output(
     path: &Path,
     source_path: String,
     requested_language: String,
+    activity: &[AudioActivityRange],
 ) -> Result<TranscriptionResult, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("Unable to read transcription output: {error}"))?;
@@ -258,6 +394,7 @@ fn parse_output(
             })
         })
         .collect();
+    let segments = align_to_audio_activity(segments, activity);
     Ok(TranscriptionResult {
         language: detected,
         source_path,
@@ -282,6 +419,10 @@ pub async fn transcribe_audio(
         let stem = source.file_stem().unwrap_or_default().to_string_lossy();
         let prepared = parent.join(format!("{stem}.transcription.wav"));
         let output_prefix = parent.join(format!("{stem}.captions"));
+        let json_path = PathBuf::from(format!("{}.json", output_prefix.to_string_lossy()));
+        // Never leave an earlier hallucinated transcript available after a
+        // silent re-run or a failed replacement attempt.
+        let _ = std::fs::remove_file(&json_path);
         let ffmpeg = background_command("ffmpeg")
             .args(["-y", "-i"])
             .arg(&source)
@@ -294,6 +435,15 @@ pub async fn transcribe_audio(
                 "Unable to prepare transcription audio: {}",
                 String::from_utf8_lossy(&ffmpeg.stderr)
             ));
+        }
+        let activity = pcm16_mono_activity(&prepared)?;
+        if activity.is_empty() {
+            let _ = std::fs::remove_file(&prepared);
+            return Ok(TranscriptionResult {
+                language: request.language,
+                source_path: request.audio_path,
+                segments: Vec::new(),
+            });
         }
         let language = match request.language.as_str() {
             "en" | "hi" => request.language.as_str(),
@@ -321,8 +471,7 @@ pub async fn transcribe_audio(
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        let json_path = PathBuf::from(format!("{}.json", output_prefix.to_string_lossy()));
-        parse_output(&json_path, request.audio_path, request.language)
+        parse_output(&json_path, request.audio_path, request.language, &activity)
     })
     .await
     .map_err(|error| format!("Transcription worker failed: {error}"))?
@@ -330,10 +479,90 @@ pub async fn transcribe_audio(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_timestamp;
+    use super::{
+        align_to_audio_activity, parse_timestamp, pcm16_mono_activity, AudioActivityRange,
+        TranscriptionSegment,
+    };
+    use std::io::Write;
     #[test]
     fn accepts_integer_and_float_offsets() {
         assert_eq!(parse_timestamp(&serde_json::json!(1250)), Some(1250));
         assert_eq!(parse_timestamp(&serde_json::json!(1250.9)), Some(1250));
+    }
+
+    #[test]
+    fn removes_hallucinations_and_clamps_captions_to_audible_time() {
+        let segments = vec![
+            TranscriptionSegment {
+                start_ms: 0,
+                end_ms: 15_920,
+                text: "real speech".into(),
+            },
+            TranscriptionSegment {
+                start_ms: 48_840,
+                end_ms: 54_000,
+                text: "hallucination".into(),
+            },
+        ];
+        let aligned = align_to_audio_activity(
+            segments,
+            &[AudioActivityRange {
+                start_ms: 14_100,
+                end_ms: 23_900,
+            }],
+        );
+        assert_eq!(aligned.len(), 1);
+        assert_eq!(aligned[0].start_ms, 14_100);
+        assert_eq!(aligned[0].end_ms, 15_920);
+    }
+
+    #[test]
+    fn pcm_activity_keeps_late_audio_late_and_rejects_silence() {
+        let path = std::env::temp_dir().join(format!(
+            "snap-caption-activity-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sample_rate = 16_000u32;
+        let mut samples = vec![0i16; sample_rate as usize * 3];
+        for (index, sample) in samples
+            .iter_mut()
+            .enumerate()
+            .skip(sample_rate as usize * 2)
+            .take(sample_rate as usize / 2)
+        {
+            let phase = index as f32 * 440.0 * std::f32::consts::TAU / sample_rate as f32;
+            *sample = (phase.sin() * 8_000.0) as i16;
+        }
+        let data_size = (samples.len() * 2) as u32;
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36 + data_size).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt \x10\0\0\0\x01\0\x01\0").unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
+        file.write_all(&2u16.to_le_bytes()).unwrap();
+        file.write_all(&16u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_size.to_le_bytes()).unwrap();
+        for sample in samples {
+            file.write_all(&sample.to_le_bytes()).unwrap();
+        }
+        drop(file);
+
+        let ranges = pcm16_mono_activity(&path).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(ranges.len(), 1);
+        assert!(
+            ranges[0].start_ms >= 1_850,
+            "speech moved too early: {ranges:?}"
+        );
+        assert!(
+            ranges[0].end_ms <= 2_750,
+            "speech stretched too late: {ranges:?}"
+        );
     }
 }

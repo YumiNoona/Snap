@@ -570,7 +570,6 @@
 .modal-title-copy { min-width: 0; flex: 1; }
 .modal-title-copy h3 { margin: 0; }
 
-.window-picker-card { width: 510px; height: min(390px, calc(100vh - 32px)); }
 .recording-picker-card { width: 500px; height: min(460px, calc(100vh - 32px)); }
 .recording-search-field { margin-top: 16px; }
 .recording-list { gap: 8px; }

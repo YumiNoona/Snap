@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProject, CURRENT_PROJECT_VERSION, migrateProject, projectPathForVideo } from "./project";
+import { createProject, CURRENT_PROJECT_VERSION, migrateProject, projectFingerprint, projectPathForVideo } from "./project";
 
 describe("Snap project documents", () => {
   it("creates a versioned non-destructive project beside the recording data", () => {
@@ -28,5 +28,11 @@ describe("Snap project documents", () => {
 
   it("rejects unknown future schemas instead of silently corrupting them", () => {
     expect(() => migrateProject({ schemaVersion: 99, media: {} })).toThrow(/Unsupported Snap project version/);
+  });
+
+  it("tracks editor changes without marking timestamp-only saves dirty", () => {
+    const project = createProject("C:\\demo.mp4", "C:\\demo\\events.json");
+    expect(projectFingerprint({ ...project, updatedAt: "later" })).toBe(projectFingerprint(project));
+    expect(projectFingerprint({ ...project, editor: { ...project.editor, padding: 99 } })).not.toBe(projectFingerprint(project));
   });
 });

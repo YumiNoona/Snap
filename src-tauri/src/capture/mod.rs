@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -158,6 +158,17 @@ pub fn recording_preflight(
             "FFmpeg is unavailable. Install or bundle FFmpeg before recording.".to_string(),
         );
     }
+    let ffprobe_available = crate::process::background_command("ffprobe")
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ffprobe_available {
+        return Err("FFmpeg is unavailable because its ffprobe companion is missing. Reinstall the bundled FFmpeg package before recording.".to_string());
+    }
     Ok(RecordingPreflight {
         available_bytes,
         required_bytes,
@@ -204,6 +215,8 @@ struct CaptureHandle {
 }
 
 static STATE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
+static GFXCAPTURE_AVAILABLE: OnceLock<bool> = OnceLock::new();
+const RESILIENT_MP4_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -234,6 +247,68 @@ pub(crate) fn process_id_for_target(target_id: &str) -> Option<u32> {
 fn widestr_to_string(wide: &[u16]) -> String {
     let len = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
     String::from_utf16_lossy(&wide[..len])
+}
+
+fn has_gfxcapture() -> bool {
+    *GFXCAPTURE_AVAILABLE.get_or_init(|| {
+        background_command("ffmpeg")
+            .args(["-hide_banner", "-h", "filter=gfxcapture"])
+            .stdin(Stdio::null())
+            .output()
+            .map(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                output.status.success()
+                    && (stdout.contains("Filter gfxcapture")
+                        || stderr.contains("Filter gfxcapture"))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn gfxcapture_source(target_id: &str, crop: Option<CropRect>) -> Option<(String, String)> {
+    let common =
+        "capture_cursor=0:capture_border=0:display_border=0:max_framerate=60:width=-2:height=-2";
+    if let Some(hwnd) = hwnd_from_id(target_id) {
+        let source = format!("gfxcapture=hwnd={}:{common}", hwnd.0 as usize);
+        return Some((source, "window".to_string()));
+    }
+    let monitor = hmonitor_from_id(target_id)?;
+    let Some(crop) = crop else {
+        return Some((
+            format!("gfxcapture=hmonitor={}:{common}", monitor.0 as usize),
+            "full display".to_string(),
+        ));
+    };
+    let bounds = get_target_bounds(target_id.to_string()).ok()?;
+    let source = gfxcapture_region_source(
+        monitor.0 as usize,
+        crop,
+        bounds.w.max(0) as u32,
+        bounds.h.max(0) as u32,
+    );
+    Some((source, "custom region".to_string()))
+}
+
+fn gfxcapture_region_source(
+    monitor: usize,
+    crop: CropRect,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> String {
+    let right = monitor_width.saturating_sub(crop.x.saturating_add(crop.w));
+    let bottom = monitor_height.saturating_sub(crop.y.saturating_add(crop.h));
+    format!(
+        "gfxcapture=hmonitor={monitor}:crop_left={}:crop_top={}:crop_right={right}:crop_bottom={bottom}:capture_cursor=0:capture_border=0:display_border=0:max_framerate=60:width=-2:height=-2",
+        crop.x, crop.y
+    )
+}
+
+fn desktop_duplication_source(output_index: u32) -> String {
+    // Keep duplicate frames enabled. Omitting unchanged frames makes the MP4
+    // end at the last visual update rather than at Stop, while independently
+    // clocked WAV tracks correctly continue to the real recording end.
+    format!("ddagrab=output_idx={output_index}:framerate=60:draw_mouse=0:dup_frames=1")
 }
 
 // ── Enumerate targets (runs fine on any thread) ──────────────────────────────
@@ -506,14 +581,34 @@ fn run_capture_thread(
         }
     }
 
-    // Windows.Graphics.Capture can stop invalidating frames for hardware-overlay
-    // browser/video content on some driver combinations. Full-display recording
-    // therefore uses DXGI Desktop Duplication through FFmpeg; window and region
-    // capture retain WGC because it provides their exact target geometry.
+    // Prefer Windows.Graphics.Capture for windows, regions, and full monitors.
+    // Its compositor-friendly monitor path does not hold Desktop Duplication's
+    // output surface continuously, which can starve Chromium video overlays on
+    // some hybrid/NVIDIA laptops even when Task Manager reports modest load.
+    if has_gfxcapture() {
+        if let Some((source, label)) = gfxcapture_source(target_id, crop) {
+            return run_segmented_gpu_capture(
+                &source,
+                &label,
+                &abs_path,
+                is_recording,
+                is_paused,
+                resume_ready,
+                startup_tx,
+            );
+        }
+    }
+    // Older FFmpeg builds may not expose gfxcapture. Keep Desktop Duplication
+    // as a full-display-only hardware fallback rather than silently changing a
+    // monitor recording into whichever foreground window happens to be active.
     if crop.is_none() {
         if let Some(monitor) = hmonitor_from_id(target_id) {
-            return run_desktop_duplication_capture(
-                monitor,
+            let output_index =
+                desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?;
+            let source = desktop_duplication_source(output_index);
+            return run_segmented_gpu_capture(
+                &source,
+                "full display fallback",
                 &abs_path,
                 is_recording,
                 is_paused,
@@ -746,22 +841,15 @@ fn run_capture_thread(
     result.map_err(|e| format!("{e}"))
 }
 
-fn run_desktop_duplication_capture(
-    monitor: HMONITOR,
+fn run_segmented_gpu_capture(
+    source: &str,
+    source_label: &str,
     output_path: &Path,
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
     resume_ready: Arc<AtomicBool>,
     startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
 ) -> std::result::Result<(), String> {
-    let output_index =
-        desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?;
-    // ddagrab already produces D3D11 hardware frames. Keep them GPU-resident
-    // through encoding and do not synthesize duplicate frames while the screen
-    // is unchanged. The previous hwdownload path copied roughly 500 MB/s over
-    // the system bus at 1080p60 and could stall the desktop after longer runs.
-    let source =
-        format!("ddagrab=output_idx={output_index}:framerate=60:draw_mouse=0:dup_frames=0");
     let stem = output_path
         .file_stem()
         .unwrap_or_default()
@@ -776,8 +864,7 @@ fn run_desktop_duplication_capture(
     while is_recording.load(Ordering::Relaxed) {
         let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
         let _ = std::fs::remove_file(&part);
-        let (mut child, mut control, encoder, startup_lead) =
-            spawn_desktop_duplication(&source, &part)?;
+        let (mut child, mut control, encoder, startup_lead) = spawn_gpu_capture(source, &part)?;
         let stderr = child.stderr.take();
         let stderr_reader = thread::spawn(move || {
             let mut diagnostics = String::new();
@@ -795,14 +882,16 @@ fn run_desktop_duplication_capture(
             // input remain paused until set_paused(false) observes this flag.
             resume_ready.store(true, Ordering::Release);
         }
-        eprintln!("[Snap] Full-display Desktop Duplication segment {part_index} started on output {output_index} ({encoder})");
+        eprintln!("[Snap] GPU {source_label} segment {part_index} started ({encoder})");
         let mut exited = false;
         let mut paused_segment = false;
+        let mut segment_exit_ok = true;
+        let mut segment_exit_status = String::new();
         while is_recording.load(Ordering::Relaxed) {
             if let Ok(Some(status)) = child.try_wait() {
-                eprintln!(
-                    "[Snap] Desktop Duplication segment ended ({status}); attempting recovery"
-                );
+                eprintln!("[Snap] GPU capture segment ended ({status}); attempting recovery");
+                segment_exit_ok = status.success();
+                segment_exit_status = status.to_string();
                 exited = true;
                 break;
             }
@@ -815,14 +904,32 @@ fn run_desktop_duplication_capture(
         if !exited {
             let _ = control.write_all(b"q\n");
             drop(control);
-            let _ = wait_for_ffmpeg(&mut child);
+            segment_exit_ok = wait_for_ffmpeg(&mut child);
+            if !segment_exit_ok {
+                segment_exit_status =
+                    "FFmpeg crashed while finalizing the capture segment".to_string();
+            }
         }
         last_diagnostics = stderr_reader.join().unwrap_or_default();
-        if std::fs::metadata(&part)
-            .map(|value| value.len() > 1_024)
-            .unwrap_or(false)
-        {
-            parts.push(part);
+        if !segment_exit_status.is_empty() {
+            if !last_diagnostics.is_empty() {
+                last_diagnostics.push('\n');
+            }
+            last_diagnostics.push_str(&segment_exit_status);
+        }
+        match validate_capture_segment(&part) {
+            Ok(()) => {
+                if !segment_exit_ok {
+                    eprintln!(
+                        "[Snap] Encoder exited abnormally, but its fragmented segment is recoverable"
+                    );
+                }
+                parts.push(part);
+            }
+            Err(error) => {
+                eprintln!("[Snap] Discarding unusable capture segment: {error}");
+                let _ = std::fs::remove_file(&part);
+            }
         }
         if !is_recording.load(Ordering::Relaxed) {
             break;
@@ -854,7 +961,7 @@ fn run_desktop_duplication_capture(
     Ok(())
 }
 
-fn spawn_desktop_duplication(
+fn spawn_gpu_capture(
     source: &str,
     destination: &Path,
 ) -> std::result::Result<(Child, ChildStdin, &'static str, Duration), String> {
@@ -925,7 +1032,18 @@ fn spawn_desktop_duplication(
             "-filter_complex",
             capture_filter,
         ]);
-        command.args(codec).args(["-fps_mode", "vfr", &destination]);
+        // Write independently decodable MP4 fragments as recording proceeds.
+        // A normal MP4 stores its `moov` index only during clean shutdown, so
+        // a driver/FFmpeg access violation at Stop turns the entire recording
+        // into an unreadable file. Fragmented MP4 keeps its initialization
+        // metadata at the front and limits a crash to at most the current GOP.
+        command.args(codec).args([
+            "-fps_mode",
+            "vfr",
+            "-movflags",
+            RESILIENT_MP4_MOVFLAGS,
+            &destination,
+        ]);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -949,6 +1067,47 @@ fn spawn_desktop_duplication(
     Err("Desktop capture could not start with any supported hardware H.264 encoder".to_string())
 }
 
+fn validate_capture_segment(path: &Path) -> std::result::Result<(), String> {
+    let size = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if size <= 1_024 {
+        return Err(format!(
+            "{} is empty or header-only ({size} bytes)",
+            path.display()
+        ));
+    }
+    // Size alone is not evidence of a usable MP4: a non-fragmented file can
+    // contain megabytes of encoded frames but no `moov` atom after a crash.
+    // Ask ffprobe for the first video packet before admitting this part into
+    // the recovery/remux pipeline.
+    let probe = background_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-read_intervals",
+            "%+#1",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("Unable to validate {}: {error}", path.display()))?;
+    let packet = String::from_utf8_lossy(&probe.stdout);
+    if !probe.status.success() || packet.trim().is_empty() {
+        return Err(format!(
+            "{} contains no readable video packet: {}",
+            path.display(),
+            String::from_utf8_lossy(&probe.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 fn finalize_capture_parts(
     parts: &[std::path::PathBuf],
     output_path: &Path,
@@ -961,8 +1120,41 @@ fn finalize_capture_parts(
     }
     let _ = std::fs::remove_file(output_path);
     if parts.len() == 1 {
-        std::fs::rename(&parts[0], output_path)
-            .map_err(|error| format!("Unable to finalize desktop recording: {error}"))?;
+        // A recording segment is deliberately optimized for low-latency
+        // writing, not random access. Remuxing (without re-encoding) rebuilds
+        // monotonically generated timestamps and moves the MP4 index to the
+        // front. WebView2 can then seek/play repeatedly after timeline edits
+        // instead of getting stuck on an unfinished encoder time base.
+        let output = background_command("ffmpeg")
+            .args([
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "+genpts",
+                "-i",
+            ])
+            .arg(&parts[0])
+            .args([
+                "-map",
+                "0:v:0",
+                "-c",
+                "copy",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(output_path)
+            .output()
+            .map_err(|error| format!("Unable to normalize desktop recording: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "Unable to normalize desktop recording: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
     } else {
         let list_path = output_path.with_extension("capture-parts.txt");
         let list = parts
@@ -982,10 +1174,21 @@ fn finalize_capture_parts(
                 "concat",
                 "-safe",
                 "0",
+                "-fflags",
+                "+genpts",
                 "-i",
             ])
             .arg(&list_path)
-            .args(["-c", "copy"])
+            .args([
+                "-map",
+                "0:v:0",
+                "-c",
+                "copy",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-movflags",
+                "+faststart",
+            ])
             .arg(output_path)
             .output()
             .map_err(|error| format!("Unable to join recovered recording: {error}"))?;
@@ -1279,4 +1482,82 @@ fn write_frame_to_ffmpeg(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        desktop_duplication_source, gfxcapture_region_source, gfxcapture_source,
+        validate_capture_segment, CropRect, RESILIENT_MP4_MOVFLAGS,
+    };
+
+    #[test]
+    fn window_gpu_source_targets_the_exact_hwnd_without_cursor_or_border() {
+        let (source, label) = gfxcapture_source("window:12345", None).unwrap();
+        assert_eq!(label, "window");
+        assert!(source.starts_with("gfxcapture=hwnd=12345:"));
+        assert!(source.contains("capture_cursor=0"));
+        assert!(source.contains("display_border=0"));
+        assert!(source.contains("width=-2:height=-2"));
+    }
+
+    #[test]
+    fn region_gpu_source_converts_the_rectangle_to_edge_crops() {
+        let source = gfxcapture_region_source(
+            88,
+            CropRect {
+                x: 100,
+                y: 50,
+                w: 1280,
+                h: 720,
+            },
+            1920,
+            1080,
+        );
+        assert!(source.contains("hmonitor=88"));
+        assert!(source.contains("crop_left=100"));
+        assert!(source.contains("crop_top=50"));
+        assert!(source.contains("crop_right=540"));
+        assert!(source.contains("crop_bottom=310"));
+    }
+
+    #[test]
+    fn full_display_prefers_the_compositor_friendly_monitor_source() {
+        let (source, label) = gfxcapture_source("monitor:88", None).unwrap();
+        assert_eq!(label, "full display");
+        assert!(source.starts_with("gfxcapture=hmonitor=88:"));
+        assert!(source.contains("max_framerate=60"));
+        assert!(source.contains("capture_cursor=0"));
+    }
+
+    #[test]
+    fn full_display_fallback_keeps_a_continuous_audio_aligned_timeline() {
+        let source = desktop_duplication_source(2);
+        assert!(source.contains("output_idx=2"));
+        assert!(source.contains("framerate=60"));
+        assert!(source.contains("dup_frames=1"));
+    }
+
+    #[test]
+    fn gpu_segments_publish_recoverable_fragment_metadata_up_front() {
+        assert!(RESILIENT_MP4_MOVFLAGS.contains("frag_keyframe"));
+        assert!(RESILIENT_MP4_MOVFLAGS.contains("empty_moov"));
+        assert!(RESILIENT_MP4_MOVFLAGS.contains("default_base_moof"));
+    }
+
+    #[test]
+    fn capture_segment_validation_rejects_header_only_files() {
+        let path = std::env::temp_dir().join(format!(
+            "snap-empty-segment-test-{}-{}.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, [0u8; 128]).unwrap();
+        let error = validate_capture_segment(&path).unwrap_err();
+        assert!(error.contains("empty or header-only"));
+        std::fs::remove_file(path).unwrap();
+    }
 }

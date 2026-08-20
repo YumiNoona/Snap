@@ -22,7 +22,6 @@ interface Props {
   keyframes: Keyframe[];
   onKeyframesChange: (kf: Keyframe[]) => void;
   playing: boolean;
-  onTimeUpdate: (t: number) => void;
   onDuration: (d: number) => void;
   onMediaElementChange?: (element: HTMLVideoElement | null) => void;
   cropMode?: boolean;
@@ -97,7 +96,6 @@ export default function Preview({
   keyframes,
   onKeyframesChange,
   playing,
-  onTimeUpdate,
   onDuration,
   onMediaElementChange,
   cropMode = false,
@@ -121,6 +119,7 @@ export default function Preview({
   const [loadError, setLoadError] = useState("");
   const [videoReady, setVideoReady] = useState(false);
   const rafRef = useRef<number>(0);
+  const decodedFrameCallbackRef = useRef<number | null>(null);
   const renderRef = useRef<() => void>(() => {});
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
   const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
@@ -139,7 +138,6 @@ export default function Preview({
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const inputSourceRef = useRef<string | null>(null);
   const clickRipples = useRef<{ x: number; y: number; ts: number }[]>([]);
-  const prevTimeRef = useRef(-1);
   const prevPlayRef = useRef(-1);
   const effectTimelineTsRef = useRef(-1);
   const wallpaperRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
@@ -203,6 +201,16 @@ export default function Preview({
 
   // Load input log
   useEffect(() => {
+    if (!inputLogPath) {
+      allEvents.current = [];
+      mouseMoveEvents.current = [];
+      clickEvents.current = [];
+      regionRef.current = null;
+      inputSourceRef.current = null;
+      setLoadError("");
+      setEventsReady(true);
+      return;
+    }
     (async () => {
       try {
         const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } =
@@ -860,13 +868,9 @@ export default function Preview({
       prevPlayRef.current = -1;
     }
 
-    if (Math.abs(video.currentTime - prevTimeRef.current / 1000) >= 0.05) {
-      onTimeUpdate(video.currentTime);
-      prevTimeRef.current = ts;
-    }
   }, [
     canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
-    getCursorAt, onTimeUpdate, screenToVideo, spawnClickRipples, currentZoom
+    getCursorAt, screenToVideo, spawnClickRipples, currentZoom
   ]);
   renderRef.current = render;
 
@@ -1110,6 +1114,44 @@ export default function Preview({
     return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
+  // `currentTime` and the decoded texture exposed by WebView2 are not always
+  // advanced atomically. In particular, replaying an MP4 after it reaches the
+  // end or seeking across fragments can move the media clock while
+  // canvas.drawImage(video) still sees the old compositor texture. Render once
+  // for every *presented* video frame as well as from the UI animation loop so
+  // the canvas is invalidated at the exact point a new decoded frame exists.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoReady || typeof video.requestVideoFrameCallback !== "function") return;
+
+    let disposed = false;
+    const onPresentedFrame: VideoFrameRequestCallback = () => {
+      if (disposed) return;
+      renderRef.current();
+      decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
+    };
+    decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
+
+    // A paused seek and a decoder reload each produce a new frame without
+    // necessarily entering the normal playing state. Repaint on those media
+    // lifecycle edges too; the frame callback above will perform the final
+    // paint once WebView2 presents the target frame.
+    const invalidate = () => requestAnimationFrame(() => renderRef.current());
+    video.addEventListener("loadeddata", invalidate);
+    video.addEventListener("seeked", invalidate);
+    video.addEventListener("canplay", invalidate);
+    return () => {
+      disposed = true;
+      video.removeEventListener("loadeddata", invalidate);
+      video.removeEventListener("seeked", invalidate);
+      video.removeEventListener("canplay", invalidate);
+      if (decodedFrameCallbackRef.current !== null) {
+        video.cancelVideoFrameCallback(decodedFrameCallbackRef.current);
+        decodedFrameCallbackRef.current = null;
+      }
+    };
+  }, [videoPath, videoReady]);
+
   useEffect(() => {
     const onResize = () => {
       const video = videoRef.current;
@@ -1123,7 +1165,7 @@ export default function Preview({
     videoRef.current = element;
     onMediaElementChange?.(element);
   }, [onMediaElementChange]);
-  const videoUrl = videoPath.startsWith("/") ? videoPath : convertFileSrc(videoPath);
+  const videoUrl = videoPath.startsWith("/") || /^https?:\/\//i.test(videoPath) ? videoPath : convertFileSrc(videoPath);
 
   return (
     <div

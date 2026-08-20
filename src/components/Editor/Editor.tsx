@@ -1,9 +1,11 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, Trash2, RotateCcw, Captions } from "lucide-react";
+import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -17,11 +19,14 @@ import { useEditorHistory } from "./hooks/useEditorHistory";
 import { useProjectPersistence } from "./hooks/useProjectPersistence";
 import { usePlaybackController } from "./hooks/usePlaybackController";
 import { discoverAudioTracks, mergeAudioTracks } from "../../lib/captions";
+import { loadProjectAtPath } from "../../lib/project";
 import "./Editor.css";
 
 interface Props {
   videoPath: string;
   inputLogPath: string;
+  initialProjectPath?: string;
+  onOpenProject?: (projectPath: string, videoPath: string, inputLogPath: string) => void;
   onClose: () => void;
 }
 
@@ -90,7 +95,7 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
-export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
+export default function Editor({ videoPath, inputLogPath, initialProjectPath = "", onOpenProject, onClose }: Props) {
   const isBrowserPreview =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
   const [config, setConfig] = useState<EditorConfig>(() => ({
@@ -111,17 +116,20 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
   const [showPresets, setShowPresets] = useState(false);
+  const [showFileMenu, setShowFileMenu] = useState(false);
+  const [fileActionStatus, setFileActionStatus] = useState("");
   const [presetName, setPresetName] = useState("");
   const [savedPresets, setSavedPresets] = useState<SavedEditorPreset[]>(loadEditorPresets);
   const [exportProgress, setExportProgress] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
-  const appWindow = isBrowserPreview ? null : getCurrentWindow();
+  const appWindow = useMemo(() => isBrowserPreview ? null : getCurrentWindow(), [isBrowserPreview]);
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
+  const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
     config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
-  const { currentTime, playing, setMediaElement, setCurrentTime, togglePlay, pausePlayback, seekTo } = usePlaybackController({
+  const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration, audioTracks, audioMix: config.audio,
   });
 
@@ -129,10 +137,14 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     ...restored,
     cursorHotspots: { ...restored.cursorHotspots, ...loadCursorHotspots() },
   }), []);
-  const { projectReady, hasSavedProject, projectStatus } = useProjectPersistence({
+  const {
+    projectReady, hasSavedProject, projectStatus, projectDirty, projectSaving, projectPath,
+    saveProjectNow, saveProjectAs,
+  } = useProjectPersistence({
     disabled: isBrowserPreview,
     videoPath,
     inputLogPath,
+    initialProjectPath,
     duration,
     config,
     keyframes,
@@ -142,6 +154,83 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     restoreAudioTracks: (saved) => setAudioTracks((current) => current.length > 0 ? mergeAudioTracks(current, saved) : saved),
     decorateRestoredConfig,
   });
+
+  const handleSaveProject = useCallback(async () => {
+    try {
+      await saveProjectNow();
+      setFileActionStatus("Project saved");
+      setShowFileMenu(false);
+    } catch (error) {
+      setFileActionStatus(`Could not save project: ${error}`);
+    }
+  }, [saveProjectNow]);
+
+  const handleSaveProjectAs = useCallback(async () => {
+    try {
+      const selected = await saveDialog({
+        title: "Save Snap Project As",
+        defaultPath: videoPath.replace(/\.[^\\/.]+$/, ".snap"),
+        filters: [{ name: "Snap Project", extensions: ["snap"] }],
+      });
+      if (!selected) return;
+      const target = selected.toLowerCase().endsWith(".snap") ? selected : `${selected}.snap`;
+      await saveProjectAs(target);
+      setFileActionStatus(`Saved as ${target.split(/[\\/]/).pop()}`);
+      setShowFileMenu(false);
+    } catch (error) {
+      setFileActionStatus(`Could not save project: ${error}`);
+    }
+  }, [saveProjectAs, videoPath]);
+
+  const handleOpenProject = useCallback(async () => {
+    try {
+      if (projectDirty) await saveProjectNow();
+      const selected = await openDialog({
+        title: "Open Snap Project",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Snap Project", extensions: ["snap", "json"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      const project = await loadProjectAtPath(selected);
+      if (!project) throw new Error("The selected project no longer exists");
+      pausePlayback();
+      setShowFileMenu(false);
+      onOpenProject?.(selected, project.media.videoPath, project.media.inputLogPath);
+    } catch (error) {
+      setFileActionStatus(`Could not open project: ${error}`);
+    }
+  }, [onOpenProject, pausePlayback, projectDirty, saveProjectNow]);
+
+  useEffect(() => {
+    if (!appWindow || !projectReady) return;
+    let committingClose = false;
+    const unlisten = appWindow.onCloseRequested(async (event) => {
+      if (committingClose) return;
+      event.preventDefault();
+      committingClose = true;
+      try {
+        await saveProjectNow();
+        await appWindow.close();
+      } catch (error) {
+        committingClose = false;
+        setFileActionStatus(`Could not save before closing: ${error}`);
+        setShowFileMenu(true);
+      }
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [appWindow, projectReady, saveProjectNow]);
+
+  useEffect(() => {
+    if (isBrowserPreview) return;
+    const unlisten = listen("recording-starting", () => {
+      pausePlayback();
+      void saveProjectNow().catch((error) => {
+        console.error("[Snap] Could not autosave before recording:", error);
+      });
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [isBrowserPreview, pausePlayback, saveProjectNow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,6 +274,33 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
     return () => window.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [showPresets]);
 
+  useEffect(() => {
+    if (!showFileMenu) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!fileMenuRef.current?.contains(event.target as Node)) setShowFileMenu(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => window.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [showFileMenu]);
+
+  useEffect(() => {
+    if (isBrowserPreview) return;
+    const onProjectShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "s") {
+        event.preventDefault();
+        if (event.shiftKey) void handleSaveProjectAs();
+        else void handleSaveProject();
+      } else if (key === "o" && !event.shiftKey) {
+        event.preventDefault();
+        void handleOpenProject();
+      }
+    };
+    window.addEventListener("keydown", onProjectShortcut);
+    return () => window.removeEventListener("keydown", onProjectShortcut);
+  }, [handleOpenProject, handleSaveProject, handleSaveProjectAs, isBrowserPreview]);
+
   const applyPresetSettings = useCallback((settings: PresetSettings) => {
     setConfig((current) => ({
       ...current,
@@ -220,10 +336,11 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
   }, [config, presetName, savedPresets.length]);
 
   useEffect(() => {
+    if (isBrowserPreview) return;
     invoke("window_ready").catch((e) => {
       console.error("[Snap] window_ready failed — editor window will stay hidden:", e);
     });
-  }, []);
+  }, [isBrowserPreview]);
 
   const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
 
@@ -527,14 +644,48 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <div className="ss-drag-area" data-tauri-drag-region />
         <div className="ss-topbar-left">
           {/* Back button */}
-          <button className="ss-icon-btn back-btn" onClick={onClose} title="Close Editor">
+          <button className="ss-icon-btn back-btn" onClick={onClose} title="Save and close editor">
             <ChevronLeft size={20} />
           </button>
+
+          <div className="ss-file-menu-wrap" ref={fileMenuRef}>
+            <button
+              className={`ss-file-menu-trigger ${showFileMenu ? "active" : ""}`}
+              type="button"
+              onClick={() => setShowFileMenu((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={showFileMenu}
+            >
+              <File size={15} />
+              <span>File</span>
+              {projectDirty && <i aria-label="Unsaved changes" />}
+              <ChevronDown size={13} />
+            </button>
+            {showFileMenu && (
+              <div className="ss-file-menu" role="menu">
+                <div className="ss-file-menu-heading">
+                  <strong>{projectPath.split(/[\\/]/).pop()}</strong>
+                  <small>{projectDirty ? "Unsaved editor changes" : projectSaving ? "Saving project…" : "All changes saved"}</small>
+                </div>
+                <button role="menuitem" onClick={() => void handleOpenProject()}>
+                  <FolderOpen size={16} /><span><strong>Open Project…</strong><small>Open a saved Snap edit</small></span><kbd>Ctrl O</kbd>
+                </button>
+                <div className="ss-file-menu-divider" />
+                <button role="menuitem" disabled={!projectReady || projectSaving} onClick={() => void handleSaveProject()}>
+                  <Save size={16} /><span><strong>Save</strong><small>Save without exporting</small></span><kbd>Ctrl S</kbd>
+                </button>
+                <button role="menuitem" disabled={!projectReady || projectSaving} onClick={() => void handleSaveProjectAs()}>
+                  <SaveAll size={16} /><span><strong>Save As…</strong><small>Create another project file</small></span><kbd>Ctrl Shift S</kbd>
+                </button>
+                {fileActionStatus && <p className="ss-file-menu-status" role="status">{fileActionStatus}</p>}
+              </div>
+            )}
+          </div>
 
           <span className="ss-file-title">
             {videoPath.split("\\").pop()}
           </span>
-          {projectStatus && <span className="ss-project-status" title="Non-destructive project autosave status">{projectStatus}</span>}
+          {projectStatus && <span className={`ss-project-status ${projectDirty ? "dirty" : ""}`} title="Non-destructive project save status">{projectStatus}</span>}
         </div>
 
         <div className="ss-topbar-center">
@@ -694,12 +845,11 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         <div className="ss-preview-center-area">
           <Preview
             videoPath={videoPath}
-            inputLogPath={inputLogPath}
+            inputLogPath={isBrowserPreview ? "" : inputLogPath}
             config={config}
             keyframes={keyframes}
             onKeyframesChange={setKeyframes}
             playing={playing}
-            onTimeUpdate={setCurrentTime}
             onDuration={(d) => {
               setDuration(d);
               setConfig((c) => (c.trimEnd === 0 ? { ...c, trimEnd: d } : c));
@@ -769,6 +919,7 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         keyframes={keyframes}
         config={config}
         playing={playing}
+        playbackStatus={playbackStatus}
         onTogglePlay={togglePlay}
         onSeek={seekTo}
         onTrimStartChange={handleTrimStart}
@@ -823,6 +974,17 @@ export default function Editor({ videoPath, inputLogPath, onClose }: Props) {
         onLayerDelete={deleteLayer}
         captionTracks={captionTracks}
         onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.map((item) => item.id === segment.id ? segment : item) } : track))}
+        onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => {
+          if (track.id !== trackId) return track;
+          const source = track.segments.find((segment) => segment.id === segmentId);
+          if (!source) return track;
+          const durationMs = Math.max(100, source.endMs - source.startMs);
+          const projectEndMs = Math.round((config.trimEnd || duration) * 1000);
+          const startMs = Math.min(Math.max(Math.round(config.trimStart * 1000), source.endMs + 100), Math.max(0, projectEndMs - durationMs));
+          const copy = { ...source, id: `caption-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, startMs, endMs: startMs + durationMs, userEdited: true };
+          return { ...track, segments: [...track.segments, copy].sort((a, b) => a.startMs - b.startMs) };
+        }))}
+        onCaptionSegmentDelete={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.filter((segment) => segment.id !== segmentId) } : track))}
       />
       {showExport && (
         <ExportModal

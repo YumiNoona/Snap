@@ -91,7 +91,10 @@ export function migrateProject(value: unknown): SnapProject {
 }
 
 export async function loadProject(videoPath: string): Promise<SnapProject | null> {
-  const path = projectPathForVideo(videoPath);
+  return loadProjectAtPath(projectPathForVideo(videoPath));
+}
+
+export async function loadProjectAtPath(path: string): Promise<SnapProject | null> {
   const text = await invoke<string | null>("read_optional_text_file", { path });
   if (text === null) return null;
   try {
@@ -103,10 +106,20 @@ export async function loadProject(videoPath: string): Promise<SnapProject | null
   }
 }
 
-export async function saveProject(project: SnapProject): Promise<void> {
+export async function saveProjectAtPath(project: SnapProject, path: string): Promise<SnapProject> {
   const updated = { ...project, updatedAt: new Date().toISOString() };
   await invoke("write_text_file_atomic", {
-    path: projectPathForVideo(updated.media.videoPath),
+    path,
     contents: JSON.stringify(updated, null, 2),
   });
+  return updated;
+}
+
+export async function saveProject(project: SnapProject): Promise<SnapProject> {
+  return saveProjectAtPath(project, projectPathForVideo(project.media.videoPath));
+}
+
+export function projectFingerprint(project: SnapProject): string {
+  const { updatedAt: _updatedAt, ...stable } = project;
+  return JSON.stringify(stable);
 }

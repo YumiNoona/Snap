@@ -64,6 +64,75 @@
   color: var(--text-secondary);
 }
 
+.ss-file-menu-wrap { position: relative; }
+.ss-file-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+}
+.ss-file-menu-trigger:hover,
+.ss-file-menu-trigger.active { color: var(--text-primary); background: var(--bg-surface-raised); border-color: var(--border-subtle); }
+.ss-file-menu-trigger > i { width: 6px; height: 6px; background: #f59e0b; border-radius: 50%; box-shadow: 0 0 8px rgba(245,158,11,.6); }
+.ss-file-menu-trigger > svg:last-child { transition: transform var(--dur-fast); }
+.ss-file-menu-trigger.active > svg:last-child { transform: rotate(180deg); }
+.ss-file-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 300px;
+  padding: 7px;
+  color: var(--text-primary);
+  background: rgba(20, 23, 31, .99);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: 0 20px 54px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.025);
+  animation: file-menu-in var(--dur-fast) var(--ease-out-back) both;
+}
+@keyframes file-menu-in { from { opacity: 0; transform: translateY(-5px) scale(.985); } to { opacity: 1; transform: none; } }
+.ss-file-menu-heading { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 7px 9px 10px; }
+.ss-file-menu-heading strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ss-file-menu-heading small { color: var(--text-tertiary); font-size: 10px; }
+.ss-file-menu > button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 8px;
+  color: var(--text-secondary);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.ss-file-menu > button:hover { color: var(--text-primary); background: var(--bg-surface-raised); }
+.ss-file-menu > button:disabled { cursor: default; opacity: .45; }
+.ss-file-menu > button > svg { color: #93c5fd; }
+.ss-file-menu > button > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.ss-file-menu > button strong { font-size: 11px; }
+.ss-file-menu > button small { color: var(--text-tertiary); font-size: 9px; }
+.ss-file-menu kbd { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 8px; font-weight: 500; }
+.ss-file-menu-divider { height: 1px; margin: 4px 7px; background: var(--border-subtle); }
+.ss-file-menu-status { margin: 5px 7px 2px; color: var(--text-tertiary); font-size: 9px; line-height: 1.35; }
+.ss-project-status.dirty { color: #fbbf24; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ss-file-menu { animation: none; }
+}
+
 .ss-topbar-center {
   position: absolute;
   left: 50%;

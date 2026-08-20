@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use rdev::EventType;
 use serde::Serialize;
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 // ── Globals — one persistent hook, one active writer ─────────────────────────
 
@@ -20,6 +21,7 @@ static IS_PAUSED: AtomicBool = AtomicBool::new(false);
 static PAUSE_STARTED: Mutex<Option<Instant>> = Mutex::new(None);
 static PAUSED_ACCUM_MS: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_START_MS: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_START_QPC_100NS: AtomicU64 = AtomicU64::new(0);
 
 /// The single shared writer. None when not logging, Some when logging.
 static ACTIVE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
@@ -27,12 +29,15 @@ static ACTIVE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 /// Event counter reset on each start, read on stop.
 static EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Mouse-move throttle: last time a mousemove was logged.
-static LAST_MOUSE: Mutex<Option<Instant>> = Mutex::new(None);
+/// Mouse-move throttle on the persistent hook's monotonic clock. Atomics keep
+/// the Windows hook callback lock-free for high-polling-rate gaming mice.
+static HOOK_EPOCH: OnceLock<Instant> = OnceLock::new();
+static LAST_MOUSE_US: AtomicU64 = AtomicU64::new(0);
 
 /// Last known mouse position — used to attach coordinates to click events
 /// since rdev::ButtonPress/ButtonRelease don't carry position data.
-static LAST_POSITION: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
+static LAST_POSITION_X: AtomicU64 = AtomicU64::new(0f64.to_bits());
+static LAST_POSITION_Y: AtomicU64 = AtomicU64::new(0f64.to_bits());
 
 /// Session start time — reset on each call to start_input_logging so that
 /// timestamps are relative to the current recording, not the hook thread's
@@ -52,6 +57,19 @@ fn active_session_elapsed_ms() -> Option<u64> {
         paused_ms = paused_ms.saturating_add(pause_started.elapsed().as_millis() as u64);
     }
     Some((session_start.elapsed().as_millis() as u64).saturating_sub(paused_ms))
+}
+
+fn qpc_100ns() -> Option<u64> {
+    let mut counter = 0i64;
+    let mut frequency = 0i64;
+    unsafe {
+        QueryPerformanceCounter(&mut counter).ok()?;
+        QueryPerformanceFrequency(&mut frequency).ok()?;
+    }
+    if counter < 0 || frequency <= 0 {
+        return None;
+    }
+    Some((counter as u128 * 10_000_000u128 / frequency as u128) as u64)
 }
 
 // ── Log event struct ─────────────────────────────────────────────────────────
@@ -141,31 +159,23 @@ fn ensure_hook_started() {
                     return;
                 }
 
-                // Read session start from the shared static (reset on each recording)
-                let session_start = match *SESSION_START.lock().unwrap() {
-                    Some(start) => start,
-                    None => return,
-                };
-                let ts = (session_start.elapsed().as_millis() as u64)
-                    .saturating_sub(PAUSED_ACCUM_MS.load(Ordering::Relaxed));
-
                 let log_event = match event.event_type {
                     EventType::MouseMove { x, y } => {
-                        // Update last known position for click events
-                        if let Ok(mut pos) = LAST_POSITION.lock() {
-                            *pos = (x, y);
+                        LAST_POSITION_X.store(x.to_bits(), Ordering::Relaxed);
+                        LAST_POSITION_Y.store(y.to_bits(), Ordering::Relaxed);
+                        let now_us =
+                            HOOK_EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64;
+                        let previous = LAST_MOUSE_US.load(Ordering::Relaxed);
+                        // 120 Hz is denser than the 60 fps video. Gate before
+                        // touching the session clock so discarded 500/1000 Hz
+                        // mouse packets never contend with recorder control.
+                        if previous != 0 && now_us.saturating_sub(previous) < 8_000 {
+                            return;
                         }
-
-                        let mut last = LAST_MOUSE.lock().unwrap();
-                        let now = Instant::now();
-                        if let Some(prev) = *last {
-                            // ~250Hz mousemove cap — dense enough for smooth cursor
-                            // interpolation without exploding the log file size.
-                            if now.duration_since(prev) < Duration::from_micros(4_000) {
-                                return;
-                            }
-                        }
-                        *last = Some(now);
+                        LAST_MOUSE_US.store(now_us.max(1), Ordering::Relaxed);
+                        let Some(ts) = active_session_elapsed_ms() else {
+                            return;
+                        };
                         LogEvent {
                             ts,
                             event_type: "mousemove",
@@ -176,7 +186,7 @@ fn ensure_hook_started() {
                         }
                     }
                     EventType::KeyPress(key) => LogEvent {
-                        ts,
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
                         event_type: "keydown",
                         x: None,
                         y: None,
@@ -184,7 +194,7 @@ fn ensure_hook_started() {
                         button: None,
                     },
                     EventType::KeyRelease(key) => LogEvent {
-                        ts,
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
                         event_type: "keyup",
                         x: None,
                         y: None,
@@ -193,9 +203,10 @@ fn ensure_hook_started() {
                     },
                     EventType::ButtonPress(btn) => {
                         // Attach last known mouse position to click events
-                        let (px, py) = *LAST_POSITION.lock().unwrap();
+                        let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
+                        let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
                         LogEvent {
-                            ts,
+                            ts: active_session_elapsed_ms().unwrap_or_default(),
                             event_type: "mousedown",
                             x: Some(px),
                             y: Some(py),
@@ -204,9 +215,10 @@ fn ensure_hook_started() {
                         }
                     }
                     EventType::ButtonRelease(btn) => {
-                        let (px, py) = *LAST_POSITION.lock().unwrap();
+                        let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
+                        let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
                         LogEvent {
-                            ts,
+                            ts: active_session_elapsed_ms().unwrap_or_default(),
                             event_type: "mouseup",
                             x: Some(px),
                             y: Some(py),
@@ -215,7 +227,7 @@ fn ensure_hook_started() {
                         }
                     }
                     EventType::Wheel { delta_x, delta_y } => LogEvent {
-                        ts,
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
                         event_type: "wheel",
                         x: Some(delta_x as f64),
                         y: Some(delta_y as f64),
@@ -287,14 +299,16 @@ pub async fn start_input_logging(
     *SESSION_START.lock().map_err(|e| e.to_string())? = Some(Instant::now());
     PAUSED_ACCUM_MS.store(0, Ordering::SeqCst);
     CAPTURE_START_MS.store(0, Ordering::SeqCst);
+    CAPTURE_START_QPC_100NS.store(0, Ordering::SeqCst);
     *PAUSE_STARTED.lock().map_err(|e| e.to_string())? = None;
     IS_PAUSED.store(false, Ordering::SeqCst);
 
     // Reset last mouse position
-    *LAST_POSITION.lock().map_err(|e| e.to_string())? = (0.0, 0.0);
+    LAST_POSITION_X.store(0f64.to_bits(), Ordering::SeqCst);
+    LAST_POSITION_Y.store(0f64.to_bits(), Ordering::SeqCst);
 
     // Reset mouse throttle
-    *LAST_MOUSE.lock().map_err(|e| e.to_string())? = None;
+    LAST_MOUSE_US.store(0, Ordering::SeqCst);
 
     // Build the writer first, then write the recording region meta line before
     // any event can be flushed — the hook thread may already be alive and starts
@@ -344,11 +358,34 @@ pub fn mark_capture_start_with_lead(startup_lead: Duration) {
     };
     let ts = now_ms.saturating_sub(startup_lead.as_millis() as u64);
     CAPTURE_START_MS.store(ts, Ordering::SeqCst);
+    if let Some(now_qpc) = qpc_100ns() {
+        CAPTURE_START_QPC_100NS.store(
+            now_qpc.saturating_sub(startup_lead.as_nanos() as u64 / 100),
+            Ordering::SeqCst,
+        );
+    }
     if let Ok(mut guard) = ACTIVE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
             let _ = writeln!(w, "{{\"type\":\"meta\",\"captureStartMs\":{ts}}}");
         }
     }
+}
+
+/// Convert WASAPI's packet QPC timestamp (100 ns units) to the encoded video
+/// timeline. Unlike callback arrival time, this remains stable when the audio
+/// thread is scheduled late or a driver returns several buffered packets.
+pub fn audio_packet_timeline(packet_qpc_100ns: u64) -> Option<Duration> {
+    let capture_start = CAPTURE_START_QPC_100NS.load(Ordering::Acquire);
+    if capture_start == 0 || packet_qpc_100ns < capture_start {
+        return None;
+    }
+    let paused_100ns = PAUSED_ACCUM_MS
+        .load(Ordering::Relaxed)
+        .saturating_mul(10_000);
+    let active_100ns = packet_qpc_100ns
+        .saturating_sub(capture_start)
+        .saturating_sub(paused_100ns);
+    Some(Duration::from_nanos(active_100ns.saturating_mul(100)))
 }
 
 /// Active wall-clock position of the encoded recording, excluding pauses.

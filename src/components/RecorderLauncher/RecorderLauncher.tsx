@@ -14,7 +14,6 @@ import {
   Mic,
   Volume2,
   FileText,
-  AppWindow,
   Search,
   ChevronRight,
   Download,
@@ -95,8 +94,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   // Navigation / Views
   const [activeView, setActiveView] = useState<"launcher" | "device">("launcher");
   const [showFileMenu, setShowFileMenu] = useState(false);
-  const [showWindowPicker, setShowWindowPicker] = useState(false);
-  const [windowSearch, setWindowSearch] = useState("");
   const [recordingSearch, setRecordingSearch] = useState("");
   const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [regionScreen, setRegionScreen] = useState({ x: 0, y: 0, scale: 1 });
@@ -122,6 +119,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const startingRef = useRef(false);
   const pauseTransitionRef = useRef(false);
   const activeSessionIdRef = useRef("");
+  const windowTargetHandlerRef = useRef<(targetId: string) => void>(() => {});
 
   // Keep the ref in sync so the elapsed interval can pause without re-creating.
   useEffect(() => {
@@ -158,6 +156,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       else if (payload.phase === "finalizing") setRecordStatus("Finalizing recording…");
       else if (payload.phase === "failed" && payload.error) setRecordStatus(`Error: ${payload.error}`);
     });
+    return () => { unlisten.then((stop) => stop()); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<string>("window-target-selected", ({ payload }) => windowTargetHandlerRef.current(payload));
     return () => { unlisten.then((stop) => stop()); };
   }, []);
 
@@ -294,6 +297,9 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     startingRef.current = true;
     lastDataDirRef.current = "";
     try {
+      // The editor owns a continuously rendered preview canvas. Keep it out of
+      // the capture hot path even if the user left that window open.
+      await invoke("set_editor_suspended_for_recording", { suspended: true });
       const videosDir = await invoke<string>("get_videos_dir");
       const stamp = Date.now();
       const sessionId = `desktop-${stamp}`;
@@ -392,6 +398,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       if (lastDataDirRef.current && lastVideoRef.current) {
         await invoke("update_recording_session", { dataDir: lastDataDirRef.current, videoPath: lastVideoRef.current, status: "failed", error: String(e) }).catch(() => {});
       }
+      await invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
     }
   };
 
@@ -433,6 +440,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     const targetLog = lastLogRef.current || lastLog;
     if (failures.length === 0 && settings.autoOpenEditor && targetVideo && targetLog) {
       onOpenEditor(targetVideo, targetLog);
+    } else {
+      invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
     }
   };
 
@@ -444,15 +453,14 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   };
 
   const handleWindow = () => {
-    setWindowSearch("");
-    setShowWindowPicker(true);
+    invoke("open_window_picker_window").catch((error) => setRecordStatus(`Cannot open window picker: ${error}`));
   };
 
   const handlePickWindow = (id: string) => {
-    setShowWindowPicker(false);
     setSelectedTarget(id);
     startWithCountdown(id);
   };
+  windowTargetHandlerRef.current = handlePickWindow;
 
   const handleCustom = async () => {
     try {
@@ -745,45 +753,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           </button>
         </aside>
       </div>
-
-      {/* ── Window Picker Modal ────────────────────────────────────── */}
-      {showWindowPicker && (
-        <div className="modal-overlay" onClick={() => setShowWindowPicker(false)}>
-          <div className="focusee-modal-card window-picker-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-heading-row">
-              <div className="modal-title-icon"><AppWindow size={18} /></div>
-              <div className="modal-title-copy">
-                <h3>Select a window</h3>
-                <p className="modal-sub">Choose an application to capture</p>
-              </div>
-              <button className="settings-close-btn" title="Close" onClick={() => setShowWindowPicker(false)}><X size={14} /></button>
-            </div>
-            <label className="window-search-field">
-              <Search size={15} />
-              <input value={windowSearch} onChange={(event) => setWindowSearch(event.target.value)} placeholder="Search open windows" autoFocus />
-            </label>
-            <div className="modal-window-list">
-              {targets
-                .filter((t) => t.target_type === "window" && t.name.toLowerCase().includes(windowSearch.trim().toLowerCase()))
-                .map((t) => (
-                  <button
-                    key={t.id}
-                    className="window-option-btn"
-                    onClick={() => handlePickWindow(t.id)}
-                  >
-                    <span className="window-option-icon"><AppWindow size={15} /></span>
-                    <span className="window-option-copy"><strong>{t.name}</strong><small>Application window</small></span>
-                    <ChevronRight size={15} className="window-option-arrow" />
-                  </button>
-                ))}
-              {targets.filter((t) => t.target_type === "window" && t.name.toLowerCase().includes(windowSearch.trim().toLowerCase())).length === 0 && (
-                <div className="window-empty-state"><Search size={20} /><span>No matching windows</span></div>
-              )}
-            </div>
-            <div className="modal-footer-row"><span>{targets.filter((t) => t.target_type === "window").length} windows available</span><button className="modal-close-btn" onClick={() => setShowWindowPicker(false)}>Cancel</button></div>
-          </div>
-        </div>
-      )}
 
       {/* ── Region Selector Overlay ────────────────────────────────── */}
       {showRegionSelector && (

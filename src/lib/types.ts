@@ -210,6 +210,7 @@ export interface CaptionStyle {
   x: number;
   y: number;
   maxWidth: number;
+  animation?: "none" | "fade" | "reveal" | "pop" | "rise";
 }
 
 export interface CaptionTrack {

@@ -3,7 +3,8 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle } from "lucide-react";
+import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { AudioTrack, CaptionSegment, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
@@ -16,6 +17,7 @@ interface Props {
   keyframes: Keyframe[];
   config: EditorConfig;
   playing: boolean;
+  playbackStatus: TransportStatus;
   onTogglePlay: () => void;
   onSeek: (t: number) => void;
   onTrimStartChange: (t: number) => void;
@@ -43,6 +45,8 @@ interface Props {
   onLayerDelete: (id: string) => void;
   captionTracks: CaptionTrack[];
   onCaptionSegmentChange: (trackId: string, segment: CaptionSegment) => void;
+  onCaptionSegmentDuplicate: (trackId: string, segmentId: string) => void;
+  onCaptionSegmentDelete: (trackId: string, segmentId: string) => void;
 }
 
 interface ZoomSegment {
@@ -64,6 +68,7 @@ export default function Timeline({
   keyframes,
   config,
   playing,
+  playbackStatus,
   onTogglePlay,
   onSeek,
   onTrimStartChange,
@@ -91,6 +96,8 @@ export default function Timeline({
   onLayerDelete,
   captionTracks,
   onCaptionSegmentChange,
+  onCaptionSegmentDuplicate,
+  onCaptionSegmentDelete,
 }: Props) {
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -102,12 +109,16 @@ export default function Timeline({
   const [contextMenu, setContextMenu] = useState<
     | { kind: "zoom"; x: number; y: number; region: ZoomRegionSelection }
     | { kind: "layer"; x: number; y: number; layer: Layer }
+    | { kind: "caption"; x: number; y: number; trackId: string; segment: CaptionSegment }
+    | { kind: "audio"; x: number; y: number; channel: "system" | "mic"; muted: boolean; label: string }
+    | { kind: "clip"; x: number; y: number }
     | null
   >(null);
 
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const timeAreaRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Clean up drag listeners on unmount
   useEffect(() => {
@@ -131,13 +142,20 @@ export default function Timeline({
       window.removeEventListener("resize", close);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    requestAnimationFrame(() => contextMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
+  }, [contextMenu]);
   const deviceTrack = audioTracks.find((track) => track.kind === "device");
   const systemTrack = deviceTrack ?? audioTracks.find((track) => track.kind === "system");
   const micTrack = audioTracks.find((track) => track.kind === "microphone");
   const hasSys = !!systemTrack;
   const hasMic = !!micTrack;
   const hasDeviceAudio = !!deviceTrack;
-  const waveformBuckets = Math.max(64, Math.min(2000, Math.round(contentWidth * zoomScale / 3)));
+  // Quantize bucket counts so resizing the panel does not launch a new native
+  // WAV scan for every pixel. The canvas stretches cached data between steps.
+  const waveformBuckets = Math.max(64, Math.min(2000, Math.round(contentWidth * zoomScale / 192) * 64));
 
   // Build RMS waveforms from the same validated tracks used by playback,
   // captions, project persistence, and export.
@@ -389,12 +407,24 @@ export default function Timeline({
       pending = { ...segment, startMs: Math.round(visualStart * 1000), endMs: Math.round(visualEnd * 1000), userEdited: true };
       bar.style.left = `${x(visualStart)}px`; bar.style.width = `${Math.max(18, w(visualEnd - visualStart))}px`;
     };
-    const cleanup = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); bar.classList.remove("editing"); };
+    const cleanup = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      document.removeEventListener("pointercancel", cancel);
+      bar.classList.remove("editing");
+      dragCleanupRef.current = null;
+    };
     const up = () => { cleanup(); if (pending) onCaptionSegmentChange(trackId, pending); };
+    const cancel = () => {
+      cleanup();
+      bar.style.left = `${x(initialStart)}px`;
+      bar.style.width = `${Math.max(18, w(clipDuration))}px`;
+    };
     bar.classList.add("editing");
-    document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+    document.addEventListener("pointercancel", cancel);
     dragCleanupRef.current = cleanup;
-    void clipDuration;
   };
 
   const beginResize = (event: React.MouseEvent) => {
@@ -480,9 +510,22 @@ export default function Timeline({
   )?.label || "Wide 16:9";
 
   const menuPosition = (event: React.MouseEvent) => ({
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 196)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 142)),
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 216)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 210)),
   });
+
+  const handleContextMenuKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+    if (items.length === 0) return;
+    event.preventDefault();
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home" ? 0
+      : event.key === "End" ? items.length - 1
+        : event.key === "ArrowDown" ? (current + 1 + items.length) % items.length
+          : (current - 1 + items.length) % items.length;
+    items[next].focus();
+  };
 
   return (
     <div className="ss-timeline-container" style={{ height: `${timelineHeight}px` }}>
@@ -538,14 +581,14 @@ export default function Timeline({
             </button>
 
             <button
-              className={`tb-play-icon-btn ${playing ? "is-playing" : "is-paused"}`}
+              className={`tb-play-icon-btn ${playing ? "is-playing" : "is-paused"} ${["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "is-loading" : ""}`}
               onClick={onTogglePlay}
-              title={playing ? "Pause" : "Play"}
-              aria-label={playing ? "Pause preview" : "Play preview"}
+              title={["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "Cancel playback loading" : playing ? "Pause" : "Play"}
+              aria-label={["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "Cancel playback loading" : playing ? "Pause preview" : "Play preview"}
             >
-              <span className="tb-play-morph-icon" aria-hidden="true">
-                <MorphIcon icon={playing ? Pause : Play} spring="snappy" size={19} />
-              </span>
+              {["starting", "buffering", "seeking", "recovering"].includes(playbackStatus)
+                ? <LoaderCircle className="tb-play-loading-icon" size={18} aria-hidden="true" />
+                : <span className="tb-play-morph-icon" aria-hidden="true"><MorphIcon icon={playing ? Pause : Play} spring="snappy" size={19} /></span>}
             </button>
 
             <button className="tb-transport-btn" onClick={() => onSeek(duration)} title="Jump to End">
@@ -629,6 +672,11 @@ export default function Timeline({
                 left: x(config.trimStart),
                 width: `${w((config.trimEnd || duration) - config.trimStart)}px`,
               }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setContextMenu({ kind: "clip", ...menuPosition(event) });
+              }}
             >
               <div className="clip-tag-content">
                 <Film size={12} />
@@ -645,12 +693,30 @@ export default function Timeline({
           </div>
 
           {/* System Audio layer */}
-          <div className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`} title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}>
+          <div
+            className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`}
+            title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}
+            onContextMenu={(event) => {
+              if (!hasSys) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ kind: "audio", ...menuPosition(event), channel: "system", muted: config.audio.systemMuted, label: hasDeviceAudio ? "Device audio" : "Desktop audio" });
+            }}
+          >
             {hasSys ? (waveforms.sys ? <WaveRow data={waveforms.sys} /> : <span className="empty-track-label">{waveformErrors.sys ? "Waveform unavailable" : "Reading desktop audio…"}</span>) : <span className="empty-track-label">No desktop audio</span>}
           </div>
 
           {/* Mic Audio layer */}
-          <div className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`} title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}>
+          <div
+            className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`}
+            title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}
+            onContextMenu={(event) => {
+              if (!hasMic) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ kind: "audio", ...menuPosition(event), channel: "mic", muted: config.audio.micMuted, label: "Microphone audio" });
+            }}
+          >
             {hasMic ? (waveforms.mic ? <WaveRow data={waveforms.mic} /> : <span className="empty-track-label">{waveformErrors.mic ? "Waveform unavailable" : "Reading microphone audio…"}</span>) : <span className="empty-track-label">No microphone audio</span>}
           </div>
 
@@ -695,7 +761,19 @@ export default function Timeline({
           {captionTracks.map((track) => (
             <div className="ss-track-row caption-track" key={track.id}>
               {track.segments.map((segment) => (
-                <div className="caption-clip-bar" key={segment.id} style={{ left: x(segment.startMs / 1000), width: Math.max(18, w((segment.endMs - segment.startMs) / 1000)) }} onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "move")} onClick={(event) => event.stopPropagation()} title="Drag to move · drag edges to change timing">
+                <div
+                  className="caption-clip-bar"
+                  key={segment.id}
+                  style={{ left: x(segment.startMs / 1000), width: Math.max(18, w((segment.endMs - segment.startMs) / 1000)) }}
+                  onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "move")}
+                  onClick={(event) => event.stopPropagation()}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setContextMenu({ kind: "caption", ...menuPosition(event), trackId: track.id, segment });
+                  }}
+                  title="Drag to move · drag edges to change timing"
+                >
                   <button className="layer-bar-handle left" onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "start")} aria-label="Change caption start" />
                   <span>{segment.text}</span>
                   <button className="layer-bar-handle right" onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "end")} aria-label="Change caption end" />
@@ -756,34 +834,79 @@ export default function Timeline({
       </div>
       {contextMenu && createPortal(
         <div
+          ref={contextMenuRef}
           className="timeline-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label={`${contextMenu.kind} actions`}
           onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={handleContextMenuKeys}
         >
-          <button role="menuitem" onClick={() => {
-            if (contextMenu.kind === "zoom") onZoomRegionSelect(contextMenu.region);
-            else onLayerSelect(contextMenu.layer.id);
+          <div className="timeline-context-title">
+            {contextMenu.kind === "zoom" ? "Zoom region"
+              : contextMenu.kind === "layer" ? `${contextMenu.layer.type} layer`
+                : contextMenu.kind === "caption" ? "Caption segment"
+                  : contextMenu.kind === "audio" ? contextMenu.label
+                    : "Video clip"}
+          </div>
+          {(contextMenu.kind === "zoom" || contextMenu.kind === "layer") && <>
+            <button role="menuitem" onClick={() => {
+              if (contextMenu.kind === "zoom") onZoomRegionSelect(contextMenu.region);
+              else onLayerSelect(contextMenu.layer.id);
+              setContextMenu(null);
+            }}>
+              <SlidersHorizontal size={15} /> Edit parameters
+            </button>
+            <button role="menuitem" onClick={() => {
+              if (contextMenu.kind === "zoom") onZoomRegionDuplicate(contextMenu.region);
+              else onLayerDuplicate(contextMenu.layer.id);
+              setContextMenu(null);
+            }}>
+              <Copy size={15} /> Duplicate
+            </button>
+            <div className="timeline-context-separator" />
+            <button className="danger" role="menuitem" onClick={() => {
+              if (contextMenu.kind === "zoom") onZoomRegionDelete(contextMenu.region);
+              else onLayerDelete(contextMenu.layer.id);
+              setContextMenu(null);
+            }}>
+              <Trash2 size={15} /> Remove
+            </button>
+          </>}
+          {contextMenu.kind === "caption" && <>
+            <button role="menuitem" onClick={() => { onSeek(contextMenu.segment.startMs / 1000); setContextMenu(null); }}>
+              <SlidersHorizontal size={15} /> Go to and edit
+            </button>
+            <button role="menuitem" onClick={() => { onCaptionSegmentDuplicate(contextMenu.trackId, contextMenu.segment.id); setContextMenu(null); }}>
+              <Copy size={15} /> Duplicate
+            </button>
+            <div className="timeline-context-separator" />
+            <button className="danger" role="menuitem" onClick={() => { onCaptionSegmentDelete(contextMenu.trackId, contextMenu.segment.id); setContextMenu(null); }}>
+              <Trash2 size={15} /> Remove
+            </button>
+          </>}
+          {contextMenu.kind === "audio" && <button role="menuitem" onClick={() => {
+            onAudioMuteChange(contextMenu.channel, !contextMenu.muted);
             setContextMenu(null);
           }}>
-            <SlidersHorizontal size={15} /> Edit parameters
-          </button>
-          <button role="menuitem" onClick={() => {
-            if (contextMenu.kind === "zoom") onZoomRegionDuplicate(contextMenu.region);
-            else onLayerDuplicate(contextMenu.layer.id);
-            setContextMenu(null);
-          }}>
-            <Copy size={15} /> Duplicate
-          </button>
-          <div className="timeline-context-separator" />
-          <button className="danger" role="menuitem" onClick={() => {
-            if (contextMenu.kind === "zoom") onZoomRegionDelete(contextMenu.region);
-            else onLayerDelete(contextMenu.layer.id);
-            setContextMenu(null);
-          }}>
-            <Trash2 size={15} /> Remove
-          </button>
+            {contextMenu.muted ? <Volume2 size={15} /> : <VolumeX size={15} />}
+            {contextMenu.muted ? "Unmute track" : "Mute track"}
+          </button>}
+          {contextMenu.kind === "clip" && <>
+            <button role="menuitem" onClick={() => { handleScissorCut(); setContextMenu(null); }}>
+              <Scissors size={15} /> Split at playhead
+            </button>
+            <button role="menuitem" onClick={() => {
+              onTrimStartChange(0);
+              onTrimEndChange(duration);
+              setContextMenu(null);
+            }}>
+              <RotateCcw size={15} /> Reset trim
+            </button>
+            {config.cuts.length > 0 && <button role="menuitem" onClick={() => { onCutsChange([]); setContextMenu(null); }}>
+              <Trash2 size={15} /> Remove all splits
+            </button>}
+          </>}
         </div>,
         document.body
       )}
@@ -824,9 +947,16 @@ function WaveRow({ data }: { data: number[] }) {
       if (n === 0) return;
       ctx.fillStyle = colorRef.current;
       const barW = wpx / n;
+      // Raw RMS is commonly only 0.01–0.08 for normal speech. Normalize to a
+      // robust percentile instead of full-scale 1.0, while retaining the
+      // relative dynamics and ignoring one-off click peaks.
+      const audible = data.filter((value) => value > 0.000_01).sort((a, b) => a - b);
+      const reference = audible.length > 0
+        ? Math.max(0.000_01, audible[Math.min(audible.length - 1, Math.floor(audible.length * 0.95))])
+        : 1;
       for (let i = 0; i < n; i++) {
-        const v = Math.max(0.04, Math.min(1, data[i]));
-        const bh = Math.max(1, v * (hpx - 2));
+        const normalized = data[i] <= 0 ? 0 : Math.min(1, Math.pow(data[i] / reference, 0.62));
+        const bh = Math.max(1, normalized * (hpx - 2));
         ctx.fillRect(i * barW, (hpx - bh) / 2, Math.max(1, barW - 0.5), bh);
       }
     };
@@ -844,8 +974,24 @@ function WaveRow({ data }: { data: number[] }) {
   return <canvas ref={ref} className="wave-canvas" />;
 }
 
+const waveformCache = new Map<string, Promise<number[]>>();
+
 async function loadWaveform(path: string, buckets: number): Promise<number[]> {
-  return invoke<number[]>("audio_waveform", { path, buckets });
+  const key = `${path}\0${buckets}`;
+  const cached = waveformCache.get(key);
+  if (cached) return cached;
+  const pending = invoke<number[]>("audio_waveform", { path, buckets }).catch((error) => {
+    waveformCache.delete(key);
+    throw error;
+  });
+  waveformCache.set(key, pending);
+  // Retain only the newest resolutions. A long editing session should not
+  // accumulate waveform arrays for every timeline width ever visited.
+  if (waveformCache.size > 18) {
+    const oldest = waveformCache.keys().next().value;
+    if (oldest) waveformCache.delete(oldest);
+  }
+  return pending;
 }
 
 async function loadWaveformWithRetry(path: string, buckets: number): Promise<number[]> {

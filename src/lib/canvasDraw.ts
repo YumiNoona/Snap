@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CaptionTrack, ClickEffect, CursorStyle, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
+import { captionAnimationFrame, revealCaptionText } from "./captionAnimation";
 
 export function drawCaptionTrack(
   ctx: CanvasRenderingContext2D,
@@ -11,13 +12,17 @@ export function drawCaptionTrack(
   const segment = track.segments.find((item) => timeMs >= item.startMs && timeMs < item.endMs);
   if (!segment?.text.trim()) return;
   const style = track.style;
+  const animation = style.animation ?? "none";
+  const entrance = captionAnimationFrame(animation, timeMs - segment.startMs);
+  const captionText = animation === "reveal" ? revealCaptionText(segment.text, entrance.reveal) : segment.text.trim();
+  if (!captionText) return;
   const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
   const maxWidth = Math.max(80, frame.w * style.maxWidth);
   ctx.save();
   ctx.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   ctx.textAlign = style.align;
   ctx.textBaseline = "middle";
-  const words = segment.text.trim().split(/\s+/u);
+  const words = captionText.split(/\s+/u);
   const lines: string[] = [];
   let line = "";
   for (const word of words) {
@@ -31,7 +36,13 @@ export function drawCaptionTrack(
   const paddingY = fontSize * 0.24;
   const widest = Math.min(maxWidth, Math.max(...lines.map((value) => ctx.measureText(value).width), 1));
   const centerX = frame.x + frame.w * style.x;
-  const centerY = frame.y + frame.h * style.y;
+  const centerY = frame.y + frame.h * style.y + entrance.rise * fontSize * .55;
+  ctx.globalAlpha *= entrance.alpha;
+  if (entrance.scale !== 1) {
+    ctx.translate(centerX, centerY);
+    ctx.scale(entrance.scale, entrance.scale);
+    ctx.translate(-centerX, -centerY);
+  }
   ctx.fillStyle = style.backgroundColor;
   roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * 0.18);
   ctx.fill();
