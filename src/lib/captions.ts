@@ -153,7 +153,10 @@ export async function transcribeTrack(track: AudioTrack, language: Transcription
     style: {
       fontFamily: "Arial", fontSize: 42, fontWeight: 700, color: "#ffffff",
       backgroundColor: "rgba(0,0,0,0.68)", outlineColor: "#000000", outlineWidth: 2,
-      shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82, animation: "reveal",
+      shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82,
+      fontStyle: "normal", letterSpacing: 0, lineHeight: 1.22,
+      backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,
+      animation: "reveal", animationDurationMs: 520,
     },
     segments,
   };
@@ -168,17 +171,18 @@ function subtitleTime(milliseconds: number, separator: "," | "."): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}${separator}${String(millis).padStart(3, "0")}`;
 }
 
-export function captionsToSrt(tracks: CaptionTrack[], trimStartSeconds = 0, trimEndSeconds = Number.POSITIVE_INFINITY): string {
+export function captionsToSrt(tracks: CaptionTrack[], trimStartSeconds = 0, trimEndSeconds = Number.POSITIVE_INFINITY, playbackRate = 1): string {
   const offset = trimStartSeconds * 1000;
   const end = trimEndSeconds * 1000;
+  const rate = Math.max(0.5, Math.min(2, playbackRate || 1));
   return tracks.flatMap((track) => track.visible ? track.segments : [])
     .filter((segment) => segment.endMs > offset && segment.startMs < end)
     .sort((a, b) => a.startMs - b.startMs)
-    .map((segment, index) => `${index + 1}\n${subtitleTime(Math.max(segment.startMs, offset) - offset, ",")} --> ${subtitleTime(Math.min(segment.endMs, end) - offset, ",")}\n${segment.text.trim()}\n`)
+    .map((segment, index) => `${index + 1}\n${subtitleTime((Math.max(segment.startMs, offset) - offset) / rate, ",")} --> ${subtitleTime((Math.min(segment.endMs, end) - offset) / rate, ",")}\n${segment.text.trim()}\n`)
     .join("\n");
 }
 
-export function captionsToVtt(tracks: CaptionTrack[], trimStartSeconds = 0, trimEndSeconds = Number.POSITIVE_INFINITY): string {
-  const srt = captionsToSrt(tracks, trimStartSeconds, trimEndSeconds);
+export function captionsToVtt(tracks: CaptionTrack[], trimStartSeconds = 0, trimEndSeconds = Number.POSITIVE_INFINITY, playbackRate = 1): string {
+  const srt = captionsToSrt(tracks, trimStartSeconds, trimEndSeconds, playbackRate);
   return `WEBVTT\n\n${srt.replace(/^(\d+)\n/gm, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2")}`;
 }

@@ -18,6 +18,12 @@ const rootEl = document.getElementById("root") as HTMLElement;
 const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
 document.body.classList.add(`window-${windowLabel}`);
 
+// Snap supplies purpose-built context menus for timeline clips, zooms,
+// captions, audio, and annotation layers. Suppress WebView2's browser menu so
+// production users never see Refresh / Print / Inspect chrome; preventDefault
+// does not stop Snap's own `contextmenu` handlers from opening their menus.
+document.addEventListener("contextmenu", (event) => event.preventDefault());
+
 
 function showError(label: string, err: unknown) {
   const message = err instanceof Error ? `${err.message}\n\n${err.stack || ""}` : String(err);

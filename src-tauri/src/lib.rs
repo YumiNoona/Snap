@@ -165,7 +165,6 @@ async fn open_editor_window(
             // mount).
             eprintln!("[Snap] editor window created, emitting editor-open");
             let _ = win.emit("editor-open", (video_for_thread, log_for_thread));
-            eprintln!("[Snap] Press F12 or right-click > Inspect on the editor window to view JS console errors");
         })
         .map_err(|e| format!("Failed to create editor window: {e}"));
         let _ = tx.send(result);
@@ -328,7 +327,6 @@ async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
         .always_on_top(true)
         .build()
         .map(|_win| {
-            eprintln!("[Snap] Press F12 or right-click > Inspect on the teleprompter window to view JS console errors");
         })
         .map_err(|e| format!("Failed to create teleprompter window: {e}"));
         let _ = tx.send(result);

@@ -11,12 +11,36 @@
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
     <img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT license" />
   </p>
+
+  <p>
+    <a href="https://github.com/YumiNoona/Snap/releases/latest"><strong>Download Snap for Windows</strong></a>
+  </p>
 </div>
 
 Snap captures video, cursor input, microphone audio, and Windows desktop audio
 as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
+
+## Snap 3.0.0
+
+This release concentrates on capture reliability and a more deliberate editing
+workflow:
+
+- A recording-clock-based audio/video pipeline keeps microphone and desktop
+  audio aligned with the first encoded video frame.
+- Full-screen capture follows the desktop instead of freezing on the window
+  that was active when recording began.
+- Preview transport, seeking, replay, and end-of-media recovery use one playback
+  controller so the timeline and video frame cannot drift into conflicting states.
+- Clip speed can be adjusted from 0.5x to 2x while preview, captions, separate
+  audio, and export remain synchronized.
+- Zoom regions and caption clips open focused inspectors with richer motion,
+  typography, layout, color, and animation controls.
+- Warm light and dark editor themes replace the old blue-violet interface while
+  keeping tool, timeline, and inspector contrast accessible.
+- Preview and export share the same caption renderer, so the delivered MP4
+  matches the editor more closely.
 
 ## What Snap includes
 
@@ -51,7 +75,7 @@ embedded in every installer.
 
 ### To develop Snap
 
-- Node.js 20 or newer and npm
+- Node.js 20.19 or newer (or 22.12 or newer) and npm
 - Stable Rust with the MSVC Windows target
 - Visual Studio Build Tools with the Desktop development with C++ workload
 
@@ -99,14 +123,8 @@ npm run dev
 ```powershell
 npm run build
 npm test
-cd src-tauri
-cargo check --locked
-```
-
-For a stricter Rust review:
-
-```powershell
-cargo clippy --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
 ```
 
 ## Build the Windows installer
@@ -124,6 +142,9 @@ src-tauri/target/release/bundle/nsis/
 Updater signatures require `TAURI_SIGNING_PRIVATE_KEY`. Never place the private
 key in this repository. See [RELEASING.md](RELEASING.md) for the signed GitHub
 release workflow.
+
+Official installers, checksums, updater signatures, and release notes are
+published on the [GitHub Releases page](https://github.com/YumiNoona/Snap/releases).
 
 ## Recording library
 

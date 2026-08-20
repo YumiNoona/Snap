@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -864,7 +864,8 @@ fn run_segmented_gpu_capture(
     while is_recording.load(Ordering::Relaxed) {
         let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
         let _ = std::fs::remove_file(&part);
-        let (mut child, mut control, encoder, startup_lead) = spawn_gpu_capture(source, &part)?;
+        let (mut child, mut control, encoder, encoded_timeline, progress_reader) =
+            spawn_gpu_capture(source, &part)?;
         let stderr = child.stderr.take();
         let stderr_reader = thread::spawn(move || {
             let mut diagnostics = String::new();
@@ -874,7 +875,12 @@ fn run_segmented_gpu_capture(
             diagnostics
         });
         if !started {
-            crate::input_hook::mark_capture_start_with_lead(startup_lead);
+            // FFmpeg normalizes the first encoded frame to media time zero.
+            // Anchor the shared audio/input epoch to that frame, not process
+            // launch: GPU/filter initialization can take more than a second
+            // on some laptops, which otherwise becomes leading WAV time and
+            // makes speech visibly trail the picture.
+            crate::input_hook::mark_capture_start_with_lead(encoded_timeline);
             let _ = startup_tx.send(Ok(()));
             started = true;
         } else {
@@ -911,6 +917,7 @@ fn run_segmented_gpu_capture(
             }
         }
         last_diagnostics = stderr_reader.join().unwrap_or_default();
+        let _ = progress_reader.join();
         if !segment_exit_status.is_empty() {
             if !last_diagnostics.is_empty() {
                 last_diagnostics.push('\n');
@@ -964,7 +971,10 @@ fn run_segmented_gpu_capture(
 fn spawn_gpu_capture(
     source: &str,
     destination: &Path,
-) -> std::result::Result<(Child, ChildStdin, &'static str, Duration), String> {
+) -> std::result::Result<
+    (Child, ChildStdin, &'static str, Duration, thread::JoinHandle<()>),
+    String,
+> {
     let destination = destination.to_string_lossy().to_string();
     let qsv_source = format!("{source},hwmap=derive_device=qsv,format=qsv");
     let encoders: [(&str, &str, &[&str]); 3] = [
@@ -1029,6 +1039,10 @@ fn spawn_gpu_capture(
             "-loglevel",
             "error",
             "-nostats",
+            "-stats_period",
+            "0.05",
+            "-progress",
+            "pipe:1",
             "-filter_complex",
             capture_filter,
         ]);
@@ -1046,25 +1060,68 @@ fn spawn_gpu_capture(
         ]);
         command
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Ok(mut child) = command.spawn() {
-            let launched_at = Instant::now();
-            // Hardware encoder initialization failures surface immediately;
-            // keep this check short so initial audio never trails video by a
-            // noticeable amount.
-            thread::sleep(Duration::from_millis(150));
-            if matches!(child.try_wait(), Ok(None)) {
-                let stdin = child
-                    .stdin
-                    .take()
-                    .ok_or_else(|| "Desktop capture control pipe is unavailable".to_string())?;
-                return Ok((child, stdin, name, launched_at.elapsed()));
+            let Some(stdout) = child.stdout.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                continue;
+            };
+            let (first_frame_tx, first_frame_rx) = std::sync::mpsc::sync_channel(1);
+            let progress_reader = thread::spawn(move || {
+                let mut frame = 0u64;
+                let mut out_time_us = 0u64;
+                let mut reported = false;
+                for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
+                    if let Some(media_time) =
+                        parse_gpu_progress_line(&line, &mut frame, &mut out_time_us)
+                    {
+                        if !reported {
+                            let _ = first_frame_tx.send(media_time);
+                            reported = true;
+                        }
+                    }
+                }
+            });
+
+            match first_frame_rx.recv_timeout(Duration::from_secs(4)) {
+                Ok(encoded_timeline) if matches!(child.try_wait(), Ok(None)) => {
+                    let stdin = child.stdin.take().ok_or_else(|| {
+                        "Desktop capture control pipe is unavailable".to_string()
+                    })?;
+                    return Ok((child, stdin, name, encoded_timeline, progress_reader));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = progress_reader.join();
+                }
             }
-            let _ = child.wait();
         }
     }
     Err("Desktop capture could not start with any supported hardware H.264 encoder".to_string())
+}
+
+/// Parse one `-progress pipe:1` line. A progress block is complete only when
+/// its `progress=` marker arrives, so `frame` and `out_time_us` always describe
+/// the same encoded point. The returned media duration lets the caller derive
+/// first-frame wall time even if FFmpeg reports progress slightly later.
+fn parse_gpu_progress_line(
+    line: &str,
+    frame: &mut u64,
+    out_time_us: &mut u64,
+) -> Option<Duration> {
+    let (key, value) = line.trim().split_once('=')?;
+    match key {
+        "frame" => *frame = value.parse().unwrap_or(*frame),
+        "out_time_us" | "out_time_ms" => {
+            *out_time_us = value.parse::<i64>().unwrap_or(0).max(0) as u64;
+        }
+        "progress" if *frame > 0 => return Some(Duration::from_micros(*out_time_us)),
+        _ => {}
+    }
+    None
 }
 
 fn validate_capture_segment(path: &Path) -> std::result::Result<(), String> {
@@ -1486,9 +1543,11 @@ fn write_frame_to_ffmpeg(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
         desktop_duplication_source, gfxcapture_region_source, gfxcapture_source,
-        validate_capture_segment, CropRect, RESILIENT_MP4_MOVFLAGS,
+        parse_gpu_progress_line, validate_capture_segment, CropRect, RESILIENT_MP4_MOVFLAGS,
     };
 
     #[test]
@@ -1543,6 +1602,23 @@ mod tests {
         assert!(RESILIENT_MP4_MOVFLAGS.contains("frag_keyframe"));
         assert!(RESILIENT_MP4_MOVFLAGS.contains("empty_moov"));
         assert!(RESILIENT_MP4_MOVFLAGS.contains("default_base_moof"));
+    }
+
+    #[test]
+    fn gpu_progress_anchors_start_to_encoded_media_time() {
+        let mut frame = 0;
+        let mut out_time_us = 0;
+        assert_eq!(
+            parse_gpu_progress_line("frame=37", &mut frame, &mut out_time_us),
+            None
+        );
+        assert_eq!(
+            parse_gpu_progress_line("out_time_us=616667", &mut frame, &mut out_time_us),
+            None
+        );
+        let lead = parse_gpu_progress_line("progress=continue", &mut frame, &mut out_time_us)
+            .expect("complete progress block");
+        assert_eq!(lead, Duration::from_micros(616_667));
     }
 
     #[test]

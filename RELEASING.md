@@ -16,10 +16,14 @@ Keep that file private and backed up. Never commit it. Losing it means existing 
 1. Increase the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 2. Commit and push the changes.
 3. Run the validation commands from `README.md`.
-4. Create and push a matching tag, for example `app-v2.0.0`.
+4. Create and push a matching tag, for example `app-v3.0.0`.
 
 The `Publish Snap update` GitHub workflow builds the Windows installers, signs the updater artifacts, publishes the release, and uploads `latest.json`. Existing Snap installations will then show the in-app update prompt and can download and install the release without opening a browser.
 
 For a local NSIS installer, run `npm run tauri build -- --bundles nsis`. If updater
 artifacts are enabled, export `TAURI_SIGNING_PRIVATE_KEY` for the build process;
 never copy the private key into the repository.
+
+The Tauri updater signature authenticates in-app updates, but it is not a
+Windows Authenticode signature. Until a code-signing certificate is configured,
+Windows SmartScreen may warn on a newly downloaded installer.

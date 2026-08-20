@@ -42,6 +42,15 @@ describe("caption audio source selection", () => {
     expect(captionsToVtt([track], 5, 10)).toContain("00:00:00.000 --> 00:00:01.500");
   });
 
+  it("retimes exported captions with the clip playback rate", () => {
+    const track = {
+      visible: true,
+      segments: [{ id: "speed", startMs: 2_000, endMs: 6_000, text: "Faster clip", language: "en", sourceTrackIds: ["audio-system"], userEdited: false }],
+    } as CaptionTrack;
+    expect(captionsToSrt([track], 2, 8, 2)).toContain("00:00:00,000 --> 00:00:02,000");
+    expect(captionsToVtt([track], 2, 8, 0.5)).toContain("00:00:00.000 --> 00:00:08.000");
+  });
+
   it("splits long transcription phrases into short, continuous caption cards", () => {
     const chunks = chunkCaptionSegments([{ startMs: 1_000, endMs: 9_000, text: "This is a deliberately long automatic subtitle phrase that should never appear as one giant block on the screen" }]);
     expect(chunks.length).toBeGreaterThan(2);

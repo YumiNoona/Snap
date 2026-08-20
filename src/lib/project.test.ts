@@ -35,4 +35,22 @@ describe("Snap project documents", () => {
     expect(projectFingerprint({ ...project, updatedAt: "later" })).toBe(projectFingerprint(project));
     expect(projectFingerprint({ ...project, editor: { ...project.editor, padding: 99 } })).not.toBe(projectFingerprint(project));
   });
+
+  it("round-trips expanded caption styling used by preview and export", () => {
+    const base = createProject("C:\\demo.mp4", "C:\\demo\\events.json");
+    const caption = {
+      id: "caption-track", name: "Speech", language: "en", sourceTrackIds: ["mic"], visible: true, burnedIn: true,
+      style: {
+        fontFamily: "Georgia", fontSize: 54, fontWeight: 700 as const, fontStyle: "italic" as const,
+        color: "#fffaf2", backgroundColor: "#1b1714", outlineColor: "#000000", outlineWidth: 2,
+        shadow: true, shadowBlur: .24, align: "center" as const, x: .5, y: .84, maxWidth: .78,
+        letterSpacing: 1.5, lineHeight: 1.3, backgroundRadius: .24, backgroundPadding: .45,
+        animation: "bounce" as const, animationDurationMs: 560,
+      },
+      segments: [{ id: "line", startMs: 1_000, endMs: 2_500, text: "Warm captions", language: "en", sourceTrackIds: ["mic"], userEdited: true }],
+    };
+    const migrated = migrateProject({ ...base, captions: [caption] });
+    expect(migrated.captions[0]?.style).toEqual(caption.style);
+    expect(projectFingerprint(migrated)).not.toBe(projectFingerprint(base));
+  });
 });

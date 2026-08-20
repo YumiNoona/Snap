@@ -8,7 +8,7 @@ describe("caption entrance animations", () => {
   });
 
   it("settles every animated preset into the stable frame", () => {
-    for (const preset of ["fade", "reveal", "pop", "rise"] as const) {
+    for (const preset of ["fade", "reveal", "pop", "rise", "slide", "blur", "bounce"] as const) {
       const frame = captionAnimationFrame(preset, 2_000);
       expect(frame.alpha).toBe(1);
       expect(frame.scale).toBeCloseTo(1);

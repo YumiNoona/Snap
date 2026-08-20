@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, type LucideIcon } from "lucide-react";
-import type { AudioTrack, CaptionTrack, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
+import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
@@ -26,11 +26,14 @@ interface Props {
   onZoomModeChange: (mode: "auto" | "manual") => void;
   selectedZoomRegion: ZoomRegionSettings | null;
   onSelectedZoomChange: (patch: Partial<ZoomRegionSettings>) => void;
+  onClearSelectedZoom: () => void;
   onDeleteSelectedZoom: () => void;
   audioTracks: AudioTrack[];
   audioStatus: string;
   captionTracks: CaptionTrack[];
   onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
+  selectedCaption: CaptionSegmentSelection | null;
+  onSelectCaption: (selection: CaptionSegmentSelection | null) => void;
 }
 
 const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
@@ -61,8 +64,8 @@ export default function Panels({
   config, onConfigChange, duration, currentTime,
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
-  selectedZoomRegion, onSelectedZoomChange, onDeleteSelectedZoom,
-  audioTracks, audioStatus, captionTracks, onCaptionTracksChange,
+  selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
+  audioTracks, audioStatus, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -210,7 +213,7 @@ export default function Panels({
     return {
       id: genId(), type: "text", ...timing, x: 0.2, y: 0.4, w: 0.6, h: 0.16,
       content: style === "badge" ? "1" : "Text", style, color: "#ffffff", fontSize: 24,
-      fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#2563eb",
+      fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#b65c36",
       letterSpacing: 0, opacity: 1, rotation: 0, flipX: false, flipY: false,
     };
   };
@@ -239,6 +242,8 @@ export default function Panels({
     if (selectedLayerId === id) onSelectLayer(null);
   };
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
+  const selectedCaptionTrack = selectedCaption ? captionTracks.find((track) => track.id === selectedCaption.trackId) ?? null : null;
+  const selectedCaptionSegment = selectedCaptionTrack?.segments.find((segment) => segment.id === selectedCaption?.segmentId) ?? null;
   const updateSelectedLayer = (patch: Partial<Layer>) => {
     if (!selectedLayer) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
@@ -405,10 +410,10 @@ export default function Panels({
                 { shape: "arrow" as const, label: "Arrow", color: "#ef4444", icon: <ArrowRight size={16} color="#ef4444" /> },
                 { shape: "rectangle" as const, label: "Rectangle", color: "#ef4444", icon: <Square size={16} color="#ef4444" /> },
                 { shape: "roundedRect" as const, label: "Rounded", color: "#eab308", icon: <Square size={16} color="#eab308" /> },
-                { shape: "circle" as const, label: "Circle", color: "#8b5cf6", icon: <Circle size={16} color="#8b5cf6" /> },
+                { shape: "circle" as const, label: "Circle", color: "#c58a4c", icon: <Circle size={16} color="#c58a4c" /> },
                 { shape: "blob" as const, label: "Ellipse", color: "#ef4444", icon: <Circle size={16} color="#ef4444" /> },
-                { shape: "downArrow" as const, label: "Down", color: "#ec4899", icon: <ArrowRight size={16} color="#ec4899" style={{ transform: "rotate(90deg)" }} /> },
-                { shape: "pointer" as const, label: "Pointer", color: "#ec4899", icon: <Hand size={16} color="#ec4899" /> },
+                { shape: "downArrow" as const, label: "Down", color: "#c75f4c", icon: <ArrowRight size={16} color="#c75f4c" style={{ transform: "rotate(90deg)" }} /> },
+                { shape: "pointer" as const, label: "Pointer", color: "#c75f4c", icon: <Hand size={16} color="#c75f4c" /> },
               ]).map(({ shape, label, color, icon }) => (
                 <button type="button" key={shape} className="annotation-card icon-choice" onClick={() => addLayer(makeShapeLayer(shape, color))} aria-label={`Add ${label}`} data-tooltip={label}>
                   <div className="annotation-preview">{icon}</div>
@@ -498,7 +503,31 @@ export default function Panels({
 
       {/* ═══ MOTION TAB ═══════════════════════════════════════════════ */}
       {activeTab === "motion" && (
-        <div className="ss-drawer-content">
+        <div className={`ss-drawer-content ${selectedZoomRegion ? "layer-inspector-mode" : ""}`}>
+          {selectedZoomRegion ? <>
+            <div className="layer-inspector-header">
+              <button onClick={onClearSelectedZoom} title="Back to motion tools" aria-label="Back to motion tools"><ArrowLeft size={17} /></button>
+              <span><strong>{selectedZoomRegion.source === "auto" ? "Auto zoom" : "Manual zoom"}</strong><small>{(selectedZoomRegion.startMs / 1000).toFixed(1)}s–{(selectedZoomRegion.endMs / 1000).toFixed(1)}s</small></span>
+            </div>
+            <Section title="Camera framing">
+              <div className="selection-source-badge">{selectedZoomRegion.source === "auto" ? "Generated camera move" : "Custom camera move"}</div>
+              <Slider label="Zoom amount" value={selectedZoomRegion.scale} min={1.05} max={5} step={0.05} unit="×" onChange={(scale) => onSelectedZoomChange({ scale })} />
+              <Slider label="Focus X" value={Math.round(selectedZoomRegion.x * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ x: value / 100 })} />
+              <Slider label="Focus Y" value={Math.round(selectedZoomRegion.y * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ y: value / 100 })} />
+              <div className="focus-preset-grid" aria-label="Focus point presets">
+                {([[.25,.25,"Top left"],[.5,.25,"Top"],[.75,.25,"Top right"],[.25,.5,"Left"],[.5,.5,"Center"],[.75,.5,"Right"],[.25,.75,"Bottom left"],[.5,.75,"Bottom"],[.75,.75,"Bottom right"]] as const).map(([x,y,label]) => <button key={label} title={label} aria-label={label} className={Math.abs(selectedZoomRegion.x-x)<.08 && Math.abs(selectedZoomRegion.y-y)<.08 ? "active" : ""} onClick={() => onSelectedZoomChange({x,y})}><i /></button>)}
+              </div>
+            </Section>
+            <Section title="Motion & timing">
+              <Slider label="Transition in" value={selectedZoomRegion.transitionMs} min={40} max={Math.max(80, Math.min(2500, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(transitionMs) => onSelectedZoomChange({ transitionMs })} />
+              <Slider label="Transition out" value={selectedZoomRegion.exitTransitionMs} min={40} max={Math.max(80, Math.min(2500, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(exitTransitionMs) => onSelectedZoomChange({ exitTransitionMs })} />
+              <SelectRow label="Motion curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
+              <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
+              <Slider label="End" value={selectedZoomRegion.endMs / 1000} min={selectedZoomRegion.startMs / 1000 + 0.35} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ endMs: value * 1000 })} />
+              <p className="panel-help-text">Drag the focus marker in the preview or use the nine-point framing grid. Timeline edges control the region duration.</p>
+              <button className="ss-drawer-action-btn danger" onClick={onDeleteSelectedZoom}><Trash2 size={14} /> Delete Zoom Region</button>
+            </Section>
+          </> : <>
           <Section title="Motion Blur">
             <CheckRow label="Motion Blur" checked={config.motionBlur.enabled} onChange={(v) => updateBlur({ enabled: v })} />
             <Slider label="Zoom-in Blur" value={config.motionBlur.zoomAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ zoomAmount: v })} defaultValue={0} onReset={() => updateBlur({ zoomAmount: 0 })} disabled={!config.motionBlur.enabled} />
@@ -549,19 +578,7 @@ export default function Panels({
               </button>
             )}
           </Section>
-          {selectedZoomRegion && (
-            <Section title="Selected Zoom">
-              <div className="selection-source-badge">{selectedZoomRegion.source === "auto" ? "Auto zoom" : "Manual zoom"}</div>
-              <Slider label="Zoom" value={selectedZoomRegion.scale} min={1.1} max={4} step={0.1} unit="×" onChange={(scale) => onSelectedZoomChange({ scale })} />
-              <Slider label="Transition" value={selectedZoomRegion.transitionMs} min={40} max={Math.max(80, Math.min(2000, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(transitionMs) => onSelectedZoomChange({ transitionMs })} />
-              <SelectRow label="Transition Curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
-              <Slider label="Focus X" value={Math.round(selectedZoomRegion.x * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ x: value / 100 })} />
-              <Slider label="Focus Y" value={Math.round(selectedZoomRegion.y * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ y: value / 100 })} />
-              <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
-              <Slider label="End" value={selectedZoomRegion.endMs / 1000} min={selectedZoomRegion.startMs / 1000 + 0.35} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ endMs: value * 1000 })} />
-              <button className="ss-drawer-action-btn danger" onClick={onDeleteSelectedZoom}><Trash2 size={14} /> Delete Zoom Region</button>
-            </Section>
-          )}
+          </>}
         </div>
       )}
 
@@ -584,7 +601,53 @@ export default function Panels({
       )}
 
       {activeTab === "captions" && (
-        <div className="ss-drawer-content">
+        <div className={`ss-drawer-content ${selectedCaptionSegment ? "layer-inspector-mode" : ""}`}>
+          {selectedCaptionTrack && selectedCaptionSegment ? <>
+            <div className="layer-inspector-header">
+              <button onClick={() => onSelectCaption(null)} title="Back to caption tools" aria-label="Back to caption tools"><ArrowLeft size={17} /></button>
+              <span><strong>Caption</strong><small>{(selectedCaptionSegment.startMs / 1000).toFixed(1)}s–{(selectedCaptionSegment.endMs / 1000).toFixed(1)}s</small></span>
+            </div>
+            <Section title="Caption content">
+              <label className="layer-field-stack"><span>Text</span><textarea className="layer-textarea caption-copy-editor" rows={4} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} /></label>
+              <div className="caption-time-row caption-inspector-time">
+                <label><span>Start</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, startMs: Math.max(0, Number(event.target.value) * 1000), userEdited: true } : segment) }))} /></label>
+                <label><span>End</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, endMs: Math.max(segment.startMs + 100, Number(event.target.value) * 1000), userEdited: true } : segment) }))} /></label>
+              </div>
+            </Section>
+            <Section title="Typography">
+              <SelectRow label="Typeface" value={selectedCaptionTrack.style.fontFamily} options={["Segoe UI Variable", "Arial", "Georgia", "Courier New"]} optionLabels={{"Segoe UI Variable":"Segoe UI","Arial":"Arial","Georgia":"Georgia","Courier New":"Courier New"}} onChange={(fontFamily) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontFamily } }))} />
+              <SelectRow label="Weight" value={String(selectedCaptionTrack.style.fontWeight)} options={["400", "500", "600", "700", "800"]} optionLabels={{"400":"Regular","500":"Medium","600":"Semibold","700":"Bold","800":"Extra bold"}} onChange={(fontWeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: Number(fontWeight) as CaptionTrack["style"]["fontWeight"] } }))} />
+              <div className="caption-format-pills">
+                <button className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong> Bold</button>
+                <button className={(selectedCaptionTrack.style.fontStyle ?? "normal") === "italic" ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontStyle: track.style.fontStyle === "italic" ? "normal" : "italic" } }))}><em>I</em> Italic</button>
+              </div>
+              <Slider label="Font size" value={selectedCaptionTrack.style.fontSize} min={14} max={120} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontSize } }))} />
+              <Slider label="Letter spacing" value={selectedCaptionTrack.style.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, letterSpacing } }))} />
+              <Slider label="Line height" value={selectedCaptionTrack.style.lineHeight ?? 1.22} min={0.9} max={2} step={0.05} unit="×" onChange={(lineHeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, lineHeight } }))} />
+              <ColorInput label="Text color" value={selectedCaptionTrack.style.color} onChange={(color) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, color } }))} />
+              <ColorInput label="Background" value={selectedCaptionTrack.style.backgroundColor.startsWith("#") ? selectedCaptionTrack.style.backgroundColor : "#17130f"} onChange={(backgroundColor) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundColor } }))} />
+              <ColorInput label="Outline" value={selectedCaptionTrack.style.outlineColor} onChange={(outlineColor) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineColor } }))} />
+              <Slider label="Outline" value={selectedCaptionTrack.style.outlineWidth} min={0} max={10} step={1} unit="px" onChange={(outlineWidth) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineWidth } }))} />
+            </Section>
+            <Section title="Layout & appearance">
+              <Slider label="Horizontal" value={Math.round(selectedCaptionTrack.style.x * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, x: value / 100 } }))} />
+              <Slider label="Vertical" value={Math.round(selectedCaptionTrack.style.y * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, y: value / 100 } }))} />
+              <Slider label="Maximum width" value={Math.round(selectedCaptionTrack.style.maxWidth * 100)} min={30} max={96} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, maxWidth: value / 100 } }))} />
+              <Slider label="Box padding" value={selectedCaptionTrack.style.backgroundPadding ?? .4} min={0} max={1.2} step={.05} unit="×" onChange={(backgroundPadding) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundPadding } }))} />
+              <Slider label="Box roundness" value={selectedCaptionTrack.style.backgroundRadius ?? .18} min={0} max={1} step={.05} unit="×" onChange={(backgroundRadius) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundRadius } }))} />
+              <CheckRow label="Text shadow" checked={selectedCaptionTrack.style.shadow} onChange={(shadow) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadow } }))} />
+              {selectedCaptionTrack.style.shadow && <Slider label="Shadow softness" value={selectedCaptionTrack.style.shadowBlur ?? .18} min={0} max={.8} step={.02} unit="×" onChange={(shadowBlur) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadowBlur } }))} />}
+            </Section>
+            <Section title="Animation">
+              <div className="caption-animation-presets expanded" aria-label="Caption entrance animation">
+                {(["none", "fade", "reveal", "pop", "rise", "slide", "blur", "bounce"] as const).map((animation) => <button type="button" key={animation} className={(selectedCaptionTrack.style.animation ?? "none") === animation ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animation } }))}><span className={`caption-animation-preview ${animation}`}>Aa</span><span>{animation[0].toUpperCase() + animation.slice(1)}</span></button>)}
+              </div>
+              <Slider label="Animation speed" value={selectedCaptionTrack.style.animationDurationMs ?? 420} min={120} max={1200} step={20} unit="ms" onChange={(animationDurationMs) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animationDurationMs } }))} />
+              <CheckRow label="Show captions" checked={selectedCaptionTrack.visible} onChange={(visible) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, visible }))} />
+              <CheckRow label="Include in export" checked={selectedCaptionTrack.burnedIn} onChange={(burnedIn) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, burnedIn }))} />
+              <button className="ss-drawer-action-btn danger" onClick={() => { updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.filter((segment) => segment.id !== selectedCaptionSegment.id) })); onSelectCaption(null); }}><Trash2 size={14} /> Delete Caption</button>
+            </Section>
+          </> : <>
           <Section title="Automatic Captions">
             <div className={`audio-load-status ${audioTracks.length > 0 ? "ready" : "warning"}`} role="status">
               <AudioWaveform size={16} />
@@ -619,59 +682,11 @@ export default function Panels({
             <Section key={track.id} title={track.name}>
               <CheckRow label="Show Captions" checked={track.visible} onChange={(visible) => updateCaptionTrack(track.id, (current) => ({ ...current, visible }))} />
               <CheckRow label="Burn Into Export" checked={track.burnedIn} onChange={(burnedIn) => updateCaptionTrack(track.id, (current) => ({ ...current, burnedIn }))} />
-              <div className="caption-style-presets" aria-label="Caption style preset">
-                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0.72)", outlineWidth: 0, fontWeight: 700 } }))}>Classic</button>
-                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#ffffff", backgroundColor: "rgba(0,0,0,0)", outlineColor: "#000000", outlineWidth: 4, fontWeight: 800 } }))}>Impact</button>
-                <button onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color: "#0b0d12", backgroundColor: "rgba(255,214,10,0.94)", outlineWidth: 0, fontWeight: 800 } }))}>Highlight</button>
-              </div>
-              <div className="caption-control-label">Entrance animation</div>
-              <div className="caption-animation-presets" aria-label="Caption entrance animation">
-                {(["none", "fade", "reveal", "pop", "rise"] as const).map((animation) => (
-                  <button
-                    type="button"
-                    key={animation}
-                    className={(track.style.animation ?? "none") === animation ? "active" : ""}
-                    onClick={() => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, animation } }))}
-                  >
-                    <span className={`caption-animation-preview ${animation}`}>Aa</span>
-                    <span>{animation[0].toUpperCase() + animation.slice(1)}</span>
-                  </button>
-                ))}
-              </div>
-              <Slider label="Vertical Position" value={Math.round(track.style.y * 100)} min={10} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, y: value / 100 } }))} />
-              <Slider label="Font Size" value={track.style.fontSize} min={18} max={96} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, fontSize } }))} />
-              <ColorInput label="Text Color" value={track.style.color} onChange={(color) => updateCaptionTrack(track.id, (current) => ({ ...current, style: { ...current.style, color } }))} />
-              <div className="caption-segment-list">
-                {track.segments.map((segment, segmentIndex) => (
-                  <div className="caption-segment-editor" key={segment.id}>
-                    <div className="caption-time-row">
-                      <input aria-label="Caption start time" type="number" step="0.05" value={(segment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, startMs: Math.max(0, Number(event.target.value) * 1000), userEdited: true } : item) }))} />
-                      <span>–</span>
-                      <input aria-label="Caption end time" type="number" step="0.05" value={(segment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, endMs: Math.max(item.startMs + 100, Number(event.target.value) * 1000), userEdited: true } : item) }))} />
-                    </div>
-                    <textarea value={segment.text} aria-label="Caption text" onChange={(event) => updateCaptionTrack(track.id, (current) => ({ ...current, segments: current.segments.map((item) => item.id === segment.id ? { ...item, text: event.target.value, userEdited: true } : item) }))} />
-                    <div className="caption-edit-actions">
-                      <button onClick={() => updateCaptionTrack(track.id, (current) => {
-                        const middle = Math.round((segment.startMs + segment.endMs) / 2);
-                        const words = segment.text.trim().split(/\s+/u);
-                        const pivot = Math.max(1, Math.ceil(words.length / 2));
-                        const replacement = [
-                          { ...segment, endMs: middle, text: words.slice(0, pivot).join(" "), userEdited: true },
-                          { ...segment, id: `${segment.id}-split-${Date.now()}`, startMs: middle, text: words.slice(pivot).join(" "), userEdited: true },
-                        ];
-                        return { ...current, segments: current.segments.flatMap((item) => item.id === segment.id ? replacement : [item]) };
-                      })}>Split</button>
-                      {segmentIndex > 0 && <button onClick={() => updateCaptionTrack(track.id, (current) => {
-                        const previous = current.segments[segmentIndex - 1];
-                        return { ...current, segments: current.segments.filter((_, index) => index !== segmentIndex).map((item) => item.id === previous.id ? { ...item, endMs: segment.endMs, text: `${item.text} ${segment.text}`.trim(), userEdited: true } : item) };
-                      })}>Merge previous</button>}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <div className="caption-track-summary"><span><strong>{track.segments.length} captions</strong><small>{track.language.toUpperCase()} · click any caption bar in the timeline to edit it</small></span>{track.segments[0] && <button onClick={() => onSelectCaption({ trackId: track.id, segmentId: track.segments[0].id })}>Edit captions</button>}</div>
               <button className="ss-drawer-action-btn danger" onClick={() => onCaptionTracksChange(captionTracks.filter((item) => item.id !== track.id))}><Trash2 size={14} /> Delete Caption Track</button>
             </Section>
           ))}
+          </>}
         </div>
       )}
 

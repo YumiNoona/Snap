@@ -25,56 +25,58 @@ export interface WallpaperPreset {
   thumbnailUrl: string;
 }
 
-// ── 10 curated gradients (warm / cool / vivid) ────────────────────────────────
+// Warm, filmic editor palette. IDs remain stable so existing projects migrate
+// without missing presets, while the visual language avoids cold blue/violet UI.
 
 export const GRADIENT_PRESETS: GradientPreset[] = [
-  { id: "gradient-sunset", name: "Raycast Sunset", type: "linear", angle: 135, colors: [
-    { color: "#f97316", offset: 0 }, { color: "#ec4899", offset: 50 }, { color: "#8b5cf6", offset: 100 } ] },
-  { id: "gradient-aurora", name: "Northern Aurora", type: "linear", angle: 135, colors: [
-    { color: "#06b6d4", offset: 0 }, { color: "#3b82f6", offset: 50 }, { color: "#8b5cf6", offset: 100 } ] },
-  { id: "gradient-cyber", name: "Cyber Neon", type: "linear", angle: 135, colors: [
-    { color: "#a855f7", offset: 0 }, { color: "#ec4899", offset: 50 }, { color: "#f43f5e", offset: 100 } ] },
-  { id: "gradient-emerald", name: "Emerald Forest", type: "linear", angle: 135, colors: [
-    { color: "#10b981", offset: 0 }, { color: "#06b6d4", offset: 50 }, { color: "#3b82f6", offset: 100 } ] },
-  { id: "gradient-flame", name: "Cosmic Flame", type: "linear", angle: 135, colors: [
-    { color: "#ef4444", offset: 0 }, { color: "#f97316", offset: 50 }, { color: "#eab308", offset: 100 } ] },
-  { id: "gradient-twilight", name: "Deep Twilight", type: "linear", angle: 135, colors: [
-    { color: "#1e1b4b", offset: 0 }, { color: "#312e81", offset: 50 }, { color: "#4338ca", offset: 100 } ] },
-  { id: "gradient-ocean", name: "Deep Ocean", type: "linear", angle: 180, colors: [
-    { color: "#0c4a6e", offset: 0 }, { color: "#0369a1", offset: 50 }, { color: "#22d3ee", offset: 100 } ] },
-  { id: "gradient-lavender", name: "Lavender Haze", type: "linear", angle: 160, colors: [
-    { color: "#c4b5fd", offset: 0 }, { color: "#a78bfa", offset: 50 }, { color: "#7c3aed", offset: 100 } ] },
-  { id: "gradient-midnight", name: "Midnight Galaxy", type: "radial", angle: 0, colors: [
-    { color: "#020617", offset: 0 }, { color: "#1e1b4b", offset: 55 }, { color: "#6d28d9", offset: 100 } ] },
+  { id: "gradient-sunset", name: "Terracotta Sunset", type: "linear", angle: 135, colors: [
+    { color: "#f0b27a", offset: 0 }, { color: "#d86f45", offset: 52 }, { color: "#7f3528", offset: 100 } ] },
+  { id: "gradient-aurora", name: "Sage Morning", type: "linear", angle: 135, colors: [
+    { color: "#e8ddbd", offset: 0 }, { color: "#9dad78", offset: 52 }, { color: "#465b3d", offset: 100 } ] },
+  { id: "gradient-cyber", name: "Clay Blossom", type: "linear", angle: 135, colors: [
+    { color: "#f2c2a2", offset: 0 }, { color: "#c86b53", offset: 50 }, { color: "#713d31", offset: 100 } ] },
+  { id: "gradient-emerald", name: "Olive Grove", type: "linear", angle: 135, colors: [
+    { color: "#d6d09a", offset: 0 }, { color: "#778554", offset: 50 }, { color: "#34432f", offset: 100 } ] },
+  { id: "gradient-flame", name: "Golden Ember", type: "linear", angle: 135, colors: [
+    { color: "#f2c05e", offset: 0 }, { color: "#d36c32", offset: 50 }, { color: "#8a2f25", offset: 100 } ] },
+  { id: "gradient-twilight", name: "Cedar Night", type: "linear", angle: 135, colors: [
+    { color: "#17120f", offset: 0 }, { color: "#3d2920", offset: 52 }, { color: "#82513a", offset: 100 } ] },
+  { id: "gradient-ocean", name: "Deep Moss", type: "linear", angle: 180, colors: [
+    { color: "#19231c", offset: 0 }, { color: "#3f5a43", offset: 50 }, { color: "#90a66c", offset: 100 } ] },
+  { id: "gradient-lavender", name: "Peach Linen", type: "linear", angle: 160, colors: [
+    { color: "#fff0dd", offset: 0 }, { color: "#e6b38d", offset: 50 }, { color: "#b86345", offset: 100 } ] },
+  { id: "gradient-midnight", name: "Espresso Glow", type: "radial", angle: 0, colors: [
+    { color: "#d9955f", offset: 0 }, { color: "#513326", offset: 55 }, { color: "#130f0d", offset: 100 } ] },
   { id: "gradient-sunrise", name: "Golden Sunrise", type: "linear", angle: 110, colors: [
-    { color: "#fef3c7", offset: 0 }, { color: "#f59e0b", offset: 55 }, { color: "#ef4444", offset: 100 } ] },
-  { id: "gradient-arctic", name: "Arctic Glass", type: "linear", angle: 145, colors: [
-    { color: "#ecfeff", offset: 0 }, { color: "#22d3ee", offset: 48 }, { color: "#2563eb", offset: 100 } ] },
-  { id: "gradient-rose-gold", name: "Rose Gold", type: "linear", angle: 125, colors: [
-    { color: "#fed7aa", offset: 0 }, { color: "#fb7185", offset: 52 }, { color: "#9f1239", offset: 100 } ] },
-  { id: "gradient-electric-lime", name: "Electric Lime", type: "linear", angle: 120, colors: [
-    { color: "#d9f99d", offset: 0 }, { color: "#22c55e", offset: 48 }, { color: "#115e59", offset: 100 } ] },
-  { id: "gradient-steel", name: "Steel Light", type: "radial", angle: 0, colors: [
-    { color: "#f8fafc", offset: 0 }, { color: "#94a3b8", offset: 54 }, { color: "#1e293b", offset: 100 } ] },
+    { color: "#fff2c9", offset: 0 }, { color: "#e5a43f", offset: 55 }, { color: "#ba4b33", offset: 100 } ] },
+  { id: "gradient-arctic", name: "Warm Porcelain", type: "linear", angle: 145, colors: [
+    { color: "#fffaf1", offset: 0 }, { color: "#d8c6ad", offset: 48 }, { color: "#887363", offset: 100 } ] },
+  { id: "gradient-rose-gold", name: "Rosewood", type: "linear", angle: 125, colors: [
+    { color: "#f5c7aa", offset: 0 }, { color: "#c66a5b", offset: 52 }, { color: "#6b2e2c", offset: 100 } ] },
+  { id: "gradient-electric-lime", name: "Citrus Leaf", type: "linear", angle: 120, colors: [
+    { color: "#e9e6a8", offset: 0 }, { color: "#a5a84f", offset: 48 }, { color: "#46582f", offset: 100 } ] },
+  { id: "gradient-steel", name: "Stone & Sand", type: "radial", angle: 0, colors: [
+    { color: "#f7f0e4", offset: 0 }, { color: "#b9a895", offset: 54 }, { color: "#4c433b", offset: 100 } ] },
 ];
 
 // ── 10 curated solid colors ─────────────────────────────────────────────────
 
 export const COLOR_PRESETS: ColorPreset[] = [
-  { id: "color-slate", name: "Slate Dark", color: "#0f172a" },
+  { id: "color-slate", name: "Espresso", color: "#1b1714" },
   { id: "color-black", name: "Pure Black", color: "#000000" },
-  { id: "color-midnight", name: "Midnight Blue", color: "#0a0a14" },
-  { id: "color-white", name: "Soft White", color: "#f8fafc" },
-  { id: "color-sky", name: "Sky Blue", color: "#0ea5e9" },
-  { id: "color-violet", name: "Violet", color: "#8b5cf6" },
-  { id: "color-rose", name: "Rose", color: "#f43f5e" },
-  { id: "color-amber", name: "Amber", color: "#f59e0b" },
-  { id: "color-emerald", name: "Emerald", color: "#10b981" },
-  { id: "color-forest", name: "Forest Green", color: "#14532d" },
-  { id: "color-indigo", name: "Royal Indigo", color: "#4338ca" },
-  { id: "color-coral", name: "Soft Coral", color: "#fb7185" },
-  { id: "color-cyan", name: "Bright Cyan", color: "#06b6d4" },
+  { id: "color-midnight", name: "Charcoal", color: "#25211d" },
+  { id: "color-white", name: "Warm White", color: "#fffaf2" },
+  { id: "color-sky", name: "Terracotta", color: "#b95f3d" },
+  { id: "color-violet", name: "Burnt Clay", color: "#934a36" },
+  { id: "color-rose", name: "Rosewood", color: "#9b4740" },
+  { id: "color-amber", name: "Amber", color: "#d69738" },
+  { id: "color-emerald", name: "Sage", color: "#7f9363" },
+  { id: "color-forest", name: "Forest", color: "#3e563b" },
+  { id: "color-indigo", name: "Cedar", color: "#5c3b2e" },
+  { id: "color-coral", name: "Soft Coral", color: "#d97863" },
+  { id: "color-cyan", name: "Olive", color: "#8c8d4f" },
   { id: "color-sand", name: "Warm Sand", color: "#d6a85f" },
+  { id: "color-parchment", name: "Parchment", color: "#e9dec9" },
 ];
 
 export const WALLPAPER_PRESETS: WallpaperPreset[] = [

@@ -13,13 +13,14 @@ export function drawCaptionTrack(
   if (!segment?.text.trim()) return;
   const style = track.style;
   const animation = style.animation ?? "none";
-  const entrance = captionAnimationFrame(animation, timeMs - segment.startMs);
+  const entrance = captionAnimationFrame(animation, timeMs - segment.startMs, style.animationDurationMs ?? 420);
   const captionText = animation === "reveal" ? revealCaptionText(segment.text, entrance.reveal) : segment.text.trim();
   if (!captionText) return;
   const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
   const maxWidth = Math.max(80, frame.w * style.maxWidth);
   ctx.save();
-  ctx.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  ctx.font = `${style.fontStyle ?? "normal"} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${style.letterSpacing ?? 0}px`;
   ctx.textAlign = style.align;
   ctx.textBaseline = "middle";
   const words = captionText.split(/\s+/u);
@@ -31,24 +32,26 @@ export function drawCaptionTrack(
     else line = candidate;
   }
   if (line) lines.push(line);
-  const lineHeight = fontSize * 1.22;
-  const paddingX = fontSize * 0.4;
-  const paddingY = fontSize * 0.24;
+  const lineHeight = fontSize * (style.lineHeight ?? 1.22);
+  const paddingScale = style.backgroundPadding ?? .4;
+  const paddingX = fontSize * paddingScale;
+  const paddingY = fontSize * paddingScale * .6;
   const widest = Math.min(maxWidth, Math.max(...lines.map((value) => ctx.measureText(value).width), 1));
-  const centerX = frame.x + frame.w * style.x;
+  const centerX = frame.x + frame.w * style.x + entrance.slide * fontSize * 1.25;
   const centerY = frame.y + frame.h * style.y + entrance.rise * fontSize * .55;
   ctx.globalAlpha *= entrance.alpha;
+  if (entrance.blur > 0) ctx.filter = `blur(${entrance.blur * Math.max(2, fontSize * .12)}px)`;
   if (entrance.scale !== 1) {
     ctx.translate(centerX, centerY);
     ctx.scale(entrance.scale, entrance.scale);
     ctx.translate(-centerX, -centerY);
   }
   ctx.fillStyle = style.backgroundColor;
-  roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * 0.18);
+  roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * (style.backgroundRadius ?? .18));
   ctx.fill();
   lines.forEach((value, index) => {
     const y = centerY + (index - (lines.length - 1) / 2) * lineHeight;
-    if (style.shadow) { ctx.shadowColor = "rgba(0,0,0,.7)"; ctx.shadowBlur = fontSize * 0.18; ctx.shadowOffsetY = fontSize * 0.08; }
+    if (style.shadow) { ctx.shadowColor = "rgba(0,0,0,.7)"; ctx.shadowBlur = fontSize * (style.shadowBlur ?? .18); ctx.shadowOffsetY = fontSize * 0.08; }
     if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2; ctx.lineJoin = "round"; ctx.strokeText(value, centerX, y, maxWidth); }
     ctx.fillStyle = style.color;
     ctx.fillText(value, centerX, y, maxWidth);

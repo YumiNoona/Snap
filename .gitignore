@@ -21,6 +21,7 @@ target/
 !.vscode/extensions.json
 .idea/
 .fleet/
+.vs/
 *.suo
 *.ntvs*
 *.njsproj
@@ -32,6 +33,7 @@ target/
 *~
 .agents/
 .history/
+.codex/
 
 # Logs
 logs/
@@ -84,4 +86,10 @@ whisper-bin-*/
 # Coverage and profiling
 coverage/
 lcov.info
+.vitest/
+test-results/
+playwright-report/
 *.profraw
+*.dmp
+*.stackdump
+*.crash

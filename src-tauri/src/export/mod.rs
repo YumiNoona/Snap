@@ -362,8 +362,14 @@ pub struct CanvasExportRequest {
     pub trim_start_seconds: f64,
     #[serde(rename = "exportDurationSeconds", default)]
     pub export_duration_seconds: f64,
+    #[serde(rename = "playbackRate", default = "default_playback_rate")]
+    pub playback_rate: f64,
     #[serde(rename = "captionSrt", default)]
     pub caption_srt: Option<String>,
+}
+
+fn default_playback_rate() -> f64 {
+    1.0
 }
 
 #[derive(Deserialize, Clone)]
@@ -454,6 +460,7 @@ pub async fn finalize_canvas_export(
     request: CanvasExportRequest,
 ) -> std::result::Result<String, String> {
     let settings = &request.export_settings;
+    let playback_rate = request.playback_rate.clamp(0.5, 2.0);
 
     eprintln!(
         "[Snap Export] Finalizing canvas export -> {}",
@@ -519,7 +526,10 @@ pub async fn finalize_canvas_export(
         args.push("-f".into());
         args.push("gif".into());
     } else {
-        let mut audio_sources: Vec<(usize, f64, &str)> = Vec::new();
+        // The canvas WebM has already been recorded at the selected clip
+        // speed. Source WAVs still use original recording time, so retime only
+        // those tracks; generated click audio is already placed in output time.
+        let mut audio_sources: Vec<(usize, f64, &str, bool)> = Vec::new();
         let mut input_index = 1usize;
         if has_sys && !request.audio_mix.system_muted {
             if request.trim_start_seconds > 0.0 {
@@ -532,6 +542,7 @@ pub async fn finalize_canvas_export(
                 input_index,
                 request.audio_mix.system_volume / 100.0,
                 "Desktop audio",
+                true,
             ));
             input_index += 1;
         }
@@ -546,13 +557,14 @@ pub async fn finalize_canvas_export(
                 input_index,
                 request.audio_mix.mic_volume / 100.0,
                 "Microphone",
+                true,
             ));
             input_index += 1;
         }
         if has_clicks {
             args.push("-i".into());
             args.push(click_wav.to_string_lossy().to_string());
-            audio_sources.push((input_index, 1.0, "Click effects"));
+            audio_sources.push((input_index, 1.0, "Click effects", false));
             input_index += 1;
         }
 
@@ -566,14 +578,19 @@ pub async fn finalize_canvas_export(
 
         if request.export_settings.audio_mode == "separate" && !audio_sources.is_empty() {
             let mut filter = String::new();
-            for (slot, (idx, volume, _)) in audio_sources.iter().enumerate() {
+            for (slot, (idx, volume, _, retime)) in audio_sources.iter().enumerate() {
                 let normalize = if settings.normalize_audio {
                     ",loudnorm=I=-16:LRA=11:TP=-1.5"
                 } else {
                     ""
                 };
+                let speed = if *retime {
+                    format!(",atempo={playback_rate:.6}")
+                } else {
+                    String::new()
+                };
                 filter.push_str(&format!(
-                    "[{idx}:a]volume={volume:.3}{normalize},apad[a{slot}];"
+                    "[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a{slot}];"
                 ));
             }
             args.push("-filter_complex".into());
@@ -588,14 +605,19 @@ pub async fn finalize_canvas_export(
             args.push("aac".into());
             args.push("-b:a".into());
             args.push("192k".into());
-            for (slot, (_, _, label)) in audio_sources.iter().enumerate() {
+            for (slot, (_, _, label, _)) in audio_sources.iter().enumerate() {
                 args.push(format!("-metadata:s:a:{slot}"));
                 args.push(format!("title={label}"));
             }
         } else if audio_sources.len() > 1 {
             let mut filter = String::new();
-            for (slot, (idx, volume, _)) in audio_sources.iter().enumerate() {
-                filter.push_str(&format!("[{idx}:a]volume={volume:.3}[a{slot}];"));
+            for (slot, (idx, volume, _, retime)) in audio_sources.iter().enumerate() {
+                let speed = if *retime {
+                    format!(",atempo={playback_rate:.6}")
+                } else {
+                    String::new()
+                };
+                filter.push_str(&format!("[{idx}:a]volume={volume:.3}{speed}[a{slot}];"));
             }
             for slot in 0..audio_sources.len() {
                 filter.push_str(&format!("[a{slot}]"));
@@ -619,14 +641,19 @@ pub async fn finalize_canvas_export(
             args.push("aac".into());
             args.push("-b:a".into());
             args.push("192k".into());
-        } else if let Some((idx, volume, _)) = audio_sources.first() {
+        } else if let Some((idx, volume, _, retime)) = audio_sources.first() {
             args.push("-filter_complex".into());
             let normalize = if settings.normalize_audio {
                 ",loudnorm=I=-16:LRA=11:TP=-1.5"
             } else {
                 ""
             };
-            args.push(format!("[{idx}:a]volume={volume:.3}{normalize},apad[a]"));
+            let speed = if *retime {
+                format!(",atempo={playback_rate:.6}")
+            } else {
+                String::new()
+            };
+            args.push(format!("[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a]"));
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-map".into());

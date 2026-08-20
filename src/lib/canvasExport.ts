@@ -92,12 +92,16 @@ export async function runCanvasExport(
       }, { once: true });
     });
 
+    const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
+
     // Seek to the trim start before recording begins.
     compositor.video.currentTime = trimStart;
     await new Promise<void>((resolve) => {
       compositor.video.addEventListener("seeked", () => resolve(), { once: true });
     });
 
+    compositor.video.defaultPlaybackRate = playbackRate;
+    compositor.video.playbackRate = playbackRate;
     recorder.start(250);
     await compositor.video.play();
 
@@ -141,21 +145,22 @@ export async function runCanvasExport(
         tempWebmPath,
         inputVideo: videoPath,
         exportSettings,
-        captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(captionTracks, trimStart, trimEnd) : null,
+        captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(captionTracks, trimStart, trimEnd, playbackRate) : null,
         clickTimesMs: config.cursorStyle.clickSound
-          ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => time - trimStart * 1000)
+          ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => (time - trimStart * 1000) / playbackRate)
           : [],
         audioMix: config.audio,
         trimStartSeconds: trimStart,
-        exportDurationSeconds: Math.max(0.01, trimEnd - trimStart),
+        exportDurationSeconds: Math.max(0.01, (trimEnd - trimStart) / playbackRate),
+        playbackRate,
       },
     });
 
     const basePath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "");
     if (exportSettings.captions === "srt" || exportSettings.captions === "burned-srt") {
-      await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(captionTracks, trimStart, trimEnd) });
+      await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(captionTracks, trimStart, trimEnd, playbackRate) });
     } else if (exportSettings.captions === "vtt") {
-      await invoke("write_text_file_atomic", { path: `${basePath}.vtt`, contents: captionsToVtt(captionTracks, trimStart, trimEnd) });
+      await invoke("write_text_file_atomic", { path: `${basePath}.vtt`, contents: captionsToVtt(captionTracks, trimStart, trimEnd, playbackRate) });
     }
 
     onProgress({ phase: "done", progress: 1, message: result });

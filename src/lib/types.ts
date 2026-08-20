@@ -30,6 +30,7 @@ export interface ZoomRegionSettings extends ZoomRegionSelection {
   x: number;
   y: number;
   transitionMs: number;
+  exitTransitionMs: number;
   easing: Keyframe["easing"];
   source?: "auto" | "manual";
 }
@@ -197,6 +198,11 @@ export interface CaptionSegment {
   userEdited: boolean;
 }
 
+export interface CaptionSegmentSelection {
+  trackId: string;
+  segmentId: string;
+}
+
 export interface CaptionStyle {
   fontFamily: string;
   fontSize: number;
@@ -210,7 +216,14 @@ export interface CaptionStyle {
   x: number;
   y: number;
   maxWidth: number;
-  animation?: "none" | "fade" | "reveal" | "pop" | "rise";
+  fontStyle?: "normal" | "italic";
+  letterSpacing?: number;
+  lineHeight?: number;
+  backgroundRadius?: number;
+  backgroundPadding?: number;
+  shadowBlur?: number;
+  animation?: "none" | "fade" | "reveal" | "pop" | "rise" | "slide" | "blur" | "bounce";
+  animationDurationMs?: number;
 }
 
 export interface CaptionTrack {
@@ -245,6 +258,8 @@ export interface EditorConfig {
   crop: { x: number; y: number; w: number; h: number } | null;
   trimStart: number;
   trimEnd: number;
+  /** Source playback/export speed. 1 is real time. */
+  playbackRate: number;
   cuts: number[];
   layers: Layer[];
   motionBlur: MotionBlurConfig;
@@ -267,7 +282,7 @@ export interface ExportSettings {
 }
 
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
-  backgroundColor: "#0f172a",
+  backgroundColor: "#1b1714",
   bgType: "wallpaper",
   wallpaperUrl: "gradient-sunset",
   bgBlur: 0,
@@ -284,7 +299,7 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     offsetY: 12,
   },
   cursorStyle: {
-    color: "#3b82f6",
+    color: "#d58a55",
     size: 16,
     shape: "arrow",
     showClickRipples: true,
@@ -303,6 +318,7 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   crop: null,
   trimStart: 0,
   trimEnd: 0,
+  playbackRate: 1,
   cuts: [],
   layers: [],
   motionBlur: {

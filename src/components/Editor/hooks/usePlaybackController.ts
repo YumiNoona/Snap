@@ -14,6 +14,7 @@ interface Options {
   trimStart: number;
   trimEnd: number;
   duration: number;
+  playbackRate: number;
   audioTracks: AudioTrack[];
   audioMix: AudioMixConfig;
 }
@@ -26,7 +27,7 @@ const PLAY_PROGRESS_TIMEOUT_MS = 1_500;
  * The video element is the sole editor clock. Every user action invalidates
  * older async media work, and only confirmed frame progress reports playing.
  */
-export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, audioTracks, audioMix }: Options) {
+export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, playbackRate, audioTracks, audioMix }: Options) {
   const [currentTime, setCurrentTime] = useState(0);
   const [status, setStatusState] = useState<TransportStatus>("idle");
   const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
@@ -398,6 +399,21 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       playSidecars(video, generationRef.current);
     }
   }, [applyAudioMix, audioMix, playSidecars]);
+
+  useEffect(() => {
+    const video = mediaElement;
+    if (!video) return;
+    const rate = Math.max(0.5, Math.min(2, playbackRate || 1));
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
+    video.preservesPitch = true;
+    for (const element of audioElementsRef.current.values()) {
+      element.defaultPlaybackRate = rate;
+      element.playbackRate = rate;
+      element.preservesPitch = true;
+    }
+    syncSidecars(video, true);
+  }, [mediaElement, playbackRate, syncSidecars]);
 
   useEffect(() => {
     const video = mediaElement;

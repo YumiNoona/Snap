@@ -4,6 +4,8 @@ export interface CaptionAnimationFrame {
   alpha: number;
   scale: number;
   rise: number;
+  slide: number;
+  blur: number;
   reveal: number;
 }
 
@@ -14,26 +16,41 @@ const easeOutCubic = (value: number) => 1 - (1 - value) ** 3;
 export function captionAnimationFrame(
   animation: NonNullable<CaptionStyle["animation"]>,
   elapsedMs: number,
+  durationMs = 420,
 ): CaptionAnimationFrame {
   const elapsed = Math.max(0, elapsedMs);
+  const duration = Math.max(120, durationMs);
   if (animation === "fade") {
-    const progress = easeOutCubic(clamp01(elapsed / 320));
-    return { alpha: progress, scale: 1, rise: 0, reveal: 1 };
+    const progress = easeOutCubic(clamp01(elapsed / duration));
+    return { alpha: progress, scale: 1, rise: 0, slide: 0, blur: 0, reveal: 1 };
   }
   if (animation === "reveal") {
-    const progress = easeOutCubic(clamp01(elapsed / 680));
-    return { alpha: Math.min(1, .35 + progress), scale: 1, rise: 0, reveal: progress };
+    const progress = easeOutCubic(clamp01(elapsed / Math.max(duration, 520)));
+    return { alpha: Math.min(1, .35 + progress), scale: 1, rise: 0, slide: 0, blur: 0, reveal: progress };
   }
   if (animation === "pop") {
-    const progress = clamp01(elapsed / 420);
+    const progress = clamp01(elapsed / duration);
     const overshoot = 1 + 2.7 * (progress - 1) ** 3 + 1.7 * (progress - 1) ** 2;
-    return { alpha: clamp01(progress * 2.5), scale: .72 + .28 * overshoot, rise: 0, reveal: 1 };
+    return { alpha: clamp01(progress * 2.5), scale: .72 + .28 * overshoot, rise: 0, slide: 0, blur: 0, reveal: 1 };
   }
   if (animation === "rise") {
-    const progress = easeOutCubic(clamp01(elapsed / 380));
-    return { alpha: progress, scale: 1, rise: 1 - progress, reveal: 1 };
+    const progress = easeOutCubic(clamp01(elapsed / duration));
+    return { alpha: progress, scale: 1, rise: 1 - progress, slide: 0, blur: 0, reveal: 1 };
   }
-  return { alpha: 1, scale: 1, rise: 0, reveal: 1 };
+  if (animation === "slide") {
+    const progress = easeOutCubic(clamp01(elapsed / duration));
+    return { alpha: progress, scale: 1, rise: 0, slide: 1 - progress, blur: 0, reveal: 1 };
+  }
+  if (animation === "blur") {
+    const progress = easeOutCubic(clamp01(elapsed / duration));
+    return { alpha: progress, scale: .98 + .02 * progress, rise: 0, slide: 0, blur: 1 - progress, reveal: 1 };
+  }
+  if (animation === "bounce") {
+    const progress = clamp01(elapsed / duration);
+    const bounce = 1 - Math.abs(Math.cos(progress * Math.PI * 2.5)) * (1 - progress);
+    return { alpha: clamp01(progress * 3), scale: .84 + .16 * bounce, rise: (1 - progress) * .45, slide: 0, blur: 0, reveal: 1 };
+  }
+  return { alpha: 1, scale: 1, rise: 0, slide: 0, blur: 0, reveal: 1 };
 }
 
 export function revealCaptionText(text: string, progress: number): string {

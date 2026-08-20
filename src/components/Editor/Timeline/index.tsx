@@ -5,7 +5,7 @@ import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
 import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
-import type { AudioTrack, CaptionSegment, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
+import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
 import "./Timeline.css";
@@ -33,6 +33,7 @@ interface Props {
   onKeyframesChange: (keyframes: Keyframe[]) => void;
   onAddManualZoom: () => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
+  onPlaybackRateChange: (rate: number) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
   onZoomRegionSelect: (region: ZoomRegionSelection) => void;
   onZoomRegionDuplicate: (region: ZoomRegionSelection) => void;
@@ -44,6 +45,8 @@ interface Props {
   onLayerDuplicate: (id: string) => void;
   onLayerDelete: (id: string) => void;
   captionTracks: CaptionTrack[];
+  selectedCaption: CaptionSegmentSelection | null;
+  onCaptionSegmentSelect: (selection: CaptionSegmentSelection) => void;
   onCaptionSegmentChange: (trackId: string, segment: CaptionSegment) => void;
   onCaptionSegmentDuplicate: (trackId: string, segmentId: string) => void;
   onCaptionSegmentDelete: (trackId: string, segmentId: string) => void;
@@ -84,6 +87,7 @@ export default function Timeline({
   onKeyframesChange,
   onAddManualZoom,
   onAudioMuteChange,
+  onPlaybackRateChange,
   selectedZoomRegion,
   onZoomRegionSelect,
   onZoomRegionDuplicate,
@@ -95,6 +99,8 @@ export default function Timeline({
   onLayerDuplicate,
   onLayerDelete,
   captionTracks,
+  selectedCaption,
+  onCaptionSegmentSelect,
   onCaptionSegmentChange,
   onCaptionSegmentDuplicate,
   onCaptionSegmentDelete,
@@ -681,7 +687,7 @@ export default function Timeline({
               <div className="clip-tag-content">
                 <Film size={12} />
                 <span>Clip</span>
-                <span className="clip-info">{Math.round(duration)}s</span>
+                <span className="clip-info">{Math.round(duration / Math.max(.5, config.playbackRate || 1))}s · {(config.playbackRate || 1).toFixed(2).replace(/\.00$/, "")}×</span>
               </div>
             </div>
 
@@ -762,11 +768,11 @@ export default function Timeline({
             <div className="ss-track-row caption-track" key={track.id}>
               {track.segments.map((segment) => (
                 <div
-                  className="caption-clip-bar"
+                  className={`caption-clip-bar ${selectedCaption?.trackId === track.id && selectedCaption.segmentId === segment.id ? "selected" : ""}`}
                   key={segment.id}
                   style={{ left: x(segment.startMs / 1000), width: Math.max(18, w((segment.endMs - segment.startMs) / 1000)) }}
                   onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "move")}
-                  onClick={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); onCaptionSegmentSelect({ trackId: track.id, segmentId: segment.id }); }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -874,7 +880,7 @@ export default function Timeline({
             </button>
           </>}
           {contextMenu.kind === "caption" && <>
-            <button role="menuitem" onClick={() => { onSeek(contextMenu.segment.startMs / 1000); setContextMenu(null); }}>
+            <button role="menuitem" onClick={() => { onCaptionSegmentSelect({ trackId: contextMenu.trackId, segmentId: contextMenu.segment.id }); onSeek(contextMenu.segment.startMs / 1000); setContextMenu(null); }}>
               <SlidersHorizontal size={15} /> Go to and edit
             </button>
             <button role="menuitem" onClick={() => { onCaptionSegmentDuplicate(contextMenu.trackId, contextMenu.segment.id); setContextMenu(null); }}>
@@ -893,6 +899,23 @@ export default function Timeline({
             {contextMenu.muted ? "Unmute track" : "Mute track"}
           </button>}
           {contextMenu.kind === "clip" && <>
+            <div className="timeline-context-speed">
+              <span>Clip speed</span>
+              <div>
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                  <button
+                    key={rate}
+                    className={Math.abs((config.playbackRate || 1) - rate) < .001 ? "active" : ""}
+                    role="menuitemradio"
+                    aria-checked={Math.abs((config.playbackRate || 1) - rate) < .001}
+                    onClick={() => { onPlaybackRateChange(rate); setContextMenu(null); }}
+                  >
+                    {rate}×
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="timeline-context-separator" />
             <button role="menuitem" onClick={() => { handleScissorCut(); setContextMenu(null); }}>
               <Scissors size={15} /> Split at playhead
             </button>

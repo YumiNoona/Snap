@@ -5,13 +5,13 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions } from "lucide-react";
+import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
 import DonateButton from "../shared/DonateButton";
-import type { AudioTrack, CaptionTrack, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
+import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
 import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
@@ -34,6 +34,7 @@ export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "c
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_PRESETS_STORAGE_KEY = "snap.editorPresets.v1";
+const EDITOR_THEME_STORAGE_KEY = "snap.editorTheme.v1";
 
 type PresetSettings = Pick<EditorConfig,
   "backgroundColor" | "bgType" | "wallpaperUrl" | "bgBlur" | "padding" |
@@ -112,6 +113,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
+  const [selectedCaption, setSelectedCaption] = useState<CaptionSegmentSelection | null>(null);
+  const [editorTheme, setEditorTheme] = useState<"dark" | "light">(() => localStorage.getItem(EDITOR_THEME_STORAGE_KEY) === "light" ? "light" : "dark");
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
@@ -126,11 +129,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(EDITOR_THEME_STORAGE_KEY, editorTheme);
+  }, [editorTheme]);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
     config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
   const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
-    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration, audioTracks, audioMix: config.audio,
+    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
+    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio,
   });
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
@@ -428,8 +436,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         if (patch.y !== undefined) next.y = patch.y;
       }
       if (patch.easing !== undefined) next.easing = patch.easing;
-      if (patch.transitionMs !== undefined && (index === region.zoomIndices[0] || index === region.resetIndex)) {
+      if (patch.transitionMs !== undefined && index === region.zoomIndices[0]) {
         next.duration = Math.min(Math.round(newDuration / 2), Math.max(40, patch.transitionMs));
+      }
+      if (patch.exitTransitionMs !== undefined && index === region.resetIndex) {
+        next.duration = Math.min(Math.round(newDuration / 2), Math.max(40, patch.exitTransitionMs));
       }
       return next;
     }).sort((a, b) => a.time - b.time);
@@ -638,7 +649,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, [activeTool, zoomTargetMode]);
 
   return (
-    <div className="screenstudio-editor-layout">
+    <div className="screenstudio-editor-layout" data-theme={editorTheme}>
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
         <div className="ss-drag-area" data-tauri-drag-region />
@@ -759,6 +770,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
+          <button
+            className="ss-theme-toggle"
+            onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
+            title={`Switch to ${editorTheme === "dark" ? "light" : "dark"} mode`}
+            aria-label={`Switch to ${editorTheme === "dark" ? "light" : "dark"} mode`}
+          >
+            {editorTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
           <DonateButton />
           <button
             className="ss-topbar-export-btn"
@@ -861,7 +880,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             selectedLayerId={selectedLayerId}
             onLayerSelect={(id) => {
               setSelectedLayerId(id);
-              if (id) setActiveTool("annotations");
+              if (id) {
+                setSelectedZoomRegion(null);
+                setSelectedCaption(null);
+                setActiveTool("annotations");
+              }
             }}
             onLayerChange={(updated) => setConfig((c) => ({
               ...c,
@@ -903,11 +926,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           }}
           selectedZoomRegion={resolvedSelectedZoom}
           onSelectedZoomChange={updateSelectedZoom}
+          onClearSelectedZoom={() => { setSelectedZoomRegion(null); setZoomTargetMode(false); manualTargetRangeRef.current = null; }}
           onDeleteSelectedZoom={deleteSelectedZoom}
           audioTracks={audioTracks}
           audioStatus={audioStatus}
           captionTracks={captionTracks}
           onCaptionTracksChange={setCaptionTracks}
+          selectedCaption={selectedCaption}
+          onSelectCaption={setSelectedCaption}
         />
       </div>
 
@@ -943,6 +969,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           // focus marker is repositioned in the preview.
           pausePlayback();
           setSelectedZoomRegion(region);
+          setSelectedLayerId(null);
+          setSelectedCaption(null);
           setActiveTool("motion");
           manualTargetRangeRef.current = region;
           setZoomTargetMode(true);
@@ -962,6 +990,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onLayerSelect={(id) => {
           pausePlayback();
           setSelectedLayerId(id);
+          setSelectedZoomRegion(null);
+          setSelectedCaption(null);
           setActiveTool("annotations");
           const layer = config.layers.find((candidate) => candidate.id === id);
           if (layer && (currentTime < layer.start || currentTime > layer.end)) seekTo(layer.start + 0.01);
@@ -973,6 +1003,18 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onLayerDuplicate={duplicateLayer}
         onLayerDelete={deleteLayer}
         captionTracks={captionTracks}
+        selectedCaption={selectedCaption}
+        onCaptionSegmentSelect={(selection) => {
+          pausePlayback();
+          setSelectedCaption(selection);
+          setSelectedLayerId(null);
+          setSelectedZoomRegion(null);
+          setZoomTargetMode(false);
+          setActiveTool("captions");
+          const track = captionTracks.find((candidate) => candidate.id === selection.trackId);
+          const segment = track?.segments.find((candidate) => candidate.id === selection.segmentId);
+          if (segment && (currentTime < segment.startMs / 1000 || currentTime > segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01);
+        }}
         onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.map((item) => item.id === segment.id ? segment : item) } : track))}
         onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => {
           if (track.id !== trackId) return track;
@@ -984,7 +1026,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           const copy = { ...source, id: `caption-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, startMs, endMs: startMs + durationMs, userEdited: true };
           return { ...track, segments: [...track.segments, copy].sort((a, b) => a.startMs - b.startMs) };
         }))}
-        onCaptionSegmentDelete={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.filter((segment) => segment.id !== segmentId) } : track))}
+        onPlaybackRateChange={(playbackRate) => setConfig((current) => ({ ...current, playbackRate }))}
+        onCaptionSegmentDelete={(trackId, segmentId) => {
+          setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.filter((segment) => segment.id !== segmentId) } : track));
+          if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
+        }}
       />
       {showExport && (
         <ExportModal
