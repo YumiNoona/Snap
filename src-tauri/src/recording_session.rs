@@ -390,12 +390,17 @@ pub async fn stop_recording_session(
     }
 
     transition(&app, &session_id, RecordingPhase::Stopping, None, None)?;
+    // From this point capture has received its stop signal and the remaining
+    // work is media finalization: closing WAV headers, converting resilient
+    // VFR fragments to the editor-ready CFR file, and validating sidecars.
+    // Publish that phase before awaiting the workers so the launcher can show
+    // an honest processing screen instead of appearing frozen.
+    transition(&app, &session_id, RecordingPhase::Finalizing, None, None)?;
     let (video, audio, input) = tokio::join!(
         crate::capture::stop_recording(),
         crate::audio::stop_audio_capture(),
         crate::input_hook::stop_input_logging(),
     );
-    transition(&app, &session_id, RecordingPhase::Finalizing, None, None)?;
 
     let mut failures = Vec::new();
     if let Err(error) = video {

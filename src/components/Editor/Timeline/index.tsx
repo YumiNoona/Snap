@@ -31,7 +31,6 @@ interface Props {
   onUndo: () => void;
   onRedo: () => void;
   onKeyframesChange: (keyframes: Keyframe[]) => void;
-  onAddManualZoom: () => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
   onPlaybackRateChange: (rate: number) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
@@ -85,7 +84,6 @@ export default function Timeline({
   onUndo,
   onRedo,
   onKeyframesChange,
-  onAddManualZoom,
   onAudioMuteChange,
   onPlaybackRateChange,
   selectedZoomRegion,
@@ -658,8 +656,8 @@ export default function Timeline({
               <span className="audio-state-dot" aria-hidden="true" />
             </button>
           </div>
-          <div className="track-label zoom-label">Zoom</div>
-          {captionTracks.map((track) => <div className="track-label caption-label" key={track.id}>{track.name}</div>)}
+          {zoomSegments.length > 0 && <div className="track-label zoom-label">Zoom</div>}
+          {captionTracks.map((track) => <div className="track-label caption-label" key={track.id}>Captions</div>)}
           {visibleLayerTypes.map((type) => (
             <div key={type} className={`track-label layer-label ${type}-label`}>
               {type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}
@@ -727,7 +725,7 @@ export default function Timeline({
           </div>
 
           {/* Zoom / Animation layer */}
-          <div className="ss-track-row zoom-track">
+          {zoomSegments.length > 0 && <div className="ss-track-row zoom-track">
             <div className="zoom-connecting-line" />
             {zoomSegments.map((segment, index) => (
               <div
@@ -757,12 +755,7 @@ export default function Timeline({
                 <button className="zoom-bar-handle right" onPointerDown={(event) => beginZoomEdit(event, segment, "end")} aria-label="Change zoom end" />
               </div>
             ))}
-            {zoomSegments.length === 0 && (
-              <button className="zoom-empty-action" onClick={(event) => { event.stopPropagation(); onAddManualZoom(); }} title="Add a zoom region at the playhead">
-                <ZoomIn size={12} /> No zooms — add one
-              </button>
-            )}
-          </div>
+          </div>}
 
           {captionTracks.map((track) => (
             <div className="ss-track-row caption-track" key={track.id}>
@@ -770,7 +763,7 @@ export default function Timeline({
                 <div
                   className={`caption-clip-bar ${selectedCaption?.trackId === track.id && selectedCaption.segmentId === segment.id ? "selected" : ""}`}
                   key={segment.id}
-                  style={{ left: x(segment.startMs / 1000), width: Math.max(18, w((segment.endMs - segment.startMs) / 1000)) }}
+                  style={{ left: x(segment.startMs / 1000), width: Math.max(4, w((segment.endMs - segment.startMs) / 1000)) }}
                   onPointerDown={(event) => beginCaptionEdit(event, track.id, segment, "move")}
                   onClick={(event) => { event.stopPropagation(); onCaptionSegmentSelect({ trackId: track.id, segmentId: segment.id }); }}
                   onContextMenu={(event) => {

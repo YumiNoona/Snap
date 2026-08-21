@@ -217,6 +217,8 @@ struct CaptureHandle {
 static STATE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
 static GFXCAPTURE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 const RESILIENT_MP4_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
+const EDITOR_READY_FPS_FILTER: &str = "fps=fps=60:round=near:start_time=0";
+const EDITOR_READY_MOVFLAGS: &str = "+faststart";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -972,7 +974,13 @@ fn spawn_gpu_capture(
     source: &str,
     destination: &Path,
 ) -> std::result::Result<
-    (Child, ChildStdin, &'static str, Duration, thread::JoinHandle<()>),
+    (
+        Child,
+        ChildStdin,
+        &'static str,
+        Duration,
+        thread::JoinHandle<()>,
+    ),
     String,
 > {
     let destination = destination.to_string_lossy().to_string();
@@ -1087,9 +1095,10 @@ fn spawn_gpu_capture(
 
             match first_frame_rx.recv_timeout(Duration::from_secs(4)) {
                 Ok(encoded_timeline) if matches!(child.try_wait(), Ok(None)) => {
-                    let stdin = child.stdin.take().ok_or_else(|| {
-                        "Desktop capture control pipe is unavailable".to_string()
-                    })?;
+                    let stdin = child
+                        .stdin
+                        .take()
+                        .ok_or_else(|| "Desktop capture control pipe is unavailable".to_string())?;
                     return Ok((child, stdin, name, encoded_timeline, progress_reader));
                 }
                 _ => {
@@ -1107,11 +1116,7 @@ fn spawn_gpu_capture(
 /// its `progress=` marker arrives, so `frame` and `out_time_us` always describe
 /// the same encoded point. The returned media duration lets the caller derive
 /// first-frame wall time even if FFmpeg reports progress slightly later.
-fn parse_gpu_progress_line(
-    line: &str,
-    frame: &mut u64,
-    out_time_us: &mut u64,
-) -> Option<Duration> {
+fn parse_gpu_progress_line(line: &str, frame: &mut u64, out_time_us: &mut u64) -> Option<Duration> {
     let (key, value) = line.trim().split_once('=')?;
     match key {
         "frame" => *frame = value.parse().unwrap_or(*frame),
@@ -1175,89 +1180,122 @@ fn finalize_capture_parts(
             "Desktop capture produced no usable video: {diagnostics}"
         ));
     }
-    let _ = std::fs::remove_file(output_path);
-    if parts.len() == 1 {
-        // A recording segment is deliberately optimized for low-latency
-        // writing, not random access. Remuxing (without re-encoding) rebuilds
-        // monotonically generated timestamps and moves the MP4 index to the
-        // front. WebView2 can then seek/play repeatedly after timeline edits
-        // instead of getting stuck on an unfinished encoder time base.
-        let output = background_command("ffmpeg")
-            .args([
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-fflags",
-                "+genpts",
-                "-i",
-            ])
-            .arg(&parts[0])
-            .args([
-                "-map",
-                "0:v:0",
-                "-c",
-                "copy",
-                "-avoid_negative_ts",
-                "make_zero",
-                "-movflags",
-                "+faststart",
-            ])
-            .arg(output_path)
-            .output()
-            .map_err(|error| format!("Unable to normalize desktop recording: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "Unable to normalize desktop recording: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-    } else {
-        let list_path = output_path.with_extension("capture-parts.txt");
+    let list_path = if parts.len() > 1 {
+        let path = output_path.with_extension("capture-parts.txt");
         let list = parts
             .iter()
             .map(|path| format!("file '{}'", path.to_string_lossy().replace('\'', "'\\''")))
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(&list_path, list)
+        std::fs::write(&path, list)
             .map_err(|error| format!("Unable to prepare recovered recording: {error}"))?;
-        let output = background_command("ffmpeg")
+        Some(path)
+    } else {
+        None
+    };
+
+    // Live capture intentionally writes resilient VFR fragments so a driver
+    // reset or unclean stop cannot destroy the whole session. VFR timestamps
+    // are ideal for recovery but can make WebView2 repeat frames unevenly and
+    // stutter while the editor is compositing effects. After capture has
+    // stopped, prepare a constant-60-fps, fast-start file. This work is allowed
+    // to be heavier because the recording hot path has already ended.
+    let codecs: [(&str, &[&str]); 4] = [
+        (
+            "NVENC",
+            &[
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p3",
+                "-tune",
+                "hq",
+                "-b:v",
+                "12M",
+                "-maxrate",
+                "16M",
+                "-bufsize",
+                "8M",
+                "-g",
+                "120",
+            ],
+        ),
+        (
+            "AMD AMF",
+            &[
+                "-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M", "-maxrate", "16M",
+                "-bufsize", "8M", "-g", "120",
+            ],
+        ),
+        (
+            "Intel Quick Sync",
+            &[
+                "-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M", "-maxrate", "16M",
+                "-bufsize", "8M", "-g", "120",
+            ],
+        ),
+        (
+            "software fallback",
+            &[
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", "120",
+            ],
+        ),
+    ];
+    let mut attempts = Vec::new();
+    for (label, codec) in codecs {
+        let _ = std::fs::remove_file(output_path);
+        let mut command = background_command("ffmpeg");
+        command.args(["-y", "-hide_banner", "-loglevel", "error"]);
+        if let Some(path) = &list_path {
+            command
+                .args(["-f", "concat", "-safe", "0", "-fflags", "+genpts", "-i"])
+                .arg(path);
+        } else {
+            command.args(["-fflags", "+genpts", "-i"]).arg(&parts[0]);
+        }
+        command
+            .args(["-map", "0:v:0", "-an", "-vf", EDITOR_READY_FPS_FILTER])
+            .args(codec)
             .args([
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-fflags",
-                "+genpts",
-                "-i",
-            ])
-            .arg(&list_path)
-            .args([
-                "-map",
-                "0:v:0",
-                "-c",
-                "copy",
+                "-pix_fmt",
+                "yuv420p",
+                "-fps_mode",
+                "cfr",
+                "-video_track_timescale",
+                "60000",
                 "-avoid_negative_ts",
                 "make_zero",
                 "-movflags",
-                "+faststart",
+                EDITOR_READY_MOVFLAGS,
             ])
-            .arg(output_path)
-            .output()
-            .map_err(|error| format!("Unable to join recovered recording: {error}"))?;
-        let _ = std::fs::remove_file(&list_path);
-        if !output.status.success() {
-            return Err(format!(
-                "Unable to join recovered desktop recording: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            .arg(output_path);
+        match command.output() {
+            Ok(output) if output.status.success() => {
+                match validate_output(output_path, true, diagnostics) {
+                    Ok(()) => {
+                        if let Some(path) = &list_path {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        eprintln!("[Snap] Editor-ready CFR video prepared with {label}");
+                        return Ok(());
+                    }
+                    Err(error) => attempts.push(format!("{label}: {error}")),
+                }
+            }
+            Ok(output) => attempts.push(format!(
+                "{label}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(error) => attempts.push(format!("{label}: {error}")),
         }
     }
-    validate_output(output_path, true, diagnostics).map_err(|error| error.to_string())
+    if let Some(path) = &list_path {
+        let _ = std::fs::remove_file(path);
+    }
+    Err(format!(
+        "Unable to prepare smooth editor playback: {}",
+        attempts.join("; ")
+    ))
 }
 
 // ── D3D11 device ─────────────────────────────────────────────────────────────
@@ -1547,7 +1585,8 @@ mod tests {
 
     use super::{
         desktop_duplication_source, gfxcapture_region_source, gfxcapture_source,
-        parse_gpu_progress_line, validate_capture_segment, CropRect, RESILIENT_MP4_MOVFLAGS,
+        parse_gpu_progress_line, validate_capture_segment, CropRect, EDITOR_READY_FPS_FILTER,
+        EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
     };
 
     #[test]
@@ -1602,6 +1641,13 @@ mod tests {
         assert!(RESILIENT_MP4_MOVFLAGS.contains("frag_keyframe"));
         assert!(RESILIENT_MP4_MOVFLAGS.contains("empty_moov"));
         assert!(RESILIENT_MP4_MOVFLAGS.contains("default_base_moof"));
+    }
+
+    #[test]
+    fn editor_ready_video_uses_constant_frame_rate_and_fast_start() {
+        assert!(EDITOR_READY_FPS_FILTER.contains("fps=60"));
+        assert!(EDITOR_READY_FPS_FILTER.contains("start_time=0"));
+        assert_eq!(EDITOR_READY_MOVFLAGS, "+faststart");
     }
 
     #[test]

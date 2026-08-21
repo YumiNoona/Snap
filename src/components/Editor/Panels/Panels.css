@@ -979,9 +979,9 @@
 .effect-icon svg { position: relative; z-index: 2; }
 .effect-orbit { position: absolute; inset: 4px 7px; border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent); border-radius: 50%; }
 .effect-none { color: #94a3b8; }
-.effect-default { color: #93c5fd; }
+.effect-default { color: #6ee7b7; }
 .effect-ripple, .effect-ring { color: var(--accent); }
-.effect-diffusion { color: #a78bfa; }
+.effect-diffusion { color: #5eead4; }
 .effect-spotlight { color: #facc15; }
 .effect-sparkle { color: #fde047; }
 .effect-firework { color: #f472b6; }
@@ -1033,8 +1033,8 @@
 
 .text-preview { background: transparent; }
 .text-preview-plain { color: #f8fafc; }
-.text-preview-boxed { color: #94a3b8; }
-.text-preview-pill { color: #a78bfa; }
+.text-preview-boxed { color: #a1a1aa; }
+.text-preview-pill { color: #6ee7b7; }
 .text-preview-badge { color: var(--accent); }
 .text-preview svg { filter: drop-shadow(0 0 5px currentColor); }
 
@@ -1055,7 +1055,7 @@
   font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
-  background: #090d14;
+  background: #0a0a0a;
   border: 1px solid var(--border-default);
   border-radius: 7px;
   box-shadow: 0 7px 18px rgba(0,0,0,.32);

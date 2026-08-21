@@ -123,12 +123,15 @@ function App() {
   }, [isEditorPreview, isEditorWindow]);
 
   const openInEditorWindow = useCallback(
-    (video: string, log: string) => {
+    async (video: string, log: string) => {
       setEditorError(null);
-      invoke("open_editor_window", { video, log }).catch((e) => {
+      try {
+        await invoke("open_editor_window", { video, log });
+      } catch (e) {
         console.error("open_editor_window failed:", e);
         setEditorError(String(e));
-      });
+        throw e;
+      }
     },
     []
   );

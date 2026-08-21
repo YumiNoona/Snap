@@ -213,7 +213,7 @@ export default function Panels({
     return {
       id: genId(), type: "text", ...timing, x: 0.2, y: 0.4, w: 0.6, h: 0.16,
       content: style === "badge" ? "1" : "Text", style, color: "#ffffff", fontSize: 24,
-      fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#b65c36",
+      fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#059669",
       letterSpacing: 0, opacity: 1, rotation: 0, flipX: false, flipY: false,
     };
   };
@@ -452,7 +452,7 @@ export default function Panels({
                     <SelectRow label="Typeface" value={selectedLayer.fontFamily ?? "system"} options={["system", "serif", "mono"]} onChange={(fontFamily) => updateSelectedLayer({ fontFamily: fontFamily as TextLayer["fontFamily"] })} />
                     <SelectRow label="Weight" value={String(selectedLayer.fontWeight ?? 700)} options={["400", "500", "600", "700", "800"]} onChange={(fontWeight) => updateSelectedLayer({ fontWeight: Number(fontWeight) as TextLayer["fontWeight"] })} />
                     <ColorInput label="Text Color" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
-                    {selectedLayer.style !== "plain" && <ColorInput label="Background" value={selectedLayer.backgroundColor ?? "#2563eb"} onChange={(backgroundColor) => updateSelectedLayer({ backgroundColor })} />}
+                    {selectedLayer.style !== "plain" && <ColorInput label="Background" value={selectedLayer.backgroundColor ?? "#059669"} onChange={(backgroundColor) => updateSelectedLayer({ backgroundColor })} />}
                     <Slider label="Font Size" value={selectedLayer.fontSize} min={10} max={120} step={1} unit="px" onChange={(fontSize) => updateSelectedLayer({ fontSize })} />
                     <Slider label="Letter Space" value={selectedLayer.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateSelectedLayer({ letterSpacing })} />
                     <div className="layer-icon-pills" aria-label="Text alignment">

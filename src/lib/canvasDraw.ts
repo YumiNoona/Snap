@@ -13,7 +13,12 @@ export function drawCaptionTrack(
   if (!segment?.text.trim()) return;
   const style = track.style;
   const animation = style.animation ?? "none";
-  const entrance = captionAnimationFrame(animation, timeMs - segment.startMs, style.animationDurationMs ?? 420);
+  // A short phrase must still reach its stable/readable state well before it
+  // leaves the screen. Otherwise reveal animations make the final words appear
+  // missing even though the caption timing itself is correct.
+  const segmentDuration = segment.endMs - segment.startMs;
+  const entranceDuration = Math.min(style.animationDurationMs ?? 420, Math.max(120, segmentDuration * .45));
+  const entrance = captionAnimationFrame(animation, timeMs - segment.startMs, entranceDuration);
   const captionText = animation === "reveal" ? revealCaptionText(segment.text, entrance.reveal) : segment.text.trim();
   if (!captionText) return;
   const fontSize = Math.max(12, style.fontSize * frame.w / 1920);

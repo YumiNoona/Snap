@@ -961,7 +961,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onUndo={undo}
         onRedo={redo}
         onKeyframesChange={setKeyframes}
-        onAddManualZoom={handleAddManualZoom}
         selectedZoomRegion={selectedZoomRegion}
         onZoomRegionSelect={(region) => {
           // Selecting a bar enters focus editing at the beginning of that

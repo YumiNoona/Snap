@@ -118,7 +118,6 @@ export default function Preview({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
   const [videoReady, setVideoReady] = useState(false);
-  const rafRef = useRef<number>(0);
   const decodedFrameCallbackRef = useRef<number | null>(null);
   const renderRef = useRef<() => void>(() => {});
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
@@ -465,7 +464,7 @@ export default function Preview({
     const zoomX = zoomResult.x, zoomY = zoomResult.y, zoomScale = zoomResult.scale;
     if (config.zoomEnabled && keyframes.length > 0) {
       const z = Math.round(zoomScale * 100) / 100;
-      if (Math.abs(currentZoom - z) > 0.01) setCurrentZoom(z);
+      setCurrentZoom((current) => Math.abs(current - z) > 0.01 ? z : current);
     }
 
 
@@ -742,7 +741,7 @@ export default function Preview({
         ctx.translate(cx, cy);
         ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
         ctx.translate(-cx, -cy);
-        ctx.strokeStyle = "rgba(96, 165, 250, .96)";
+        ctx.strokeStyle = "rgba(62, 207, 142, .96)";
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.strokeRect(lx, ly, lw, lh);
@@ -753,7 +752,7 @@ export default function Preview({
           ctx.beginPath(); ctx.moveTo(cx, ly); ctx.lineTo(cx, ly - 26); ctx.stroke();
           ctx.fillStyle = "#0b1220";
           ctx.beginPath(); ctx.arc(cx, ly - 31, 8, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = "#60a5fa"; ctx.lineWidth = 2; ctx.stroke();
+          ctx.strokeStyle = "#3ecf8e"; ctx.lineWidth = 2; ctx.stroke();
           ctx.fillStyle = "#ffffff";
           ctx.beginPath(); ctx.arc(cx, ly - 31, 2.2, 0, Math.PI * 2); ctx.fill();
         }
@@ -765,7 +764,7 @@ export default function Preview({
         for (const [hx, hy] of handles) {
           ctx.fillStyle = "#f8fafc";
           ctx.fillRect(hx - 5, hy - 5, 10, 10);
-          ctx.strokeStyle = "#2563eb";
+          ctx.strokeStyle = "#059669";
           ctx.lineWidth = 2;
           ctx.strokeRect(hx - 5, hy - 5, 10, 10);
         }
@@ -822,7 +821,7 @@ export default function Preview({
         focusY >= offsetY - 12 && focusY <= offsetY + videoH + 12;
       if (isVisible) {
         const pulse = (Math.sin(performance.now() / 170) + 1) / 2;
-        const accent = zoomFocusSource === "auto" ? "139, 92, 246" : "59, 130, 246";
+        const accent = zoomFocusSource === "auto" ? "62, 207, 142" : "16, 185, 129";
         ctx.save();
         ctx.shadowColor = `rgba(${accent}, 0.7)`;
         ctx.shadowBlur = 11 + pulse * 5;
@@ -852,7 +851,7 @@ export default function Preview({
     } else if (zoomTargetMode) {
       zoomFocusDisplayRef.current = null;
       ctx.save();
-      ctx.strokeStyle = "#3b82f6"; ctx.fillStyle = "rgba(59,130,246,0.2)"; ctx.lineWidth = 2;
+      ctx.strokeStyle = "#10b981"; ctx.fillStyle = "rgba(16,185,129,0.2)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(offsetX + videoW / 2, offsetY + videoH / 2, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.restore();
     }
@@ -870,7 +869,7 @@ export default function Preview({
 
   }, [
     canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
-    getCursorAt, screenToVideo, spawnClickRipples, currentZoom
+    getCursorAt, screenToVideo, spawnClickRipples
   ]);
   renderRef.current = render;
 
@@ -880,6 +879,14 @@ export default function Preview({
       if (wallpaperRef.current && wallpaperRef.current.path !== config.wallpaperUrl) {
         fadeRef.current = { start: performance.now() };
       }
+      let frame = 0;
+      const started = performance.now();
+      const paintFade = () => {
+        renderRef.current();
+        if (performance.now() - started < 240) frame = requestAnimationFrame(paintFade);
+      };
+      frame = requestAnimationFrame(paintFade);
+      return () => cancelAnimationFrame(frame);
     }
   }, [config.bgType, config.wallpaperUrl]);
 
@@ -1103,16 +1110,14 @@ export default function Preview({
     return () => window.removeEventListener("keydown", onKey);
   }, [cropMode, onCropCancel]);
 
-  // Stable rAF loop — always reads the latest render via renderRef, so config
-  // changes (cursor style/pack) apply on the very next frame without restarting.
+  // Paint once whenever editor configuration changes. Playback frames are
+  // handled separately by requestVideoFrameCallback below; running a second
+  // unconditional rAF compositor doubled canvas work and could make otherwise
+  // smooth 60 fps recordings visibly stutter.
   useEffect(() => {
-    const loop = () => {
-      renderRef.current();
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, []);
+    const frame = requestAnimationFrame(() => renderRef.current());
+    return () => cancelAnimationFrame(frame);
+  }, [render, videoReady]);
 
   // `currentTime` and the decoded texture exposed by WebView2 are not always
   // advanced atomically. In particular, replaying an MP4 after it reaches the
@@ -1122,15 +1127,46 @@ export default function Preview({
   // the canvas is invalidated at the exact point a new decoded frame exists.
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !videoReady || typeof video.requestVideoFrameCallback !== "function") return;
+    if (!video || !videoReady) return;
 
     let disposed = false;
-    const onPresentedFrame: VideoFrameRequestCallback = () => {
-      if (disposed) return;
-      renderRef.current();
-      decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
-    };
-    decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
+    let fallbackFrame = 0;
+    let fallbackStart: (() => void) | null = null;
+    let restartDecodedFrames: (() => void) | null = null;
+    if (typeof video.requestVideoFrameCallback === "function") {
+      const onPresentedFrame: VideoFrameRequestCallback = () => {
+        if (disposed) return;
+        decodedFrameCallbackRef.current = null;
+        renderRef.current();
+        decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
+      };
+      const restart = () => {
+        if (disposed) return;
+        if (decodedFrameCallbackRef.current !== null) {
+          try { video.cancelVideoFrameCallback(decodedFrameCallbackRef.current); } catch { /* decoder was rebuilt */ }
+        }
+        decodedFrameCallbackRef.current = video.requestVideoFrameCallback(onPresentedFrame);
+        requestAnimationFrame(() => renderRef.current());
+      };
+      restartDecodedFrames = restart;
+      video.addEventListener("playing", restart);
+      video.addEventListener("loadeddata", restart);
+      video.addEventListener("seeked", restart);
+      restart();
+    } else {
+      const fallbackPaint = () => {
+        if (disposed) return;
+        renderRef.current();
+        if (!video.paused && !video.ended) fallbackFrame = requestAnimationFrame(fallbackPaint);
+      };
+      const startFallback = () => {
+        cancelAnimationFrame(fallbackFrame);
+        fallbackFrame = requestAnimationFrame(fallbackPaint);
+      };
+      fallbackStart = startFallback;
+      video.addEventListener("play", startFallback);
+      startFallback();
+    }
 
     // A paused seek and a decoder reload each produce a new frame without
     // necessarily entering the normal playing state. Repaint on those media
@@ -1145,6 +1181,13 @@ export default function Preview({
       video.removeEventListener("loadeddata", invalidate);
       video.removeEventListener("seeked", invalidate);
       video.removeEventListener("canplay", invalidate);
+      if (restartDecodedFrames) {
+        video.removeEventListener("playing", restartDecodedFrames);
+        video.removeEventListener("loadeddata", restartDecodedFrames);
+        video.removeEventListener("seeked", restartDecodedFrames);
+      }
+      if (fallbackStart) video.removeEventListener("play", fallbackStart);
+      cancelAnimationFrame(fallbackFrame);
       if (decodedFrameCallbackRef.current !== null) {
         video.cancelVideoFrameCallback(decodedFrameCallbackRef.current);
         decodedFrameCallbackRef.current = null;

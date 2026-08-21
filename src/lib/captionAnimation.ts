@@ -25,7 +25,7 @@ export function captionAnimationFrame(
     return { alpha: progress, scale: 1, rise: 0, slide: 0, blur: 0, reveal: 1 };
   }
   if (animation === "reveal") {
-    const progress = easeOutCubic(clamp01(elapsed / Math.max(duration, 520)));
+    const progress = easeOutCubic(clamp01(elapsed / duration));
     return { alpha: Math.min(1, .35 + progress), scale: 1, rise: 0, slide: 0, blur: 0, reveal: progress };
   }
   if (animation === "pop") {

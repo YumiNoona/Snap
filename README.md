@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-3.0.0-3b82f6?style=flat-square" alt="Version 3.0.0" />
+    <img src="https://img.shields.io/badge/version-4.0.0-10b981?style=flat-square" alt="Version 4.0.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,25 +22,24 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 3.0.0
+## Snap 4.0.0
 
-This release concentrates on capture reliability and a more deliberate editing
-workflow:
+This release concentrates on smooth post-recording playback, dependable
+captions, and a calmer editor workflow:
 
-- A recording-clock-based audio/video pipeline keeps microphone and desktop
-  audio aligned with the first encoded video frame.
-- Full-screen capture follows the desktop instead of freezing on the window
-  that was active when recording began.
-- Preview transport, seeking, replay, and end-of-media recovery use one playback
-  controller so the timeline and video frame cannot drift into conflicting states.
-- Clip speed can be adjusted from 0.5x to 2x while preview, captions, separate
-  audio, and export remain synchronized.
-- Zoom regions and caption clips open focused inspectors with richer motion,
-  typography, layout, color, and animation controls.
-- Warm light and dark editor themes replace the old blue-violet interface while
-  keeping tool, timeline, and inspector contrast accessible.
-- Preview and export share the same caption renderer, so the delivered MP4
-  matches the editor more closely.
+- Recording fragments are compiled into a constant-frame-rate, fast-start MP4
+  before editing, with a visible preparation stage instead of an unresponsive dock.
+- Preview composition follows decoded frames directly and re-arms itself after
+  replay, seeking, or decoder recovery without duplicating canvas work.
+- Captions retain speech-aligned timestamps, resolve overlapping transcription
+  segments, and complete entrance animations before short phrases disappear.
+- Dense caption clips keep their real timeline duration and empty Zoom rows hide
+  automatically when the last zoom region is removed.
+- Presets use a roomier, more consistent popover layout.
+- Neutral Vercel-inspired dark and light surfaces replace the previous warm and
+  blue-violet editor colors, with a restrained green interaction accent.
+- Stop feedback is immediate: the floating dock acknowledges the action, closes,
+  and hands progress to the recording preparation surface.
 
 ## What Snap includes
 

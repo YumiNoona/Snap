@@ -21,6 +21,7 @@ import {
   FileVideo2,
   FolderOpen,
   LogOut,
+  LoaderCircle,
 } from "lucide-react";
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
@@ -58,7 +59,7 @@ interface RecordingSessionSnapshot {
 }
 
 interface Props {
-  onOpenEditor: (videoPath: string, logPath: string) => void;
+  onOpenEditor: (videoPath: string, logPath: string) => void | Promise<void>;
   onOpenTeleprompter: () => void;
   onOpenSettings: () => void;
   editorError?: string | null;
@@ -106,6 +107,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const [micMuted, setMicMuted] = useState(false);
   const [recordStatus, setRecordStatus] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const [processingRecording, setProcessingRecording] = useState(false);
+  const [processingMessage, setProcessingMessage] = useState("Closing capture streams…");
   
   const lastVideoRef = useRef(localStorage.getItem("snap.lastVideo") || "");
   const lastLogRef = useRef(localStorage.getItem("snap.lastLog") || "");
@@ -153,7 +156,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       else if (payload.phase === "starting") setRecordStatus("Starting capture…");
       else if (payload.phase === "pausing") setRecordStatus("Pausing…");
       else if (payload.phase === "resuming") setRecordStatus("Resuming…");
-      else if (payload.phase === "finalizing") setRecordStatus("Finalizing recording…");
+      else if (payload.phase === "stopping") {
+        setProcessingRecording(true);
+        setProcessingMessage("Closing video and audio streams…");
+      } else if (payload.phase === "finalizing") {
+        setProcessingRecording(true);
+        setProcessingMessage("Building a smooth editor-ready video…");
+      }
       else if (payload.phase === "failed" && payload.error) setRecordStatus(`Error: ${payload.error}`);
     });
     return () => { unlisten.then((stop) => stop()); };
@@ -404,13 +413,26 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   const stopRecording = async () => {
     if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
-    setRecordStatus("Stopping...");
+    setRecordStatus("");
+    setProcessingRecording(true);
+    setProcessingMessage("Closing video and audio streams…");
+
+    // A stop click must have immediate visual acknowledgement. The native
+    // finalization can take a few seconds, but leaving the recording dock and
+    // red border visible makes the session look as though it is still live.
+    // The launcher processing surface now owns feedback until the editor opens.
+    await Promise.allSettled([
+      invoke("set_dock_visible", { visible: false }),
+      invoke("set_recording_overlay", { enabled: false, style: "off", region: null }),
+      invoke("set_overlay_paused", { paused: false }),
+    ]);
 
     const failures: string[] = [];
     try {
       await invoke<RecordingSessionSnapshot>("stop_recording_session", {
         sessionId: activeSessionIdRef.current,
       });
+      setProcessingMessage("Checking audio sync and project data…");
     } catch (error) {
       failures.push(String(error));
     }
@@ -430,18 +452,21 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       }).catch(() => {});
     }
 
-    // Hide the floating dock window + recording border overlay.
-    invoke("set_dock_visible", { visible: false }).catch(() => {});
-    invoke("set_recording_overlay", { enabled: false, style: "off", region: null }).catch(() => {});
-    invoke("set_overlay_paused", { paused: false }).catch(() => {});
-
     // Open the recording in its own editor window
     const targetVideo = lastVideoRef.current || lastVideo;
     const targetLog = lastLogRef.current || lastLog;
-    if (failures.length === 0 && settings.autoOpenEditor && targetVideo && targetLog) {
-      onOpenEditor(targetVideo, targetLog);
-    } else {
-      invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
+    try {
+      if (failures.length === 0 && settings.autoOpenEditor && targetVideo && targetLog) {
+        setProcessingMessage("Opening your recording in the editor…");
+        await onOpenEditor(targetVideo, targetLog);
+      } else {
+        await invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
+      }
+    } catch (error) {
+      setRecordStatus(`Recording saved, but the editor could not open: ${error}`);
+      await invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
+    } finally {
+      setProcessingRecording(false);
     }
   };
 
@@ -771,6 +796,20 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           <div className="update-popup-copy"><strong>Snap {updateVersion} is available</strong><small>Download and install it without leaving the app.</small></div>
           <button className="update-popup-install" onClick={() => void downloadAndInstallUpdate()}>Update now</button>
           <button className="update-popup-dismiss" title="Remind me later" onClick={() => setShowUpdatePrompt(false)}><X size={13} /></button>
+        </div>
+      )}
+
+      {processingRecording && (
+        <div className="recording-processing-overlay" role="dialog" aria-modal="true" aria-labelledby="recording-processing-title">
+          <div className="recording-processing-card">
+            <span className="recording-processing-icon"><LoaderCircle size={22} /></span>
+            <div className="recording-processing-copy">
+              <strong id="recording-processing-title">Preparing your recording</strong>
+              <span>{processingMessage}</span>
+            </div>
+            <div className="recording-processing-track" aria-hidden="true"><i /></div>
+            <small>Snap is smoothing playback and aligning the recording before the editor opens.</small>
+          </div>
         </div>
       )}
 

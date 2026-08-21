@@ -154,7 +154,11 @@ async fn open_editor_window(
         .background_color(Color(11, 13, 18, 255))
         .devtools(true)
         .on_page_load(|_webview, payload| {
-            eprintln!("[Snap Editor] page load: {:?} {:?}", payload.url(), payload.event());
+            eprintln!(
+                "[Snap Editor] page load: {:?} {:?}",
+                payload.url(),
+                payload.event()
+            );
         })
         .build()
         .map(|win| {
@@ -326,8 +330,7 @@ async fn open_teleprompter_window(app: tauri::AppHandle) -> Result<(), String> {
         .devtools(true)
         .always_on_top(true)
         .build()
-        .map(|_win| {
-        })
+        .map(|_win| {})
         .map_err(|e| format!("Failed to create teleprompter window: {e}"));
         let _ = tx.send(result);
     });

@@ -369,9 +369,9 @@ button:active:not(:disabled) {
   gap: 7px;
   padding: 0 11px;
   overflow: hidden;
-  color: #fbcfe8;
-  background: linear-gradient(135deg, rgba(236, 72, 153, .13), rgba(139, 92, 246, .13));
-  border: 1px solid rgba(244, 114, 182, .24);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 9px;
   font-size: var(--text-xs);
   font-weight: 700;
@@ -390,10 +390,10 @@ button:active:not(:disabled) {
 }
 
 .snap-donate-button:hover {
-  color: #fff1f2;
-  background: linear-gradient(135deg, rgba(236, 72, 153, .2), rgba(139, 92, 246, .2));
-  border-color: rgba(244, 114, 182, .44);
-  box-shadow: 0 7px 20px rgba(190, 24, 93, .15);
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  box-shadow: 0 7px 20px var(--accent-glow);
   transform: translateY(-1px);
 }
 

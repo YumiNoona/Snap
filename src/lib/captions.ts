@@ -20,10 +20,11 @@ interface NativeTranscriptionResult {
 const MAX_CAPTION_WORDS = 7;
 const MAX_CAPTION_CHARS = 42;
 const MAX_CAPTION_DURATION_MS = 3_500;
+const MIN_CAPTION_DURATION_MS = 120;
 
 /** Turns Whisper's variable-length phrases into readable, movable subtitle cards. */
 export function chunkCaptionSegments(segments: NativeTranscriptionResult["segments"]): NativeTranscriptionResult["segments"] {
-  return segments.flatMap((segment) => {
+  const chunked = segments.flatMap((segment) => {
     const words = segment.text.trim().split(/\s+/).filter(Boolean);
     if (words.length === 0 || segment.endMs <= segment.startMs) return [];
     const chunks: string[] = [];
@@ -59,6 +60,7 @@ export function chunkCaptionSegments(segments: NativeTranscriptionResult["segmen
       return result;
     });
   });
+  return normalizeCaptionTimeline(chunked);
 }
 
 const AUDIO_FILENAMES: Record<AudioTrackKind, string> = {
@@ -125,6 +127,35 @@ export function mergeAudioTracks(discovered: AudioTrack[], saved: AudioTrack[]):
       ? { ...track, id: previous.id || track.id, label: previous.label || track.label, muted: previous.muted, volume: previous.volume }
       : track;
   });
+}
+
+/**
+ * Whisper can return adjacent phrases with slightly overlapping timestamps.
+ * Canvas lookup intentionally draws one caption at a time, so an overlap can
+ * hide the newer phrase completely. Keep the speech-aligned starts, trim the
+ * previous phrase at the hand-off, and reject unusably short remnants.
+ */
+export function normalizeCaptionTimeline(
+  segments: NativeTranscriptionResult["segments"],
+): NativeTranscriptionResult["segments"] {
+  const ordered = segments
+    .filter((segment) => segment.text.trim() && segment.endMs > segment.startMs)
+    .map((segment) => ({ ...segment, startMs: Math.max(0, Math.round(segment.startMs)), endMs: Math.max(0, Math.round(segment.endMs)) }))
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const result: NativeTranscriptionResult["segments"] = [];
+  for (const segment of ordered) {
+    const current = { ...segment };
+    const previous = result[result.length - 1];
+    if (previous && current.startMs < previous.endMs) {
+      if (current.startMs - previous.startMs >= MIN_CAPTION_DURATION_MS) {
+        previous.endMs = current.startMs;
+      } else {
+        current.startMs = previous.endMs;
+      }
+    }
+    if (current.endMs - current.startMs >= MIN_CAPTION_DURATION_MS) result.push(current);
+  }
+  return result;
 }
 
 export async function getTranscriptionEnvironment(): Promise<TranscriptionEnvironment> {

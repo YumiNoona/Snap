@@ -16,4 +16,8 @@ describe("caption entrance animations", () => {
       expect(frame.reveal).toBe(1);
     }
   });
+
+  it("honors a short reveal duration for brief speech segments", () => {
+    expect(captionAnimationFrame("reveal", 180, 180).reveal).toBe(1);
+  });
 });

@@ -653,7 +653,9 @@ pub async fn finalize_canvas_export(
             } else {
                 String::new()
             };
-            args.push(format!("[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a]"));
+            args.push(format!(
+                "[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a]"
+            ));
             args.push("-map".into());
             args.push("0:v".into());
             args.push("-map".into());

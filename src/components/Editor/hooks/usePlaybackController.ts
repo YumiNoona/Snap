@@ -22,6 +22,8 @@ interface Options {
 export type TransportStatus = "idle" | "paused" | "starting" | "playing" | "buffering" | "seeking" | "recovering" | "failed";
 const MEDIA_OPERATION_TIMEOUT_MS = 2_500;
 const PLAY_PROGRESS_TIMEOUT_MS = 1_500;
+const PLAYBACK_UI_INTERVAL_MS = 32;
+const SIDECAR_SYNC_INTERVAL_MS = 100;
 
 /**
  * The video element is the sole editor clock. Every user action invalidates
@@ -44,6 +46,8 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   const recoveryTimerRef = useRef(0);
   const recoveryActiveRef = useRef(false);
   const lastProgressRef = useRef({ mediaTime: 0, wallTime: performance.now() });
+  const lastUiUpdateRef = useRef(0);
+  const lastSidecarSyncRef = useRef(0);
   const recoverRef = useRef<(time: number) => void>(() => {});
 
   boundsRef.current = { start: trimStart, end: trimEnd || duration };
@@ -422,7 +426,10 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     wantsPlaybackRef.current = false;
     setCurrentTime(video.currentTime || 0);
     setStatus("paused");
-    lastProgressRef.current = { mediaTime: video.currentTime || 0, wallTime: performance.now() };
+    const mountedAt = performance.now();
+    lastProgressRef.current = { mediaTime: video.currentTime || 0, wallTime: mountedAt };
+    lastUiUpdateRef.current = mountedAt;
+    lastSidecarSyncRef.current = mountedAt;
 
     const clock = () => {
       const mediaTime = video.currentTime;
@@ -430,7 +437,10 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       const last = lastProgressRef.current;
       if (Math.abs(mediaTime - last.mediaTime) >= .002) {
         lastProgressRef.current = { mediaTime, wallTime: now };
-        setCurrentTime(mediaTime);
+        if (now - lastUiUpdateRef.current >= PLAYBACK_UI_INTERVAL_MS) {
+          lastUiUpdateRef.current = now;
+          setCurrentTime(mediaTime);
+        }
         if (wantsPlaybackRef.current && !video.paused && !video.seeking) setStatus("playing");
       } else if (shouldRecoverStalledPlayback({
         wantsPlayback: wantsPlaybackRef.current,
@@ -449,7 +459,8 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
         pauseSidecars();
         setCurrentTime(end);
         setStatus("paused");
-      } else if (wantsPlaybackRef.current) {
+      } else if (wantsPlaybackRef.current && now - lastSidecarSyncRef.current >= SIDECAR_SYNC_INTERVAL_MS) {
+        lastSidecarSyncRef.current = now;
         syncSidecars(video);
       }
       clockFrameRef.current = requestAnimationFrame(clock);

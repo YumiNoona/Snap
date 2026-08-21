@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack, mergeAudioTracks } from "./captions";
+import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack, mergeAudioTracks, normalizeCaptionTimeline } from "./captions";
 import type { AudioTrack, CaptionTrack } from "./types";
 
 describe("caption audio source selection", () => {
@@ -58,5 +58,19 @@ describe("caption audio source selection", () => {
     expect(chunks[0].startMs).toBe(1_000);
     expect(chunks[chunks.length - 1]?.endMs).toBe(9_000);
     expect(chunks.slice(1).every((chunk, index) => chunk.startMs === chunks[index].endMs)).toBe(true);
+  });
+
+  it("removes transcription overlaps so a later caption cannot disappear", () => {
+    const normalized = normalizeCaptionTimeline([
+      { startMs: 1_000, endMs: 2_200, text: "First phrase" },
+      { startMs: 2_000, endMs: 3_000, text: "Second phrase" },
+      { startMs: 3_400, endMs: 4_200, text: "Third phrase" },
+    ]);
+    expect(normalized).toEqual([
+      { startMs: 1_000, endMs: 2_000, text: "First phrase" },
+      { startMs: 2_000, endMs: 3_000, text: "Second phrase" },
+      { startMs: 3_400, endMs: 4_200, text: "Third phrase" },
+    ]);
+    expect(normalized.slice(1).every((segment, index) => segment.startMs >= normalized[index].endMs)).toBe(true);
   });
 });

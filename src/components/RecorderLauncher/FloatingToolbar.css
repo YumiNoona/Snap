@@ -221,3 +221,21 @@
   justify-content: center;
   padding: 0;
 }
+
+.floating-dock-container.stopping {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-default));
+}
+
+.dock-stop-btn.stopping {
+  min-width: 112px;
+  justify-content: center;
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  cursor: wait;
+  opacity: 1;
+}
+
+.dock-stop-spinner { animation: dock-stop-spin 800ms linear infinite; }
+
+@keyframes dock-stop-spin { to { transform: rotate(360deg); } }

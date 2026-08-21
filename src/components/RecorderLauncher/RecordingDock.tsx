@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Play, Pause, Mic, MicOff, Minimize2, Maximize2 } from "lucide";
-import { GripVertical, Square } from "lucide-react";
+import { GripVertical, LoaderCircle, Square } from "lucide-react";
 import { MorphIcon } from "morphicons/react";
 import "./FloatingToolbar.css";
 
@@ -22,6 +22,7 @@ export default function RecordingDock() {
     mic_muted: false,
   });
   const [compact, setCompact] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   // Transparent window — clear the app-level dark body background.
   useEffect(() => {
@@ -73,12 +74,19 @@ export default function RecordingDock() {
   }, [compact]);
 
   const stopRecording = useCallback(() => {
+    if (stopping) return;
+    setStopping(true);
     if (compact) {
       setCompact(false);
       invoke("set_dock_compact", { compact: false }).catch(() => {});
     }
-    send("stop");
-  }, [compact, send]);
+    // Acknowledge the click in this window before the launcher begins the
+    // heavier finalization flow. Once Rust has accepted the action, dismiss
+    // the dock; the launcher shows detailed preparation progress.
+    invoke("dock_action", { action: "stop" })
+      .then(() => invoke("set_dock_visible", { visible: false }))
+      .catch(() => setStopping(false));
+  }, [compact, stopping]);
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
@@ -88,7 +96,7 @@ export default function RecordingDock() {
 
   return (
     <div className={`dock-window-root ${compact ? "compact" : ""}`}>
-      <div className={`floating-dock-container ${compact ? "compact" : ""}`}>
+      <div className={`floating-dock-container ${compact ? "compact" : ""} ${stopping ? "stopping" : ""}`}>
         <button
           className="dock-drag-handle"
           title="Drag recording controls"
@@ -106,7 +114,7 @@ export default function RecordingDock() {
 
         <div className="floating-dock-divider" />
 
-        {!compact && <button
+        {!compact && !stopping && <button
           className="dock-action-btn"
           onClick={() => send("pause")}
           title={state.paused ? "Resume Recording" : "Pause Recording"}
@@ -114,7 +122,7 @@ export default function RecordingDock() {
           <MorphIcon icon={state.paused ? Play : Pause} spring="snappy" size={16} />
         </button>}
 
-        {!compact && <button
+        {!compact && !stopping && <button
           className={`dock-action-btn ${state.mic_muted ? "muted" : ""}`}
           onClick={() => send("mic")}
           title={state.mic_muted ? "Unmute Microphone" : "Mute Microphone"}
@@ -122,13 +130,13 @@ export default function RecordingDock() {
           <MorphIcon icon={state.mic_muted ? MicOff : Mic} spring="snappy" size={16} />
         </button>}
 
-        <button className="dock-action-btn dock-compact-btn" onClick={toggleCompact} title={compact ? "Expand controls" : "Minimize controls"}>
+        {!stopping && <button className="dock-action-btn dock-compact-btn" onClick={toggleCompact} title={compact ? "Expand controls" : "Minimize controls"}>
           <MorphIcon icon={compact ? Maximize2 : Minimize2} spring="snappy" size={16} />
-        </button>
+        </button>}
 
-        <button className={`dock-stop-btn ${compact ? "icon-only" : ""}`} onClick={stopRecording} title="Stop & Open Editor">
-          <Square size={13} fill="currentColor" />
-          {!compact && "Stop & Edit"}
+        <button className={`dock-stop-btn ${compact ? "icon-only" : ""} ${stopping ? "stopping" : ""}`} onClick={stopRecording} disabled={stopping} title={stopping ? "Preparing recording" : "Stop & Open Editor"}>
+          {stopping ? <LoaderCircle size={14} className="dock-stop-spinner" /> : <Square size={13} fill="currentColor" />}
+          {!compact && (stopping ? "Preparing…" : "Stop & Edit")}
         </button>
       </div>
     </div>
