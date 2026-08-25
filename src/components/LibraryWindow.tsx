@@ -19,7 +19,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
       setFiles(listed.filter((file) => !file.is_dir && /\.(mp4|mov|mkv|webm)$/i.test(file.name)));
     } catch (cause) { setError(String(cause)); }
   };
-  useEffect(() => { void refresh(); void invoke("window_ready"); }, []);
+  useEffect(() => { void refresh(); }, []);
   const shown = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(search.toLowerCase())), [files, search]);
   const open = async (path: string) => {
     const log = await invoke<string>("resolve_recording_log_path", { videoPath: path });

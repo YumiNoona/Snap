@@ -7,6 +7,10 @@ use tauri::Emitter;
 
 use crate::capture::CaptureRegion;
 
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::process::recording_diagnostic(format_args!($($arg)*)) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingPhase {
@@ -37,6 +41,8 @@ pub struct RecordingSessionSnapshot {
 struct ActiveSession {
     snapshot: RecordingSessionSnapshot,
     cancel_requested: Arc<AtomicBool>,
+    video_path: String,
+    audio_dir: String,
 }
 
 static SESSION: Mutex<Option<ActiveSession>> = Mutex::new(None);
@@ -51,9 +57,11 @@ pub struct StartRecordingSessionRequest {
     pub audio_dir: String,
     pub mic_device_id: String,
     pub speaker_device_id: String,
+    pub camera_device_name: Option<String>,
     pub region: Option<CaptureRegion>,
     pub input_region: Option<CaptureRegion>,
     pub countdown_seconds: u32,
+    pub recording_options: Option<crate::capture::RecordingOptions>,
 }
 
 fn emit_snapshot(app: &tauri::AppHandle, snapshot: &RecordingSessionSnapshot) {
@@ -175,6 +183,8 @@ pub async fn start_recording_session(
         *guard = Some(ActiveSession {
             snapshot: initial.clone(),
             cancel_requested: cancel_requested.clone(),
+            video_path: request.video_path.clone(),
+            audio_dir: request.audio_dir.clone(),
         });
     }
     emit_snapshot(&app, &initial);
@@ -208,6 +218,7 @@ pub async fn start_recording_session(
         None,
     )?;
 
+    crate::input_hook::configure_capture_fps(request.recording_options.unwrap_or_default().fps);
     let input_region = request.input_region.or(request.region);
     let input_result = crate::input_hook::start_input_logging(
         request.log_path.clone(),
@@ -232,9 +243,46 @@ pub async fn start_recording_session(
         request.target_id.clone(),
         request.video_path.clone(),
         request.region,
+        request.recording_options,
     )
     .await
     {
+        let _ = crate::input_hook::stop_input_logging().await;
+        finish_session(
+            &app,
+            &request.session_id,
+            RecordingPhase::Failed,
+            Some(error.clone()),
+        );
+        return Err(error);
+    }
+
+    // The video encoder has produced its first frame at this point, so this is
+    // the truthful recording boundary for the UI clock. Audio initializes
+    // immediately afterward and pads itself to the shared video timeline.
+    // Keeping the phase at `Starting` until slow USB/Bluetooth audio drivers
+    // finish made Snap appear to be preparing while it was already recording.
+    transition(
+        &app,
+        &request.session_id,
+        RecordingPhase::Recording,
+        None,
+        None,
+    )?;
+
+    let camera_fps = request
+        .recording_options
+        .unwrap_or_default()
+        .fps
+        .clamp(24, 30);
+    if let Err(error) = crate::camera::start_camera_capture(
+        request.camera_device_name.clone(),
+        request.audio_dir.clone(),
+        camera_fps,
+    )
+    .await
+    {
+        let _ = crate::capture::stop_recording().await;
         let _ = crate::input_hook::stop_input_logging().await;
         finish_session(
             &app,
@@ -254,6 +302,7 @@ pub async fn start_recording_session(
     )
     .await
     {
+        let _ = crate::camera::stop_camera_capture().await;
         let _ = crate::capture::stop_recording().await;
         let _ = crate::input_hook::stop_input_logging().await;
         finish_session(
@@ -265,13 +314,6 @@ pub async fn start_recording_session(
         return Err(error);
     }
 
-    transition(
-        &app,
-        &request.session_id,
-        RecordingPhase::Recording,
-        None,
-        None,
-    )?;
     get_recording_session_state()?.ok_or_else(|| "Recording session disappeared".to_string())
 }
 
@@ -322,16 +364,17 @@ pub fn set_recording_session_paused(
             // Stop video first so no post-pause picture can be paired with
             // audio/input that the user expected to be omitted.
             crate::capture::set_paused(true)?;
+            crate::camera::set_camera_paused(true)?;
             crate::audio::set_audio_paused(true)?;
             crate::input_hook::set_input_paused(true)?;
         } else {
-            // Release all clocks at the same boundary. Full-display capture
-            // creates a fresh encoder segment here; waiting for its health
-            // acknowledgement before releasing audio would shift every resumed
-            // segment by the encoder startup interval.
-            crate::audio::set_audio_paused(false)?;
-            crate::input_hook::set_input_paused(false)?;
+            // A fresh video segment starts at its first encoded frame. Keep
+            // audio and input paused during encoder/device initialization so
+            // that startup time is not inserted into their timelines.
             crate::capture::set_paused(false)?;
+            crate::camera::set_camera_paused(false)?;
+            crate::input_hook::set_input_paused(false)?;
+            crate::audio::set_audio_paused(false)?;
         }
         let _ = crate::set_overlay_paused_internal(app.clone(), paused);
         Ok(())
@@ -341,6 +384,7 @@ pub fn set_recording_session_paused(
         // cannot acknowledge the transition. This avoids a half-paused session.
         let stable_paused = !paused;
         let _ = crate::capture::set_paused(stable_paused);
+        let _ = crate::camera::set_camera_paused(stable_paused);
         let _ = crate::audio::set_audio_paused(stable_paused);
         let _ = crate::input_hook::set_input_paused(stable_paused);
         let _ = crate::set_overlay_paused_internal(app.clone(), stable_paused);
@@ -381,6 +425,13 @@ pub async fn stop_recording_session(
     if current.session_id != session_id {
         return Err("Recording command belongs to a stale session".to_string());
     }
+    let (video_path, audio_dir) = {
+        let guard = SESSION.lock().map_err(|value| value.to_string())?;
+        let active = guard
+            .as_ref()
+            .ok_or_else(|| "No recording session is active".to_string())?;
+        (active.video_path.clone(), active.audio_dir.clone())
+    };
     if matches!(
         current.phase,
         RecordingPhase::Preparing | RecordingPhase::Armed | RecordingPhase::CountingDown
@@ -391,23 +442,33 @@ pub async fn stop_recording_session(
 
     transition(&app, &session_id, RecordingPhase::Stopping, None, None)?;
     // From this point capture has received its stop signal and the remaining
-    // work is media finalization: closing WAV headers, converting resilient
-    // VFR fragments to the editor-ready CFR file, and validating sidecars.
+    // work is media finalization: closing WAV headers, joining resilient
+    // fragments into the editor-ready file, and validating sidecars.
     // Publish that phase before awaiting the workers so the launcher can show
     // an honest processing screen instead of appearing frozen.
     transition(&app, &session_id, RecordingPhase::Finalizing, None, None)?;
-    let (video, audio, input) = tokio::join!(
+    let (video, camera, audio, input) = tokio::join!(
         crate::capture::stop_recording(),
+        crate::camera::stop_camera_capture(),
         crate::audio::stop_audio_capture(),
         crate::input_hook::stop_input_logging(),
     );
 
     let mut failures = Vec::new();
+    let mut notices = Vec::new();
     if let Err(error) = video {
         failures.push(format!("video: {error}"));
     }
-    if let Err(error) = audio {
-        failures.push(format!("audio: {error}"));
+    if let Err(error) = camera {
+        // A webcam can be unplugged or claimed by a meeting app mid-session.
+        // Preserve the primary screen recording and audio tracks; camera
+        // fragments remain in the support folder for recovery/diagnostics.
+        eprintln!("[Snap Camera] Optional camera track ended with a warning: {error}");
+        notices.push(format!("Camera track warning: {error}"));
+    }
+    match audio {
+        Ok(report) => notices.extend(report.warnings),
+        Err(error) => failures.push(format!("audio: {error}")),
     }
     if let Err(error) = input {
         failures.push(format!("input: {error}"));
@@ -423,13 +484,28 @@ pub async fn stop_recording_session(
         return Err(error);
     }
 
+    if let Err(error) = crate::audio::attach_audio_to_video(video_path, audio_dir).await {
+        // The independent WAV tracks are still preserved and editable, so a
+        // mux failure must not invalidate the primary screen recording.
+        notices.push(format!(
+            "The MP4 was saved video-only, but editable audio tracks are available: {error}"
+        ));
+    }
+
+    let completion_notice = (!notices.is_empty()).then(|| notices.join(" "));
+
     let completed = RecordingSessionSnapshot {
         session_id: session_id.clone(),
         phase: RecordingPhase::Completed,
         countdown: None,
-        error: None,
+        error: completion_notice.clone(),
     };
-    finish_session(&app, &session_id, RecordingPhase::Completed, None);
+    finish_session(
+        &app,
+        &session_id,
+        RecordingPhase::Completed,
+        completion_notice,
+    );
     Ok(completed)
 }
 

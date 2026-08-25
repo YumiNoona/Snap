@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ScrollText, X, RotateCcw } from "lucide-react";
 import { Play, Pause } from "lucide";
@@ -53,12 +52,6 @@ export default function TeleprompterWindow({ onClose }: Props) {
       document.body.style.color = prevColor;
     };
   }, [isStandalone]);
-
-  useEffect(() => {
-    invoke("window_ready").catch((e) => {
-      console.error("[Snap] window_ready failed — teleprompter window will stay hidden:", e);
-    });
-  }, []);
 
   const handleClose = useCallback(() => {
     if (onClose) {

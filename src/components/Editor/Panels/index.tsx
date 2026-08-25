@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, type LucideIcon } from "lucide-react";
-import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset, AudioTrackKind } from "../../../lib/types";
+import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, type LucideIcon } from "lucide-react";
+import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
-import { getTranscriptionEnvironment, transcribeTrack, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
+import { getTranscriptionEnvironment, transcribeTrack, updateCaptionTiming, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
@@ -29,7 +29,9 @@ interface Props {
   onClearSelectedZoom: () => void;
   onDeleteSelectedZoom: () => void;
   audioTracks: AudioTrack[];
-  audioStatus: string;
+  audioError: string;
+  onAddAudio: () => void;
+  onAudioTracksChange: (tracks: AudioTrack[]) => void;
   captionTracks: CaptionTrack[];
   onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
   selectedCaption: CaptionSegmentSelection | null;
@@ -65,13 +67,13 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
-  audioTracks, audioStatus, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
+  audioTracks, audioError, onAddAudio, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
   const annotationDrawerRef = useRef<HTMLDivElement>(null);
-  const [captionSource, setCaptionSource] = useState<AudioTrackKind>("microphone");
+  const [captionSource, setCaptionSource] = useState("");
   const [captionLanguage, setCaptionLanguage] = useState<TranscriptionLanguage>("auto");
   const [transcriptionEnv, setTranscriptionEnv] = useState<TranscriptionEnvironment | null>(null);
   const [captionStatus, setCaptionStatus] = useState("");
@@ -117,17 +119,18 @@ export default function Panels({
   }, [activeTab, transcriptionEnv]);
 
   useEffect(() => {
-    if (audioTracks.some((track) => track.kind === captionSource)) return;
+    if (audioTracks.some((track) => track.id === captionSource)) return;
     const preferred = audioTracks.find((track) => track.kind === "microphone") ?? audioTracks[0];
-    if (preferred) setCaptionSource(preferred.kind);
+    setCaptionSource(preferred?.id ?? "");
   }, [audioTracks, captionSource]);
 
   const generateCaptions = async () => {
     setTranscribing(true);
-    setCaptionStatus(`Transcribing ${captionSource === "microphone" ? "microphone" : captionSource} audio…`);
+    const selectedSource = audioTracks.find((track) => track.id === captionSource);
+    setCaptionStatus(`Transcribing ${selectedSource?.label ?? "audio"}…`);
     try {
-      const sourceTrack = audioTracks.find((track) => track.kind === captionSource);
-      if (!sourceTrack) throw new Error(`No ${captionSource} audio track is available in this recording`);
+      const sourceTrack = audioTracks.find((track) => track.id === captionSource);
+      if (!sourceTrack) throw new Error("Choose an audio track to transcribe");
       const track = await transcribeTrack(sourceTrack, captionLanguage);
       if (track.segments.length === 0) {
         setCaptionStatus("No audible speech was found on this track. No caption layer was added.");
@@ -585,18 +588,22 @@ export default function Panels({
       {/* ═══ AUDIO TAB ═══════════════════════════════════════════════ */}
       {activeTab === "audio" && (
         <div className="ss-drawer-content">
-          <div className={`audio-load-status ${audioTracks.length > 0 ? "ready" : "warning"}`} role="status">
-            <AudioWaveform size={16} />
-            <span>{audioStatus}</span>
-          </div>
-          <Section title="System Audio">
-            <CheckRow label="Mute System Audio" checked={config.audio.systemMuted} onChange={(v) => updateAudio({ systemMuted: v })} />
+          <button type="button" className="audio-import-button" onClick={onAddAudio}><Plus size={15} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
+          {audioError && <div className="audio-inline-error" role="alert">{audioError}</div>}
+          {audioTracks.some((track) => track.kind === "system" || track.kind === "device") && <Section title={audioTracks.some((track) => track.kind === "device") ? "Device Audio" : "System Audio"}>
+            <CheckRow label={audioTracks.some((track) => track.kind === "device") ? "Mute Device Audio" : "Mute System Audio"} checked={config.audio.systemMuted} onChange={(v) => updateAudio({ systemMuted: v })} />
             <Slider label="Volume" value={config.audio.systemVolume} min={0} max={200} step={5} unit="%" onChange={(v) => updateAudio({ systemVolume: v })} disabled={config.audio.systemMuted} />
-          </Section>
-          <Section title="Microphone">
+          </Section>}
+          {audioTracks.some((track) => track.kind === "microphone") && <Section title="Microphone">
             <CheckRow label="Mute Microphone" checked={config.audio.micMuted} onChange={(v) => updateAudio({ micMuted: v })} />
             <Slider label="Volume" value={config.audio.micVolume} min={0} max={200} step={5} unit="%" onChange={(v) => updateAudio({ micVolume: v })} disabled={config.audio.micMuted} />
-          </Section>
+          </Section>}
+          {audioTracks.filter((track) => track.kind === "imported").map((track) => <Section title={track.label} key={track.id}>
+            <CheckRow label="Mute track" checked={track.muted} onChange={(muted) => onAudioTracksChange(audioTracks.map((candidate) => candidate.id === track.id ? { ...candidate, muted } : candidate))} />
+            <Slider label="Volume" value={Math.round(track.volume * 100)} min={0} max={200} step={5} unit="%" onChange={(volume) => onAudioTracksChange(audioTracks.map((candidate) => candidate.id === track.id ? { ...candidate, volume: volume / 100 } : candidate))} disabled={track.muted} />
+            <button type="button" className="audio-remove-button" onClick={() => onAudioTracksChange(audioTracks.filter((candidate) => candidate.id !== track.id))}><Trash2 size={13} /> Remove from project</button>
+          </Section>)}
+          {audioTracks.length === 0 && <div className="audio-empty-state"><Music2 size={20} /><span><strong>No audio tracks</strong><small>Add music, narration, or another recording.</small></span></div>}
         </div>
       )}
 
@@ -610,8 +617,8 @@ export default function Panels({
             <Section title="Caption content">
               <label className="layer-field-stack"><span>Text</span><textarea className="layer-textarea caption-copy-editor" rows={4} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} /></label>
               <div className="caption-time-row caption-inspector-time">
-                <label><span>Start</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, startMs: Math.max(0, Number(event.target.value) * 1000), userEdited: true } : segment) }))} /></label>
-                <label><span>End</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, endMs: Math.max(segment.startMs + 100, Number(event.target.value) * 1000), userEdited: true } : segment) }))} /></label>
+                <label><span>Start</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
+                <label><span>End</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
               </div>
             </Section>
             <Section title="Typography">
@@ -649,26 +656,10 @@ export default function Panels({
             </Section>
           </> : <>
           <Section title="Automatic Captions">
-            <div className={`audio-load-status ${audioTracks.length > 0 ? "ready" : "warning"}`} role="status">
-              <AudioWaveform size={16} />
-              <span>{audioStatus}</span>
-            </div>
-            <div className="caption-source-heading">Transcribe audio from</div>
-            <div className="caption-source-grid" role="radiogroup" aria-label="Caption audio source">
-              {([
-                ["microphone", "Microphone", "Your voice only. Desktop music and videos are excluded."],
-                ["system", "Desktop audio", "Browser videos, meetings, games, and other computer sound."],
-                ["device", "Device audio", "Audio captured from an imported phone or capture device."],
-              ] as const).map(([value, label, description]) => (
-                <button key={value} type="button" role="radio" aria-checked={captionSource === value} disabled={!audioTracks.some((track) => track.kind === value)} className={`caption-source-card ${captionSource === value ? "selected" : ""}`} onClick={() => setCaptionSource(value)}>
-                  <span className="caption-source-radio" />
-                  <span><strong>{label}<em>{audioTracks.some((track) => track.kind === value) ? "Ready" : "Not recorded"}</em></strong><small>{description}</small></span>
-                </button>
-              ))}
-            </div>
+            <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
             <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />
-            <p className="panel-help-text">Snap transcribes only the selected independent track. Choose Auto detect for Hindi-English mixed speech. Captions remain editable and movable after generation.</p>
-            {transcriptionEnv && <p className={`panel-help-text ${transcriptionEnv.available ? "" : "panel-warning"}`}>{transcriptionEnv.message}</p>}
+            <p className="panel-help-text">Choose the track containing speech. Captions stay editable on the timeline.</p>
+            {transcriptionEnv?.available === false && <p className="panel-help-text panel-warning">{transcriptionEnv.message}</p>}
             {transcriptionEnv?.available === false && <>
               <button className="ss-drawer-action-btn" disabled={installingTranscription} onClick={() => void installTranscription()}>{installingTranscription ? `${installPhase || "Installing offline captions"} — ${installProgress}%` : "Install Offline Captions"}</button>
               {installingTranscription && <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>}
@@ -709,6 +700,57 @@ const CAPTION_LANGUAGES: Array<{ value: TranscriptionLanguage; label: string; de
   { value: "en", label: "English", description: "English speech" },
   { value: "hi", label: "Hindi", description: "हिंदी भाषण" },
 ];
+
+function captionSourceDescription(track: AudioTrack): string {
+  if (track.kind === "microphone") return "Microphone voice track";
+  if (track.kind === "device") return "Captured device audio";
+  if (track.kind === "system") return "Browser and desktop audio";
+  return "Added audio file";
+}
+
+function CaptionAudioSourcePicker({ tracks, value, onChange, onAddAudio }: {
+  tracks: AudioTrack[];
+  value: string;
+  onChange: (value: string) => void;
+  onAddAudio: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = tracks.find((track) => track.id === value) ?? tracks[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="caption-language-field caption-audio-source-field" ref={rootRef}>
+      <span className="caption-control-label">Transcribe audio from</span>
+      <button type="button" className={`caption-language-trigger ${open ? "open" : ""}`} disabled={tracks.length === 0} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <AudioWaveform size={17} />
+        <span><strong>{selected?.label ?? "No audio available"}</strong><small>{selected ? captionSourceDescription(selected) : "Add an audio track first"}</small></span>
+        <ChevronDown className="caption-language-chevron" size={16} />
+      </button>
+      {open && <div className="caption-language-menu caption-audio-source-menu" role="listbox" aria-label="Audio track to transcribe">
+        {tracks.map((track) => <button type="button" role="option" aria-selected={track.id === selected?.id} key={track.id} onClick={() => { onChange(track.id); setOpen(false); }}>
+          <span><strong>{track.label}</strong><small>{captionSourceDescription(track)}</small></span>
+          {track.id === selected?.id && <Check size={16} />}
+        </button>)}
+        <button type="button" className="caption-source-add" onClick={() => { setOpen(false); onAddAudio(); }}><span><strong>Add another audio file</strong><small>Import music, narration, or dialogue</small></span><Plus size={15} /></button>
+      </div>}
+      {tracks.length === 0 && <button type="button" className="caption-source-empty-add" onClick={onAddAudio}><Plus size={14} /> Add audio</button>}
+    </div>
+  );
+}
 
 function CaptionLanguagePicker({ value, onChange }: { value: TranscriptionLanguage; onChange: (value: TranscriptionLanguage) => void }) {
   const [open, setOpen] = useState(false);

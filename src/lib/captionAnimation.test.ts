@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { captionAnimationFrame, revealCaptionText } from "./captionAnimation";
+import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance, revealCaptionText } from "./captionAnimation";
 
 describe("caption entrance animations", () => {
   it("reveals text progressively without returning an empty active caption", () => {
     expect(revealCaptionText("Reveal text", 0)).toBe("R");
     expect(revealCaptionText("Reveal text", 1)).toBe("Reveal text");
+  });
+
+  it("keeps final caption geometry while reveal changes only glyphs", () => {
+    const early = captionRenderText("A stable caption background", "reveal", .12);
+    const complete = captionRenderText("A stable caption background", "reveal", 1);
+    expect(early.layoutText).toBe(complete.layoutText);
+    expect(early.visibleText.length).toBeLessThan(complete.visibleText.length);
   });
 
   it("settles every animated preset into the stable frame", () => {
@@ -19,5 +26,10 @@ describe("caption entrance animations", () => {
 
   it("honors a short reveal duration for brief speech segments", () => {
     expect(captionAnimationFrame("reveal", 180, 180).reveal).toBe(1);
+  });
+
+  it("shows brief caption cards in full instead of animating words away", () => {
+    expect(effectiveCaptionEntrance("reveal", 530, 520)).toEqual({ animation: "none", durationMs: 0 });
+    expect(effectiveCaptionEntrance("reveal", 2_000, 520)).toEqual({ animation: "reveal", durationMs: 260 });
   });
 });

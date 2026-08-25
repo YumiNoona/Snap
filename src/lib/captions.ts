@@ -20,7 +20,8 @@ interface NativeTranscriptionResult {
 const MAX_CAPTION_WORDS = 7;
 const MAX_CAPTION_CHARS = 42;
 const MAX_CAPTION_DURATION_MS = 3_500;
-const MIN_CAPTION_DURATION_MS = 120;
+const MIN_READABLE_CAPTION_MS = 650;
+const SHORT_CAPTION_MERGE_GAP_MS = 250;
 
 /** Turns Whisper's variable-length phrases into readable, movable subtitle cards. */
 export function chunkCaptionSegments(segments: NativeTranscriptionResult["segments"]): NativeTranscriptionResult["segments"] {
@@ -63,7 +64,7 @@ export function chunkCaptionSegments(segments: NativeTranscriptionResult["segmen
   return normalizeCaptionTimeline(chunked);
 }
 
-const AUDIO_FILENAMES: Record<AudioTrackKind, string> = {
+const AUDIO_FILENAMES: Record<Exclude<AudioTrackKind, "imported">, string> = {
   microphone: "mic_audio.wav",
   system: "system_audio.wav",
   device: "device_audio.wav",
@@ -77,11 +78,12 @@ interface DirectoryEntry {
 }
 
 export function audioTrackPath(videoPath: string, kind: AudioTrackKind): string {
+  if (kind === "imported") return recordingDataPaths(videoPath).dataDir;
   return `${recordingDataPaths(videoPath).dataDir}\\${AUDIO_FILENAMES[kind]}`;
 }
 
 export function createAudioTrack(videoPath: string, kind: AudioTrackKind): AudioTrack {
-  const labels: Record<AudioTrackKind, string> = { microphone: "Microphone", system: "System audio", device: "Device audio" };
+  const labels: Record<AudioTrackKind, string> = { microphone: "Microphone", system: "System audio", device: "Device audio", imported: "Imported audio" };
   return { id: `audio-${kind}`, kind, path: audioTrackPath(videoPath, kind), label: labels[kind], muted: false, volume: 1 };
 }
 
@@ -110,8 +112,8 @@ export async function discoverAudioTracks(videoPath: string): Promise<AudioTrack
   // A mobile/device capture can retain an embedded stream and an extracted
   // device WAV. It is the primary desktop-equivalent track and must replace,
   // not stack with, system audio to avoid doubled playback/export.
-  const primaryKind: AudioTrackKind = files.has(AUDIO_FILENAMES.device) ? "device" : "system";
-  return ([primaryKind, "microphone"] as AudioTrackKind[])
+  const primaryKind: Exclude<AudioTrackKind, "imported" | "microphone"> = files.has(AUDIO_FILENAMES.device) ? "device" : "system";
+  return ([primaryKind, "microphone"] as Array<Exclude<AudioTrackKind, "imported">>)
     .flatMap((kind) => {
       const entry = files.get(AUDIO_FILENAMES[kind]);
       if (!entry) return [];
@@ -121,19 +123,23 @@ export async function discoverAudioTracks(videoPath: string): Promise<AudioTrack
 
 export function mergeAudioTracks(discovered: AudioTrack[], saved: AudioTrack[]): AudioTrack[] {
   const savedByKind = new Map(saved.map((track) => [track.kind, track]));
-  return discovered.map((track) => {
+  const refreshed = discovered.map((track) => {
     const previous = savedByKind.get(track.kind);
     return previous
       ? { ...track, id: previous.id || track.id, label: previous.label || track.label, muted: previous.muted, volume: previous.volume }
       : track;
   });
+  const imported = saved.filter((track) => track.kind === "imported" && track.path.trim());
+  return [...refreshed, ...imported.filter((track, index) => imported.findIndex((candidate) => candidate.path.toLowerCase() === track.path.toLowerCase()) === index)];
 }
 
 /**
  * Whisper can return adjacent phrases with slightly overlapping timestamps.
  * Canvas lookup intentionally draws one caption at a time, so an overlap can
  * hide the newer phrase completely. Keep the speech-aligned starts, trim the
- * previous phrase at the hand-off, and reject unusably short remnants.
+ * previous phrase at the hand-off. Very short word-level results are merged
+ * into a neighboring card instead of being discarded: losing a 100 ms card
+ * means losing an actual spoken word.
  */
 export function normalizeCaptionTimeline(
   segments: NativeTranscriptionResult["segments"],
@@ -147,15 +153,105 @@ export function normalizeCaptionTimeline(
     const current = { ...segment };
     const previous = result[result.length - 1];
     if (previous && current.startMs < previous.endMs) {
-      if (current.startMs - previous.startMs >= MIN_CAPTION_DURATION_MS) {
+      if (current.startMs > previous.startMs) {
         previous.endMs = current.startMs;
       } else {
         current.startMs = previous.endMs;
       }
     }
-    if (current.endMs - current.startMs >= MIN_CAPTION_DURATION_MS) result.push(current);
+    if (current.endMs <= current.startMs) {
+      if (previous) {
+        previous.text = `${previous.text.trim()} ${current.text.trim()}`;
+        previous.endMs = Math.max(previous.endMs, current.endMs);
+      }
+      continue;
+    }
+
+    const updatedPrevious = result[result.length - 1];
+    if (updatedPrevious) {
+      const gap = current.startMs - updatedPrevious.endMs;
+      const previousDuration = updatedPrevious.endMs - updatedPrevious.startMs;
+      const currentDuration = current.endMs - current.startMs;
+      if (gap <= SHORT_CAPTION_MERGE_GAP_MS
+        && (previousDuration < MIN_READABLE_CAPTION_MS || currentDuration < MIN_READABLE_CAPTION_MS)) {
+        updatedPrevious.text = `${updatedPrevious.text.trim()} ${current.text.trim()}`;
+        updatedPrevious.endMs = Math.max(updatedPrevious.endMs, current.endMs);
+        continue;
+      }
+    }
+    result.push(current);
   }
   return result;
+}
+
+/** Finds a non-overlapping slot for a duplicated caption, preferring later time. */
+export function findAvailableCaptionStart(
+  segments: Array<{ id: string; startMs: number; endMs: number }>,
+  excludedId: string,
+  durationMs: number,
+  rangeStartMs: number,
+  rangeEndMs: number,
+  preferredStartMs: number,
+  gapMs = 100,
+): number | null {
+  const duration = Math.max(100, Math.round(durationMs));
+  const start = Math.max(0, Math.round(rangeStartMs));
+  const end = Math.max(start, Math.round(rangeEndMs));
+  const occupied = segments
+    .filter((segment) => segment.id !== excludedId && segment.endMs > start && segment.startMs < end)
+    .map((segment) => ({ startMs: Math.max(start, segment.startMs), endMs: Math.min(end, segment.endMs) }))
+    .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+
+  const search = (from: number, until: number): number | null => {
+    let cursor = Math.max(start, from);
+    for (const segment of occupied) {
+      if (segment.endMs + gapMs <= cursor) continue;
+      if (segment.startMs - gapMs >= cursor + duration && cursor + duration <= until) return cursor;
+      cursor = Math.max(cursor, segment.endMs + gapMs);
+      if (cursor + duration > until) return null;
+    }
+    return cursor + duration <= until ? cursor : null;
+  };
+
+  const preferred = Math.max(start, Math.min(end, Math.round(preferredStartMs)));
+  return search(preferred, end) ?? search(start, preferred);
+}
+
+/** Applies inspector timing edits without crossing neighboring captions. */
+export function updateCaptionTiming(
+  segments: CaptionSegment[],
+  segmentId: string,
+  edge: "start" | "end",
+  requestedMs: number,
+  rangeStartMs = 0,
+  rangeEndMs = Number.POSITIVE_INFINITY,
+): CaptionSegment[] {
+  const ordered = [...segments].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const index = ordered.findIndex((segment) => segment.id === segmentId);
+  if (index < 0 || !Number.isFinite(requestedMs)) return ordered;
+  const current = ordered[index];
+  const previous = index > 0 ? ordered[index - 1] : null;
+  const next = index < ordered.length - 1 ? ordered[index + 1] : null;
+  const minimumStart = Math.max(0, rangeStartMs, previous?.endMs ?? 0);
+  const maximumEnd = Math.min(rangeEndMs, next?.startMs ?? Number.POSITIVE_INFINITY);
+  if (edge === "start") {
+    const latestStart = current.endMs - 100;
+    if (latestStart < minimumStart) return ordered;
+    ordered[index] = {
+      ...current,
+      startMs: Math.round(Math.max(minimumStart, Math.min(latestStart, requestedMs))),
+      userEdited: true,
+    };
+  } else {
+    const earliestEnd = current.startMs + 100;
+    if (maximumEnd < earliestEnd) return ordered;
+    ordered[index] = {
+      ...current,
+      endMs: Math.round(Math.max(earliestEnd, Math.min(maximumEnd, requestedMs))),
+      userEdited: true,
+    };
+  }
+  return ordered;
 }
 
 export async function getTranscriptionEnvironment(): Promise<TranscriptionEnvironment> {

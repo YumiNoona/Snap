@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack, mergeAudioTracks, normalizeCaptionTimeline } from "./captions";
+import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, createAudioTrack, findAvailableCaptionStart, mergeAudioTracks, normalizeCaptionTimeline, updateCaptionTiming } from "./captions";
 import type { AudioTrack, CaptionTrack } from "./types";
 
 describe("caption audio source selection", () => {
@@ -72,5 +72,43 @@ describe("caption audio source selection", () => {
       { startMs: 3_400, endMs: 4_200, text: "Third phrase" },
     ]);
     expect(normalized.slice(1).every((segment, index) => segment.startMs >= normalized[index].endMs)).toBe(true);
+  });
+
+  it("keeps imported audio tracks when recorded sidecars are rediscovered", () => {
+    const imported: AudioTrack = { id: "music", kind: "imported", path: "D:\\project\\music.mp3", label: "Music", muted: false, volume: .6 };
+    expect(mergeAudioTracks([createAudioTrack("D:\\project\\recording.mp4", "system")], [imported])).toContainEqual(imported);
+  });
+
+  it("never deletes short spoken words and merges them into readable cards", () => {
+    const normalized = normalizeCaptionTimeline([
+      { startMs: 21_920, endMs: 22_260, text: "they had" },
+      { startMs: 22_260, endMs: 22_360, text: "to" },
+      { startMs: 22_360, endMs: 23_500, text: "make it work" },
+      { startMs: 25_952, endMs: 26_080, text: "all" },
+      { startMs: 26_080, endMs: 26_520, text: "entitled" },
+    ]);
+    expect(normalized.map((segment) => segment.text).join(" ")).toBe("they had to make it work all entitled");
+    expect(normalized[0]).toEqual({ startMs: 21_920, endMs: 23_500, text: "they had to make it work" });
+    expect(normalized.every((segment) => segment.endMs > segment.startMs)).toBe(true);
+  });
+
+  it("places duplicate captions in a real gap instead of on top of another caption", () => {
+    const segments = [
+      { id: "source", startMs: 1_000, endMs: 2_000 },
+      { id: "occupied", startMs: 2_100, endMs: 4_000 },
+    ];
+    expect(findAvailableCaptionStart(segments, "source", 1_000, 0, 8_000, 2_100)).toBe(4_100);
+    expect(findAvailableCaptionStart(segments, "source", 4_000, 0, 4_000, 2_100)).toBeNull();
+  });
+
+  it("clamps inspector timing edits between neighboring captions", () => {
+    const segments = [
+      { id: "one", startMs: 1_000, endMs: 2_000, text: "one", language: "en", sourceTrackIds: [], userEdited: false },
+      { id: "two", startMs: 2_000, endMs: 3_000, text: "two", language: "en", sourceTrackIds: [], userEdited: false },
+      { id: "three", startMs: 3_000, endMs: 4_000, text: "three", language: "en", sourceTrackIds: [], userEdited: false },
+    ];
+    expect(updateCaptionTiming(segments, "two", "start", 1_200)[1].startMs).toBe(2_000);
+    expect(updateCaptionTiming(segments, "two", "end", 3_800)[1].endMs).toBe(3_000);
+    expect(updateCaptionTiming(segments, "two", "start", 2_400)[1]).toMatchObject({ startMs: 2_400, userEdited: true });
   });
 });

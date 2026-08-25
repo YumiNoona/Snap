@@ -12,6 +12,7 @@ import {
   clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
   drawMaskLayer, drawVideoWithMotionBlur,
   drawCaptionTrack,
+  drawCameraBubble,
 } from "../../../lib/canvasDraw";
 import "./Preview.css";
 
@@ -39,6 +40,7 @@ interface Props {
   preserveProjectKeyframes?: boolean;
   captionTracks?: CaptionTrack[];
   hasExternalAudio?: boolean;
+  cameraMedia?: { path: string; startOffsetMs: number } | null;
 }
 
 type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -113,9 +115,11 @@ export default function Preview({
   preserveProjectKeyframes = false,
   captionTracks = [],
   hasExternalAudio = false,
+  cameraMedia = null,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
   const [videoReady, setVideoReady] = useState(false);
   const decodedFrameCallbackRef = useRef<number | null>(null);
@@ -401,6 +405,19 @@ export default function Preview({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    // Each frame starts from a known compositor state. This protects the
+    // video from stale caption alpha/filter/shadow state after a WebView2
+    // canvas recovery or an interrupted draw.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
+    ctx.shadowColor = "rgba(0,0,0,0)";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.beginPath();
+
     const ts = video.currentTime * 1000;
 
     // Click effects use a forward-only event cursor for cheap playback. Keep
@@ -670,6 +687,19 @@ export default function Preview({
     });
 
     ctx.restore();
+
+    const camera = cameraRef.current;
+    if (camera && cameraMedia) {
+      const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
+      if (cameraTime >= 0 && cameraTime <= camera.duration) {
+        if (Number.isFinite(cameraTime) && Math.abs(camera.currentTime - cameraTime) > 0.14 && !camera.seeking) {
+          camera.currentTime = cameraTime;
+        }
+        if (!video.paused && camera.paused) void camera.play().catch(() => {});
+        if (video.paused && !camera.paused) camera.pause();
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+      }
+    }
 
     // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
@@ -1251,6 +1281,16 @@ export default function Preview({
           console.error("[Snap Preview] video load error:", err);
         }}
       />
+      {cameraMedia && <video
+        ref={cameraRef}
+        src={convertFileSrc(cameraMedia.path)}
+        preload="auto"
+        playsInline
+        muted
+        className="preview-media-source"
+        onLoadedData={() => renderRef.current()}
+        onSeeked={() => renderRef.current()}
+      />}
     </div>
   );
 }

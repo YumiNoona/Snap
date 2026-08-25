@@ -12,6 +12,21 @@ export interface CaptionAnimationFrame {
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const easeOutCubic = (value: number) => 1 - (1 - value) ** 3;
 
+/** Brief captions render fully immediately; animating them hides words. */
+export function effectiveCaptionEntrance(
+  animation: NonNullable<CaptionStyle["animation"]>,
+  segmentDurationMs: number,
+  requestedDurationMs = 420,
+): { animation: NonNullable<CaptionStyle["animation"]>; durationMs: number } {
+  if (animation === "none" || segmentDurationMs < 700) {
+    return { animation: "none", durationMs: 0 };
+  }
+  return {
+    animation,
+    durationMs: Math.max(120, Math.min(requestedDurationMs, 260, segmentDurationMs * .3)),
+  };
+}
+
 /** Deterministic caption entrance state shared by preview and export rendering. */
 export function captionAnimationFrame(
   animation: NonNullable<CaptionStyle["animation"]>,
@@ -57,4 +72,21 @@ export function revealCaptionText(text: string, progress: number): string {
   const characters = Array.from(text.trim());
   if (characters.length === 0) return "";
   return characters.slice(0, Math.max(1, Math.ceil(characters.length * clamp01(progress)))).join("").trimEnd();
+}
+
+/**
+ * Keep caption geometry stable while a reveal animation changes only the
+ * visible glyphs. Using partial text for layout makes the translucent caption
+ * box resize and darken repeatedly, which looks like a black flash.
+ */
+export function captionRenderText(
+  text: string,
+  animation: NonNullable<CaptionStyle["animation"]>,
+  revealProgress: number,
+): { layoutText: string; visibleText: string } {
+  const layoutText = text.trim();
+  return {
+    layoutText,
+    visibleText: animation === "reveal" ? revealCaptionText(layoutText, revealProgress) : layoutText,
+  };
 }

@@ -7,6 +7,7 @@ import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
   cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
+  drawCameraBubble,
 } from "./canvasDraw";
 
 export interface ExportCompositor {
@@ -31,6 +32,7 @@ export async function createExportCompositor(
   keyframes: Keyframe[],
   config: EditorConfig,
   captionTracks: CaptionTrack[],
+  cameraMedia: { path: string; startOffsetMs: number } | null,
   outputW: number,
   outputH: number
 ): Promise<ExportCompositor> {
@@ -43,6 +45,18 @@ export async function createExportCompositor(
   video.style.left = "-99999px";
   video.style.top = "0px";
   document.body.appendChild(video);
+
+  let camera: HTMLVideoElement | null = null;
+  if (cameraMedia) {
+    camera = document.createElement("video");
+    camera.src = convertFileSrc(cameraMedia.path);
+    camera.muted = true;
+    camera.playsInline = true;
+    camera.preload = "auto";
+    camera.style.position = "fixed";
+    camera.style.left = "-99999px";
+    document.body.appendChild(camera);
+  }
 
   const canvas = document.createElement("canvas");
   canvas.width = outputW;
@@ -72,6 +86,18 @@ export async function createExportCompositor(
     video.addEventListener("loadedmetadata", () => resolve(), { once: true });
     video.addEventListener("error", () => reject(new Error("Failed to load the recording for export")), { once: true });
   });
+  if (camera) {
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        if (camera!.readyState >= HTMLMediaElement.HAVE_METADATA) resolve();
+        else {
+          camera!.addEventListener("loadedmetadata", () => resolve(), { once: true });
+          camera!.addEventListener("error", () => resolve(), { once: true });
+        }
+      }),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 3000)),
+    ]);
+  }
 
   const getCursorAt = (ts: number) => getCursorAtRaw(mouseMoveEvents, ts);
   const screenToVideo = (sx: number, sy: number, vw: number, vh: number) => screenToVideoRaw(region, sx, sy, vw, vh);
@@ -109,6 +135,15 @@ export async function createExportCompositor(
 
   function drawFrame() {
     if (destroyed) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
+    ctx.shadowColor = "rgba(0,0,0,0)";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.beginPath();
     const ts = video.currentTime * 1000;
     const cw = outputW, ch = outputH;
     const pad = config.padding;
@@ -313,6 +348,15 @@ export async function createExportCompositor(
 
     ctx.restore();
 
+    if (camera && cameraMedia) {
+      const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
+      if (cameraTime >= 0 && Number.isFinite(camera.duration) && cameraTime <= camera.duration) {
+        if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
+        if (!video.paused && camera.paused) void camera.play().catch(() => {});
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+      }
+    }
+
     // Timed annotation and mask layers. Masks sample the fully composited
     // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
@@ -374,6 +418,8 @@ export async function createExportCompositor(
       destroyed = true;
       cancelAnimationFrame(rafId);
       video.pause();
+      camera?.pause();
+      camera?.remove();
       video.remove();
       canvas.remove();
     },

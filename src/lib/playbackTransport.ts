@@ -9,7 +9,7 @@ export function shouldResyncSidecar(
   sidecarTime: number,
   videoTime: number,
   force = false,
-  thresholdSeconds = 0.18,
+  thresholdSeconds = 0.06,
 ): boolean {
   if (force) return true;
   if (!Number.isFinite(sidecarTime) || !Number.isFinite(videoTime)) return true;

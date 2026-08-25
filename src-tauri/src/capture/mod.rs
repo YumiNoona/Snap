@@ -1,13 +1,14 @@
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::process::{background_command, recording_command};
+use crate::process::{background_command, recording_command, spawn_recording_child};
 
 use serde::{Deserialize, Serialize};
 use windows::core::*;
@@ -24,6 +25,10 @@ use windows::Win32::System::WinRT::Direct3D11::*;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::System::WinRT::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::process::recording_diagnostic(format_args!($($arg)*)) };
+}
 
 // ── Target type ──────────────────────────────────────────────────────────────
 
@@ -50,12 +55,95 @@ pub struct CaptureRegion {
     pub h: i32,
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingOptions {
+    pub fps: u32,
+    pub bitrate_mbps: u32,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
+    pub allow_software_encoder: bool,
+}
+
+impl Default for RecordingOptions {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            bitrate_mbps: 8,
+            max_width: Some(1920),
+            max_height: Some(1080),
+            allow_software_encoder: true,
+        }
+    }
+}
+
+impl RecordingOptions {
+    fn sanitized(self) -> Self {
+        Self {
+            fps: if self.fps >= 50 {
+                60
+            } else if self.fps <= 26 {
+                24
+            } else {
+                30
+            },
+            bitrate_mbps: self.bitrate_mbps.clamp(2, 50),
+            max_width: self.max_width.map(|value| value.clamp(640, 7680)),
+            max_height: self.max_height.map(|value| value.clamp(360, 4320)),
+            allow_software_encoder: self.allow_software_encoder,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CropRect {
     x: u32,
     y: u32,
     w: u32,
     h: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Other,
+}
+
+#[derive(Clone, Copy)]
+struct GpuCapability {
+    vendor: GpuVendor,
+    dedicated_video_memory: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingRecommendation {
+    pub options: RecordingOptions,
+    pub encoder: String,
+    pub hardware_encoding: bool,
+    pub summary: String,
+}
+
+impl GpuVendor {
+    fn encoder_rank(self, name: &str) -> u8 {
+        let preferred = match self {
+            Self::Nvidia => "NVENC",
+            Self::Amd => "AMD",
+            Self::Intel => "Intel",
+            Self::Other => "Media Foundation",
+        };
+        if name.contains(preferred) {
+            0
+        } else if name.contains("Media Foundation") {
+            1
+        } else if name.contains("compatibility") {
+            3
+        } else {
+            2
+        }
+    }
 }
 
 /// Physical-pixel bounds of a monitor or window target. The editor uses these to
@@ -121,9 +209,22 @@ pub struct RecordingPreflight {
 /// are opened. The estimate deliberately includes generous headroom for raw
 /// audio, temporary files, and encoder bitrate spikes.
 #[tauri::command]
-pub fn recording_preflight(
+pub async fn recording_preflight(
     output_path: String,
     expected_seconds: Option<u64>,
+    bitrate_mbps: Option<u64>,
+) -> std::result::Result<RecordingPreflight, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        recording_preflight_blocking(output_path, expected_seconds, bitrate_mbps)
+    })
+    .await
+    .map_err(|error| format!("Recording preflight worker failed: {error}"))?
+}
+
+fn recording_preflight_blocking(
+    output_path: String,
+    expected_seconds: Option<u64>,
+    bitrate_mbps: Option<u64>,
 ) -> std::result::Result<RecordingPreflight, String> {
     let output = std::path::PathBuf::from(&output_path);
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -141,7 +242,14 @@ pub fn recording_preflight(
     let available_bytes = fs2::available_space(parent)
         .map_err(|error| format!("Cannot inspect free disk space: {error}"))?;
     let seconds = expected_seconds.unwrap_or(3600).clamp(60, 86_400);
-    let required_bytes = (seconds * 3_000_000).max(1_073_741_824);
+    let video_bytes_per_second = bitrate_mbps.unwrap_or(8).clamp(2, 50) * 125_000;
+    let audio_bytes_per_second = 288_000u64;
+    // Live fragments and the editor-ready file coexist during finalization.
+    let required_bytes = (seconds
+        .saturating_mul(video_bytes_per_second + audio_bytes_per_second)
+        .saturating_mul(2))
+    .saturating_add(536_870_912)
+    .max(1_073_741_824);
     if available_bytes < required_bytes {
         return Err(format!("Not enough disk space. Snap needs at least {:.1} GB free for this recording estimate; {:.1} GB is available.", required_bytes as f64 / 1_073_741_824.0, available_bytes as f64 / 1_073_741_824.0));
     }
@@ -169,12 +277,185 @@ pub fn recording_preflight(
     if !ffprobe_available {
         return Err("FFmpeg is unavailable because its ffprobe companion is missing. Reinstall the bundled FFmpeg package before recording.".to_string());
     }
+    let filters = crate::process::background_command("ffmpeg")
+        .args(["-hide_banner", "-filters"])
+        .output()
+        .map_err(|error| format!("Unable to inspect FFmpeg capture support: {error}"))?;
+    let filter_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&filters.stdout),
+        String::from_utf8_lossy(&filters.stderr)
+    );
+    if !filter_text.contains("gfxcapture") && !filter_text.contains("ddagrab") {
+        return Err("The installed FFmpeg build has no Windows GPU capture filter. Install a current Gyan Essentials or Full build.".to_string());
+    }
+    let encoders = crate::process::background_command("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .map_err(|error| format!("Unable to inspect FFmpeg encoder support: {error}"))?;
+    let encoder_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&encoders.stdout),
+        String::from_utf8_lossy(&encoders.stderr)
+    );
+    if !["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf", "libx264"]
+        .iter()
+        .any(|encoder| encoder_text.contains(encoder))
+    {
+        return Err("The installed FFmpeg build contains no compatible H.264 encoder.".to_string());
+    }
     Ok(RecordingPreflight {
         available_bytes,
         required_bytes,
         ffmpeg_available,
         writable,
     })
+}
+
+/// Select a conservative profile for the display and the encoders that can
+/// actually start on this machine. The short synthetic probe is cached, so it
+/// runs once per adapter class rather than before every recording.
+#[tauri::command]
+pub async fn recommend_recording_options(
+    target_id: String,
+) -> std::result::Result<RecordingRecommendation, String> {
+    tauri::async_runtime::spawn_blocking(move || recommend_recording_options_blocking(&target_id))
+        .await
+        .map_err(|error| format!("Recording capability check failed: {error}"))?
+}
+
+fn recommend_recording_options_blocking(
+    target_id: &str,
+) -> std::result::Result<RecordingRecommendation, String> {
+    let ffmpeg_available = background_command("ffmpeg")
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !ffmpeg_available {
+        return Err("FFmpeg is unavailable for the automatic performance check".to_string());
+    }
+    static CACHE: OnceLock<Mutex<Vec<(GpuVendor, u64, RecordingRecommendation)>>> = OnceLock::new();
+
+    let capability = target_gpu_capability(target_id);
+    let memory_bucket = capability.dedicated_video_memory / (512 * 1024 * 1024);
+    let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Some((_, _, recommendation)) = cache
+        .lock()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .find(|(vendor, memory, _)| *vendor == capability.vendor && *memory == memory_bucket)
+        .cloned()
+    {
+        return Ok(recommendation);
+    }
+
+    let mut candidates = vec![
+        ("NVIDIA NVENC", "h264_nvenc"),
+        ("AMD AMF", "h264_amf"),
+        ("Intel Quick Sync", "h264_qsv"),
+        ("Windows Media Foundation", "h264_mf"),
+    ];
+    candidates.sort_by_key(|(label, _)| capability.vendor.encoder_rank(label));
+    let working_hardware = candidates
+        .into_iter()
+        .find(|(_, encoder)| probe_h264_encoder(encoder));
+    let logical_cores = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(2);
+
+    let (options, encoder, hardware_encoding, summary) = if let Some((label, _)) = working_hardware
+    {
+        let dedicated = capability.dedicated_video_memory >= 2 * 1024 * 1024 * 1024;
+        let (fps, max_width, max_height, bitrate_mbps) = if dedicated {
+            // Automatic means "stay out of the user's way", even on a fast
+            // GPU. A 720p encode touches less than half as many pixels as
+            // 1080p and leaves substantially more copy/VRAM bandwidth for
+            // browsers, Unreal Engine, games, and video calls.
+            (30, 1280, 720, 4)
+        } else {
+            (24, 1280, 720, 3)
+        };
+        (
+            RecordingOptions {
+                fps,
+                bitrate_mbps,
+                max_width: Some(max_width),
+                max_height: Some(max_height),
+                allow_software_encoder: true,
+            },
+            label.to_string(),
+            true,
+            format!(
+                "{max_width}x{max_height} at {fps} FPS using {label}; low-impact capture protects other apps"
+            ),
+        )
+    } else {
+        let (fps, max_width, max_height, bitrate_mbps) = if logical_cores >= 8 {
+            (30, 1280, 720, 4)
+        } else if logical_cores >= 4 {
+            (24, 1280, 720, 3)
+        } else {
+            (24, 960, 540, 2)
+        };
+        (
+            RecordingOptions {
+                fps,
+                bitrate_mbps,
+                max_width: Some(max_width),
+                max_height: Some(max_height),
+                allow_software_encoder: true,
+            },
+            "low-priority CPU compatibility encoder".to_string(),
+            false,
+            format!(
+                "{max_width}x{max_height} at {fps} FPS using a bounded CPU encoder ({logical_cores} logical cores detected)"
+            ),
+        )
+    };
+    let recommendation = RecordingRecommendation {
+        options,
+        encoder,
+        hardware_encoding,
+        summary,
+    };
+    cache.lock().map_err(|error| error.to_string())?.push((
+        capability.vendor,
+        memory_bucket,
+        recommendation.clone(),
+    ));
+    Ok(recommendation)
+}
+
+fn probe_h264_encoder(encoder: &str) -> bool {
+    let mut command = background_command("ffmpeg");
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=black:s=640x360:r=30:d=0.15",
+        "-frames:v",
+        "4",
+        "-c:v",
+        encoder,
+    ]);
+    if encoder == "h264_mf" {
+        command.args(["-hw_encoding", "1"]);
+    }
+    command
+        .args(["-f", "null", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -214,11 +495,22 @@ struct CaptureHandle {
     done_rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
 }
 
+#[derive(Clone)]
+struct CaptureRuntime {
+    is_recording: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
+    resume_ready: Arc<AtomicBool>,
+    startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+}
+
 static STATE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
 static GFXCAPTURE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 const RESILIENT_MP4_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
-const EDITOR_READY_FPS_FILTER: &str = "fps=fps=60:round=near:start_time=0";
 const EDITOR_READY_MOVFLAGS: &str = "+faststart";
+
+fn editor_ready_fps_filter(fps: u32) -> String {
+    format!("fps=fps={}:round=near:start_time=0", fps.clamp(24, 60))
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -268,15 +560,55 @@ fn has_gfxcapture() -> bool {
     })
 }
 
-fn gfxcapture_source(target_id: &str, crop: Option<CropRect>) -> Option<(String, String)> {
-    let common =
-        "capture_cursor=0:capture_border=0:display_border=0:max_framerate=60:width=-2:height=-2";
+fn constrained_size(width: u32, height: u32, options: RecordingOptions) -> (u32, u32) {
+    let Some(max_width) = options.max_width else {
+        return (width & !1, height & !1);
+    };
+    let max_height = options.max_height.unwrap_or(u32::MAX);
+    if width <= max_width && height <= max_height {
+        return (width & !1, height & !1);
+    }
+    let scale =
+        (max_width as f64 / width.max(1) as f64).min(max_height as f64 / height.max(1) as f64);
+    (
+        ((width as f64 * scale).round() as u32).max(2) & !1,
+        ((height as f64 * scale).round() as u32).max(2) & !1,
+    )
+}
+
+fn gfxcapture_common(width: u32, height: u32, options: RecordingOptions) -> String {
+    let (output_width, output_height) = constrained_size(width, height, options);
+    format!(
+        "capture_cursor=0:capture_border=0:display_border=0:max_framerate={}:width={output_width}:height={output_height}:resize_mode=scale_aspect:output_fmt=8bit",
+        options.fps
+    )
+}
+
+fn gfxcapture_source(
+    target_id: &str,
+    crop: Option<CropRect>,
+    options: RecordingOptions,
+) -> Option<(String, String)> {
     if let Some(hwnd) = hwnd_from_id(target_id) {
+        let bounds = get_target_bounds(target_id.to_string()).unwrap_or(TargetBounds {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        });
+        let common = gfxcapture_common(bounds.w.max(2) as u32, bounds.h.max(2) as u32, options);
         let source = format!("gfxcapture=hwnd={}:{common}", hwnd.0 as usize);
         return Some((source, "window".to_string()));
     }
     let monitor = hmonitor_from_id(target_id)?;
     let Some(crop) = crop else {
+        let bounds = get_target_bounds(target_id.to_string()).unwrap_or(TargetBounds {
+            x: 0,
+            y: 0,
+            w: 1920,
+            h: 1080,
+        });
+        let common = gfxcapture_common(bounds.w.max(2) as u32, bounds.h.max(2) as u32, options);
         return Some((
             format!("gfxcapture=hmonitor={}:{common}", monitor.0 as usize),
             "full display".to_string(),
@@ -288,6 +620,7 @@ fn gfxcapture_source(target_id: &str, crop: Option<CropRect>) -> Option<(String,
         crop,
         bounds.w.max(0) as u32,
         bounds.h.max(0) as u32,
+        options,
     );
     Some((source, "custom region".to_string()))
 }
@@ -297,20 +630,22 @@ fn gfxcapture_region_source(
     crop: CropRect,
     monitor_width: u32,
     monitor_height: u32,
+    options: RecordingOptions,
 ) -> String {
     let right = monitor_width.saturating_sub(crop.x.saturating_add(crop.w));
     let bottom = monitor_height.saturating_sub(crop.y.saturating_add(crop.h));
-    format!(
-        "gfxcapture=hmonitor={monitor}:crop_left={}:crop_top={}:crop_right={right}:crop_bottom={bottom}:capture_cursor=0:capture_border=0:display_border=0:max_framerate=60:width=-2:height=-2",
-        crop.x, crop.y
-    )
+    let common = gfxcapture_common(crop.w, crop.h, options);
+    format!("gfxcapture=hmonitor={monitor}:crop_left={}:crop_top={}:crop_right={right}:crop_bottom={bottom}:{common}", crop.x, crop.y)
 }
 
-fn desktop_duplication_source(output_index: u32) -> String {
+fn desktop_duplication_source(output_index: u32, options: RecordingOptions) -> String {
     // Keep duplicate frames enabled. Omitting unchanged frames makes the MP4
     // end at the last visual update rather than at Stop, while independently
     // clocked WAV tracks correctly continue to the real recording end.
-    format!("ddagrab=output_idx={output_index}:framerate=60:draw_mouse=0:dup_frames=1")
+    format!(
+        "ddagrab=output_idx={output_index}:framerate={}:draw_mouse=0:dup_frames=1:output_fmt=8bit",
+        options.fps
+    )
 }
 
 // ── Enumerate targets (runs fine on any thread) ──────────────────────────────
@@ -356,9 +691,11 @@ fn enumerate_monitors(targets: &mut Vec<DisplayTarget>) -> Result<()> {
     Ok(())
 }
 
-fn desktop_duplication_output_index(hmonitor: HMONITOR) -> Result<u32> {
+/// FFmpeg's `ddagrab=output_idx=` is relative to the adapter backing its D3D11
+/// device. Without an explicit FFmpeg adapter selection that is adapter zero,
+/// so never pass a global cross-adapter index here.
+fn desktop_duplication_output_index(hmonitor: HMONITOR) -> Result<Option<u32>> {
     let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
-    let mut global_index = 0u32;
     for adapter_idx in 0u32.. {
         let adapter: IDXGIAdapter1 = match unsafe { factory.EnumAdapters1(adapter_idx) } {
             Ok(value) => value,
@@ -373,15 +710,64 @@ fn desktop_duplication_output_index(hmonitor: HMONITOR) -> Result<u32> {
             };
             let description = unsafe { output.GetDesc()? };
             if description.Monitor == hmonitor {
-                return Ok(global_index);
+                return Ok((adapter_idx == 0).then_some(output_idx));
             }
-            global_index += 1;
         }
     }
     Err(Error::new(
         E_FAIL,
         "Selected display is unavailable to Desktop Duplication",
     ))
+}
+
+fn target_gpu_capability(target_id: &str) -> GpuCapability {
+    let monitor = hmonitor_from_id(target_id).or_else(|| {
+        hwnd_from_id(target_id)
+            .map(|window| unsafe { MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST) })
+    });
+    let Some(monitor) = monitor else {
+        return GpuCapability {
+            vendor: GpuVendor::Other,
+            dedicated_video_memory: 0,
+        };
+    };
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+        return GpuCapability {
+            vendor: GpuVendor::Other,
+            dedicated_video_memory: 0,
+        };
+    };
+    for adapter_index in 0u32.. {
+        let Ok(adapter) = (unsafe { factory.EnumAdapters1(adapter_index) }) else {
+            break;
+        };
+        for output_index in 0u32.. {
+            let Ok(output) = (unsafe { adapter.EnumOutputs(output_index) }) else {
+                break;
+            };
+            if unsafe { output.GetDesc() }.is_ok_and(|description| description.Monitor == monitor) {
+                let description = unsafe { adapter.GetDesc1() }.unwrap_or_default();
+                let vendor = match description.VendorId {
+                    0x10de => GpuVendor::Nvidia,
+                    0x1002 | 0x1022 => GpuVendor::Amd,
+                    0x8086 => GpuVendor::Intel,
+                    _ => GpuVendor::Other,
+                };
+                return GpuCapability {
+                    vendor,
+                    dedicated_video_memory: description.DedicatedVideoMemory as u64,
+                };
+            }
+        }
+    }
+    GpuCapability {
+        vendor: GpuVendor::Other,
+        dedicated_video_memory: 0,
+    }
+}
+
+fn target_gpu_vendor(target_id: &str) -> GpuVendor {
+    target_gpu_capability(target_id).vendor
 }
 
 fn enumerate_windows(targets: &mut Vec<DisplayTarget>) {
@@ -429,7 +815,10 @@ pub async fn start_recording(
     target_id: String,
     output_path: String,
     region: Option<CaptureRegion>,
+    options: Option<RecordingOptions>,
 ) -> std::result::Result<(), String> {
+    let gpu_vendor = target_gpu_vendor(&target_id);
+    let options = options.unwrap_or_default().sanitized();
     if let Some(selected) = region {
         if selected.w < 256 || selected.h < 144 {
             return Err("Recording region must be at least 256x144 pixels".to_string());
@@ -445,9 +834,12 @@ pub async fn start_recording(
     let resume_ready = Arc::new(AtomicBool::new(true));
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let (startup_tx, startup_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-    let is_rec_clone = is_recording.clone();
-    let is_paused_clone = is_paused.clone();
-    let resume_ready_clone = resume_ready.clone();
+    let runtime = CaptureRuntime {
+        is_recording: is_recording.clone(),
+        is_paused: is_paused.clone(),
+        resume_ready: resume_ready.clone(),
+        startup_tx: startup_tx.clone(),
+    };
     let target_bounds = get_target_bounds(target_id.clone()).ok();
     let crop = region.and_then(|selected| {
         target_bounds.map(|bounds| {
@@ -471,27 +863,20 @@ pub async fn start_recording(
     // Use std::thread::spawn instead of tokio::task::spawn_blocking to guarantee
     // a fresh thread with no prior COM initialization (avoids RPC_E_CHANGED_MODE).
     thread::spawn(move || {
-        let result = run_capture_thread(
-            &target_id,
-            &output_path,
-            crop,
-            is_rec_clone,
-            is_paused_clone,
-            resume_ready_clone,
-            startup_tx.clone(),
-        );
+        let result =
+            run_capture_thread(&target_id, &output_path, crop, options, gpu_vendor, runtime);
         if let Err(error) = &result {
             let _ = startup_tx.send(Err(error.clone()));
         }
         let _ = done_tx.send(result);
     });
 
-    match startup_rx.recv_timeout(Duration::from_secs(6)) {
+    match startup_rx.recv_timeout(Duration::from_secs(30)) {
         Ok(Ok(())) => {}
         Ok(Err(error)) => return Err(error),
         Err(_) => {
             is_recording.store(false, Ordering::SeqCst);
-            return Err("Recorder failed to initialize within 6 seconds".to_string());
+            return Err("Recorder failed to initialize within 30 seconds".to_string());
         }
     }
 
@@ -548,10 +933,9 @@ pub async fn stop_recording() -> std::result::Result<(), String> {
     eprintln!("[Snap] Signaling capture thread to stop...");
     handle.is_recording.store(false, Ordering::SeqCst);
 
-    match tokio::time::timeout(Duration::from_secs(20), handle.done_rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err("Capture thread failed (no result)".to_string()),
-        Err(_) => Err("Capture stop timed out after 20s".to_string()),
+    match handle.done_rx.await {
+        Ok(result) => result,
+        Err(_) => Err("Capture thread failed (no result)".to_string()),
     }
 }
 
@@ -561,10 +945,9 @@ fn run_capture_thread(
     target_id: &str,
     output_path: &str,
     crop: Option<CropRect>,
-    is_recording: Arc<AtomicBool>,
-    is_paused: Arc<AtomicBool>,
-    resume_ready: Arc<AtomicBool>,
-    startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+    options: RecordingOptions,
+    gpu_vendor: GpuVendor,
+    runtime: CaptureRuntime,
 ) -> std::result::Result<(), String> {
     // Resolve the absolute output path now, before we hand it to FFmpeg
     let abs_path = match std::path::absolute(output_path) {
@@ -588,15 +971,9 @@ fn run_capture_thread(
     // output surface continuously, which can starve Chromium video overlays on
     // some hybrid/NVIDIA laptops even when Task Manager reports modest load.
     if has_gfxcapture() {
-        if let Some((source, label)) = gfxcapture_source(target_id, crop) {
+        if let Some((source, label)) = gfxcapture_source(target_id, crop, options) {
             return run_segmented_gpu_capture(
-                &source,
-                &label,
-                &abs_path,
-                is_recording,
-                is_paused,
-                resume_ready,
-                startup_tx,
+                &source, &label, &abs_path, options, gpu_vendor, runtime,
             );
         }
     }
@@ -605,21 +982,29 @@ fn run_capture_thread(
     // monitor recording into whichever foreground window happens to be active.
     if crop.is_none() {
         if let Some(monitor) = hmonitor_from_id(target_id) {
-            let output_index =
-                desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?;
-            let source = desktop_duplication_source(output_index);
-            return run_segmented_gpu_capture(
-                &source,
-                "full display fallback",
-                &abs_path,
-                is_recording,
-                is_paused,
-                resume_ready,
-                startup_tx,
-            );
+            if let Some(output_index) =
+                desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?
+            {
+                let source = desktop_duplication_source(output_index, options);
+                return run_segmented_gpu_capture(
+                    &source,
+                    "full display fallback",
+                    &abs_path,
+                    options,
+                    gpu_vendor,
+                    runtime,
+                );
+            }
+            eprintln!("[Snap] Selected monitor is on a non-default adapter; using the adapter-safe Windows.Graphics.Capture fallback");
         }
     }
 
+    let CaptureRuntime {
+        is_recording,
+        is_paused,
+        resume_ready,
+        startup_tx,
+    } = runtime;
     let result = (|| -> Result<()> {
         // ── Step 1: COM initialization ──
         eprintln!("[Snap] Step 1/7: COM initializing (COINIT_MULTITHREADED)...");
@@ -657,7 +1042,7 @@ fn run_capture_thread(
         // ── Step 4: FFmpeg subprocess ──
         let abs_path_str = abs_path.to_string_lossy().to_string();
         let (mut ffmpeg_child, ffmpeg_stdin, hardware_encoder) =
-            spawn_ffmpeg(&abs_path_str, encode_w, encode_h)?;
+            spawn_ffmpeg(&abs_path_str, encode_w, encode_h, options, gpu_vendor)?;
         // FFmpeg continuously writes progress and diagnostics. Leaving stderr
         // attached to an unread pipe eventually fills its OS buffer and blocks
         // the encoder, producing a video that appears frozen on one frame.
@@ -698,7 +1083,7 @@ fn run_capture_thread(
         let mut frames_sent: u64 = 0;
         let first_frame_deadline = Instant::now() + Duration::from_secs(3);
         let mut log_interval = Instant::now();
-        let frame_interval = Duration::from_micros(16_667);
+        let frame_interval = Duration::from_secs_f64(1.0 / options.fps as f64);
         let mut next_target = Instant::now();
         // Reusable staging texture — created once on first frame, reused for all
         // subsequent frames to avoid per-frame GPU allocation overhead.
@@ -811,7 +1196,7 @@ fn run_capture_thread(
         }
 
         eprintln!("[Snap] Polled {frame_count} frames, sent {frames_sent} to FFmpeg");
-        crate::input_hook::mark_capture_end(frames_sent);
+        crate::input_hook::mark_capture_end(frames_sent, options.fps);
         drop(stdin);
 
         // ── Cleanup ──
@@ -847,11 +1232,16 @@ fn run_segmented_gpu_capture(
     source: &str,
     source_label: &str,
     output_path: &Path,
-    is_recording: Arc<AtomicBool>,
-    is_paused: Arc<AtomicBool>,
-    resume_ready: Arc<AtomicBool>,
-    startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+    options: RecordingOptions,
+    gpu_vendor: GpuVendor,
+    runtime: CaptureRuntime,
 ) -> std::result::Result<(), String> {
+    let CaptureRuntime {
+        is_recording,
+        is_paused,
+        resume_ready,
+        startup_tx,
+    } = runtime;
     let stem = output_path
         .file_stem()
         .unwrap_or_default()
@@ -862,12 +1252,30 @@ fn run_segmented_gpu_capture(
     let mut recovery_attempts = 0usize;
     let mut started = false;
     let mut last_diagnostics = String::new();
+    let mut excluded_encoders = HashSet::new();
+    let mut terminal_failure = None;
+    let mut total_frames = 0u64;
 
     while is_recording.load(Ordering::Relaxed) {
         let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
         let _ = std::fs::remove_file(&part);
-        let (mut child, mut control, encoder, encoded_timeline, progress_reader) =
-            spawn_gpu_capture(source, &part)?;
+        let SpawnedCapture {
+            mut child,
+            mut control,
+            encoder,
+            encoded_timeline,
+            progress,
+            progress_reader,
+        } = match spawn_gpu_capture(source, &part, options, gpu_vendor, &excluded_encoders) {
+            Ok(value) => value,
+            Err(error) if started => {
+                terminal_failure = Some(format!(
+                    "Capture could not restart with another encoder: {error}"
+                ));
+                break;
+            }
+            Err(error) => return Err(error),
+        };
         let stderr = child.stderr.take();
         let stderr_reader = thread::spawn(move || {
             let mut diagnostics = String::new();
@@ -895,6 +1303,8 @@ fn run_segmented_gpu_capture(
         let mut paused_segment = false;
         let mut segment_exit_ok = true;
         let mut segment_exit_status = String::new();
+        let mut health_check = Instant::now();
+        let mut last_progress_frame = progress.frame.load(Ordering::Relaxed);
         while is_recording.load(Ordering::Relaxed) {
             if let Ok(Some(status)) = child.try_wait() {
                 eprintln!("[Snap] GPU capture segment ended ({status}); attempting recovery");
@@ -906,6 +1316,29 @@ fn run_segmented_gpu_capture(
             if is_paused.load(Ordering::Acquire) {
                 paused_segment = true;
                 break;
+            }
+            if health_check.elapsed() >= Duration::from_secs(5) {
+                health_check = Instant::now();
+                if let Ok(free) = fs2::available_space(parent) {
+                    if free < 536_870_912 {
+                        terminal_failure = Some(format!("Recording stopped safely because disk space fell below 512 MB ({} MB remaining)", free / 1_048_576));
+                        break;
+                    }
+                }
+                let frame = progress.frame.load(Ordering::Relaxed);
+                let media_us = progress.out_time_us.load(Ordering::Relaxed);
+                let size = std::fs::metadata(&part)
+                    .map(|value| value.len())
+                    .unwrap_or(0);
+                eprintln!(
+                    "[Snap] Capture health: frame={frame}, media={:.1}s, segment={:.1} MB",
+                    media_us as f64 / 1_000_000.0,
+                    size as f64 / 1_048_576.0
+                );
+                if frame == last_progress_frame {
+                    eprintln!("[Snap] No new encoded frame in 5 seconds; the target may be static or temporarily unavailable");
+                }
+                last_progress_frame = frame;
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -920,6 +1353,7 @@ fn run_segmented_gpu_capture(
         }
         last_diagnostics = stderr_reader.join().unwrap_or_default();
         let _ = progress_reader.join();
+        total_frames = total_frames.saturating_add(progress.frame.load(Ordering::Relaxed));
         if !segment_exit_status.is_empty() {
             if !last_diagnostics.is_empty() {
                 last_diagnostics.push('\n');
@@ -940,6 +1374,9 @@ fn run_segmented_gpu_capture(
                 let _ = std::fs::remove_file(&part);
             }
         }
+        if terminal_failure.is_some() {
+            break;
+        }
         if !is_recording.load(Ordering::Relaxed) {
             break;
         }
@@ -953,43 +1390,71 @@ fn run_segmented_gpu_capture(
             }
             continue;
         }
+        if exited {
+            excluded_encoders.insert(encoder.to_string());
+        }
         recovery_attempts += 1;
         if recovery_attempts > 5 {
-            return Err(format!(
+            terminal_failure = Some(format!(
                 "Desktop capture could not recover after 5 display resets: {last_diagnostics}"
             ));
+            break;
         }
         thread::sleep(Duration::from_millis(350));
     }
 
-    crate::input_hook::mark_capture_end(0);
-    finalize_capture_parts(&parts, output_path, &last_diagnostics)?;
+    crate::input_hook::mark_capture_end(total_frames, options.fps);
+    finalize_capture_parts(&parts, output_path, &last_diagnostics, options)?;
     for part in parts {
         let _ = std::fs::remove_file(part);
     }
+    if let Some(error) = terminal_failure {
+        return Err(error);
+    }
     Ok(())
+}
+
+struct CaptureProgress {
+    frame: AtomicU64,
+    out_time_us: AtomicU64,
+}
+
+struct SpawnedCapture {
+    child: Child,
+    control: ChildStdin,
+    encoder: &'static str,
+    encoded_timeline: Duration,
+    progress: Arc<CaptureProgress>,
+    progress_reader: thread::JoinHandle<()>,
 }
 
 fn spawn_gpu_capture(
     source: &str,
     destination: &Path,
-) -> std::result::Result<
-    (
-        Child,
-        ChildStdin,
-        &'static str,
-        Duration,
-        thread::JoinHandle<()>,
-    ),
-    String,
-> {
+    options: RecordingOptions,
+    gpu_vendor: GpuVendor,
+    excluded_encoders: &HashSet<String>,
+) -> std::result::Result<SpawnedCapture, String> {
     let destination = destination.to_string_lossy().to_string();
     let qsv_source = format!("{source},hwmap=derive_device=qsv,format=qsv");
-    let encoders: [(&str, &str, &[&str]); 3] = [
+    let software_source = format!("{source},hwdownload,format=bgra,format=yuv420p");
+    let bitrate = format!("{}M", options.bitrate_mbps);
+    let maxrate = format!(
+        "{}M",
+        (options.bitrate_mbps * 5 / 4).max(options.bitrate_mbps + 1)
+    );
+    let bufsize = format!("{}M", (options.bitrate_mbps / 2).max(2));
+    let gop = (options.fps * 2).to_string();
+    let fps = options.fps.to_string();
+    let live_software_threads = std::thread::available_parallelism()
+        .map(|value| (value.get() / 2).clamp(1, 2))
+        .unwrap_or(1)
+        .to_string();
+    let mut encoders: Vec<(&'static str, String, Vec<String>)> = vec![
         (
             "NVENC (GPU-resident)",
-            source,
-            &[
+            source.to_string(),
+            vec![
                 "-c:v",
                 "h264_nvenc",
                 "-preset",
@@ -997,21 +1462,30 @@ fn spawn_gpu_capture(
                 "-tune",
                 "ll",
                 "-b:v",
-                "10M",
+                &bitrate,
                 "-maxrate",
-                "12M",
+                &maxrate,
                 "-bufsize",
-                "4M",
+                &bufsize,
                 "-g",
-                "120",
+                &gop,
                 "-bf",
                 "0",
-            ],
+                "-surfaces",
+                "2",
+                "-multipass",
+                "disabled",
+                "-delay",
+                "0",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         ),
         (
             "AMD AMF (GPU-resident)",
-            source,
-            &[
+            source.to_string(),
+            vec![
                 "-c:v",
                 "h264_amf",
                 "-usage",
@@ -1019,27 +1493,99 @@ fn spawn_gpu_capture(
                 "-quality",
                 "speed",
                 "-b:v",
-                "10M",
+                &bitrate,
                 "-maxrate",
-                "12M",
+                &maxrate,
                 "-bufsize",
-                "4M",
+                &bufsize,
                 "-g",
-                "120",
+                &gop,
                 "-bf",
                 "0",
-            ],
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         ),
         (
             "Intel Quick Sync (GPU-mapped)",
-            &qsv_source,
-            &[
-                "-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "10M", "-maxrate", "12M",
-                "-bufsize", "4M", "-g", "120", "-bf", "0",
-            ],
+            qsv_source,
+            vec![
+                "-c:v",
+                "h264_qsv",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                &bitrate,
+                "-maxrate",
+                &maxrate,
+                "-bufsize",
+                &bufsize,
+                "-g",
+                &gop,
+                "-bf",
+                "0",
+                "-async_depth",
+                "1",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        (
+            "Media Foundation hardware",
+            source.to_string(),
+            vec![
+                "-c:v",
+                "h264_mf",
+                "-hw_encoding",
+                "1",
+                "-scenario",
+                "display_remoting",
+                "-b:v",
+                &bitrate,
+                "-g",
+                &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         ),
     ];
+    if options.allow_software_encoder {
+        encoders.push((
+            "x264 compatibility fallback",
+            software_source,
+            vec![
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-b:v",
+                &bitrate,
+                "-maxrate",
+                &maxrate,
+                "-bufsize",
+                &bufsize,
+                "-g",
+                &gop,
+                "-bf",
+                "0",
+                "-threads",
+                &live_software_threads,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ));
+    }
+    encoders.sort_by_key(|(name, _, _)| gpu_vendor.encoder_rank(name));
     for (name, capture_filter, codec) in encoders {
+        if excluded_encoders.contains(name) {
+            continue;
+        }
         let mut command = recording_command("ffmpeg");
         command.args([
             "-y",
@@ -1051,17 +1597,23 @@ fn spawn_gpu_capture(
             "0.05",
             "-progress",
             "pipe:1",
+            "-filter_threads",
+            "1",
+            "-filter_complex_threads",
+            "1",
             "-filter_complex",
-            capture_filter,
+            &capture_filter,
         ]);
         // Write independently decodable MP4 fragments as recording proceeds.
         // A normal MP4 stores its `moov` index only during clean shutdown, so
         // a driver/FFmpeg access violation at Stop turns the entire recording
         // into an unreadable file. Fragmented MP4 keeps its initialization
         // metadata at the front and limits a crash to at most the current GOP.
-        command.args(codec).args([
+        command.args(&codec).args([
+            "-r",
+            &fps,
             "-fps_mode",
-            "vfr",
+            "cfr",
             "-movflags",
             RESILIENT_MP4_MOVFLAGS,
             &destination,
@@ -1070,13 +1622,18 @@ fn spawn_gpu_capture(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Ok(mut child) = command.spawn() {
+        if let Ok(mut child) = spawn_recording_child(&mut command) {
             let Some(stdout) = child.stdout.take() else {
                 let _ = child.kill();
                 let _ = child.wait();
                 continue;
             };
             let (first_frame_tx, first_frame_rx) = std::sync::mpsc::sync_channel(1);
+            let progress = Arc::new(CaptureProgress {
+                frame: AtomicU64::new(0),
+                out_time_us: AtomicU64::new(0),
+            });
+            let reported_progress = progress.clone();
             let progress_reader = thread::spawn(move || {
                 let mut frame = 0u64;
                 let mut out_time_us = 0u64;
@@ -1085,6 +1642,10 @@ fn spawn_gpu_capture(
                     if let Some(media_time) =
                         parse_gpu_progress_line(&line, &mut frame, &mut out_time_us)
                     {
+                        reported_progress.frame.store(frame, Ordering::Relaxed);
+                        reported_progress
+                            .out_time_us
+                            .store(out_time_us, Ordering::Relaxed);
                         if !reported {
                             let _ = first_frame_tx.send(media_time);
                             reported = true;
@@ -1099,7 +1660,14 @@ fn spawn_gpu_capture(
                         .stdin
                         .take()
                         .ok_or_else(|| "Desktop capture control pipe is unavailable".to_string())?;
-                    return Ok((child, stdin, name, encoded_timeline, progress_reader));
+                    return Ok(SpawnedCapture {
+                        child,
+                        control: stdin,
+                        encoder: name,
+                        encoded_timeline,
+                        progress,
+                        progress_reader,
+                    });
                 }
                 _ => {
                     let _ = child.kill();
@@ -1109,7 +1677,7 @@ fn spawn_gpu_capture(
             }
         }
     }
-    Err("Desktop capture could not start with any supported hardware H.264 encoder".to_string())
+    Err("Desktop capture could not start with NVENC, AMF, Quick Sync, Media Foundation, or the configured compatibility encoder".to_string())
 }
 
 /// Parse one `-progress pipe:1` line. A progress block is complete only when
@@ -1170,10 +1738,44 @@ fn validate_capture_segment(path: &Path) -> std::result::Result<(), String> {
     Ok(())
 }
 
+fn capture_parts_are_cfr(parts: &[std::path::PathBuf], fps: u32) -> bool {
+    let expected = 1.0 / fps.max(1) as f64;
+    parts.iter().all(|path| {
+        let Ok(output) = background_command("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-read_intervals",
+                "%+#120",
+                "-show_entries",
+                "packet=duration_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path)
+            .output()
+        else {
+            return false;
+        };
+        let durations = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<f64>().ok())
+            .collect::<Vec<_>>();
+        output.status.success()
+            && durations.len() >= 2
+            && durations
+                .iter()
+                .all(|duration| (*duration - expected).abs() <= 0.0025)
+    })
+}
+
 fn finalize_capture_parts(
     parts: &[std::path::PathBuf],
     output_path: &Path,
     diagnostics: &str,
+    options: RecordingOptions,
 ) -> std::result::Result<(), String> {
     if parts.is_empty() {
         return Err(format!(
@@ -1194,57 +1796,14 @@ fn finalize_capture_parts(
         None
     };
 
-    // Live capture intentionally writes resilient VFR fragments so a driver
-    // reset or unclean stop cannot destroy the whole session. VFR timestamps
-    // are ideal for recovery but can make WebView2 repeat frames unevenly and
-    // stutter while the editor is compositing effects. After capture has
-    // stopped, prepare a constant-60-fps, fast-start file. This work is allowed
-    // to be heavier because the recording hot path has already ended.
-    let codecs: [(&str, &[&str]); 4] = [
-        (
-            "NVENC",
-            &[
-                "-c:v",
-                "h264_nvenc",
-                "-preset",
-                "p3",
-                "-tune",
-                "hq",
-                "-b:v",
-                "12M",
-                "-maxrate",
-                "16M",
-                "-bufsize",
-                "8M",
-                "-g",
-                "120",
-            ],
-        ),
-        (
-            "AMD AMF",
-            &[
-                "-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M", "-maxrate", "16M",
-                "-bufsize", "8M", "-g", "120",
-            ],
-        ),
-        (
-            "Intel Quick Sync",
-            &[
-                "-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M", "-maxrate", "16M",
-                "-bufsize", "8M", "-g", "120",
-            ],
-        ),
-        (
-            "software fallback",
-            &[
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", "120",
-            ],
-        ),
-    ];
-    let mut attempts = Vec::new();
-    for (label, codec) in codecs {
+    // New recordings are paced to CFR during capture. In the normal case the
+    // editor-ready file therefore needs only a fast stream copy, not a second
+    // full decode/encode pass. This makes Stop nearly instant and avoids a
+    // post-recording CPU/GPU spike. Older/recovered VFR fragments continue to
+    // use the compatibility conversion below.
+    if capture_parts_are_cfr(parts, options.fps) {
         let _ = std::fs::remove_file(output_path);
-        let mut command = background_command("ffmpeg");
+        let mut command = recording_command("ffmpeg");
         command.args(["-y", "-hide_banner", "-loglevel", "error"]);
         if let Some(path) = &list_path {
             command
@@ -1253,16 +1812,169 @@ fn finalize_capture_parts(
         } else {
             command.args(["-fflags", "+genpts", "-i"]).arg(&parts[0]);
         }
+        let timescale = if options.fps == 60 {
+            "60000"
+        } else if options.fps == 24 {
+            "24000"
+        } else {
+            "30000"
+        };
+        let output = command
+            .args([
+                "-map",
+                "0:v:0",
+                "-an",
+                "-c:v",
+                "copy",
+                "-video_track_timescale",
+                timescale,
+                "-avoid_negative_ts",
+                "make_zero",
+                "-movflags",
+                EDITOR_READY_MOVFLAGS,
+            ])
+            .arg(output_path)
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() && validate_output(output_path, true, diagnostics).is_ok() {
+                if let Some(path) = &list_path {
+                    let _ = std::fs::remove_file(path);
+                }
+                eprintln!("[Snap] Editor-ready CFR video prepared with a zero-load stream copy");
+                return Ok(());
+            }
+        }
+    }
+
+    // This compatibility path handles older VFR fragments and unusual driver
+    // output whose packet timing was not uniform enough for the stream-copy
+    // path above. Convert it to constant-frame-rate, fast-start video at the
+    // requested FPS so WebView2 playback remains stable.
+    let bitrate = format!("{}M", options.bitrate_mbps);
+    let maxrate = format!(
+        "{}M",
+        (options.bitrate_mbps * 4 / 3).max(options.bitrate_mbps + 1)
+    );
+    let bufsize = format!("{}M", options.bitrate_mbps.max(4));
+    let gop = (options.fps * 2).to_string();
+    let software_threads = std::thread::available_parallelism()
+        .map(|value| (value.get() / 2).clamp(1, 4))
+        .unwrap_or(2)
+        .to_string();
+    let codecs: Vec<(&str, Vec<String>)> = vec![
+        (
+            "NVENC",
+            vec![
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p3",
+                "-tune",
+                "hq",
+                "-b:v",
+                &bitrate,
+                "-maxrate",
+                &maxrate,
+                "-bufsize",
+                &bufsize,
+                "-g",
+                &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        (
+            "AMD AMF",
+            vec![
+                "-c:v", "h264_amf", "-quality", "speed", "-b:v", &bitrate, "-maxrate", &maxrate,
+                "-bufsize", &bufsize, "-g", &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        (
+            "Intel Quick Sync",
+            vec![
+                "-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", &bitrate, "-maxrate", &maxrate,
+                "-bufsize", &bufsize, "-g", &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        (
+            "Media Foundation",
+            vec![
+                "-c:v",
+                "h264_mf",
+                "-hw_encoding",
+                "1",
+                "-b:v",
+                &bitrate,
+                "-g",
+                &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        (
+            "software fallback",
+            vec![
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                &bitrate,
+                "-maxrate",
+                &maxrate,
+                "-bufsize",
+                &bufsize,
+                "-threads",
+                &software_threads,
+                "-g",
+                &gop,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+    ];
+    let mut attempts = Vec::new();
+    for (label, codec) in codecs {
+        let _ = std::fs::remove_file(output_path);
+        // Finalization can still be substantial on long recordings. Keep it
+        // below normal priority so browsers, games, and the editor remain
+        // responsive while the resilient fragments are converted to CFR.
+        let mut command = recording_command("ffmpeg");
+        command.args(["-y", "-hide_banner", "-loglevel", "error"]);
+        if let Some(path) = &list_path {
+            command
+                .args(["-f", "concat", "-safe", "0", "-fflags", "+genpts", "-i"])
+                .arg(path);
+        } else {
+            command.args(["-fflags", "+genpts", "-i"]).arg(&parts[0]);
+        }
+        let fps_filter = editor_ready_fps_filter(options.fps);
         command
-            .args(["-map", "0:v:0", "-an", "-vf", EDITOR_READY_FPS_FILTER])
-            .args(codec)
+            .args(["-map", "0:v:0", "-an", "-vf", &fps_filter])
+            .args(&codec)
             .args([
                 "-pix_fmt",
                 "yuv420p",
                 "-fps_mode",
                 "cfr",
                 "-video_track_timescale",
-                "60000",
+                if options.fps == 60 {
+                    "60000"
+                } else if options.fps == 24 {
+                    "24000"
+                } else {
+                    "30000"
+                },
                 "-avoid_negative_ts",
                 "make_zero",
                 "-movflags",
@@ -1296,6 +2008,74 @@ fn finalize_capture_parts(
         "Unable to prepare smooth editor playback: {}",
         attempts.join("; ")
     ))
+}
+
+/// Assemble fragmented MP4 parts left by a process crash or power loss. The
+/// fragments are intentionally written beside the final MP4 so recovery does
+/// not depend on the hidden project-data folder remaining intact.
+pub(crate) fn recover_capture_parts(output_path: &Path) -> std::result::Result<bool, String> {
+    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let prefix = format!("{stem}.capture-part-");
+    let mut parts = std::fs::read_dir(parent)
+        .map_err(|error| format!("Unable to scan capture fragments: {error}"))?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let index = name
+                .strip_prefix(&prefix)?
+                .strip_suffix(".mp4")?
+                .parse::<usize>()
+                .ok()?;
+            Some((index, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    parts.sort_by_key(|(index, _)| *index);
+    let usable = parts
+        .into_iter()
+        .filter_map(|(_, path)| validate_capture_segment(&path).ok().map(|_| path))
+        .collect::<Vec<_>>();
+    if usable.is_empty() {
+        return Ok(false);
+    }
+    let recovered_fps = background_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate",
+            "-of",
+            "default=nw=1:nk=1",
+        ])
+        .arg(&usable[0])
+        .output()
+        .ok()
+        .and_then(|output| {
+            let value = String::from_utf8_lossy(&output.stdout);
+            let (numerator, denominator) = value.trim().split_once('/')?;
+            let fps = numerator.parse::<f64>().ok()? / denominator.parse::<f64>().ok()?.max(1.0);
+            Some(if fps >= 45.0 { 60 } else { 30 })
+        })
+        .unwrap_or(30);
+    let recovery_options = RecordingOptions {
+        fps: recovered_fps,
+        ..RecordingOptions::default()
+    };
+    finalize_capture_parts(
+        &usable,
+        output_path,
+        "Recovered after an interrupted Snap session",
+        recovery_options,
+    )?;
+    for part in usable {
+        let _ = std::fs::remove_file(part);
+    }
+    Ok(true)
 }
 
 // ── D3D11 device ─────────────────────────────────────────────────────────────
@@ -1340,32 +2120,75 @@ fn create_capture_item(target_id: &str) -> Result<GraphicsCaptureItem> {
 
 // ── FFmpeg subprocess ────────────────────────────────────────────────────────
 
-fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, ChildStdin, String)> {
+fn spawn_ffmpeg(
+    output_path: &str,
+    width: u32,
+    height: u32,
+    options: RecordingOptions,
+    gpu_vendor: GpuVendor,
+) -> Result<(Child, ChildStdin, String)> {
     let size = format!("{width}x{height}");
 
-    fn try_ffmpeg(args: &[&str]) -> std::result::Result<Child, std::io::Error> {
-        recording_command("ffmpeg")
+    fn try_ffmpeg(args: &[String]) -> std::result::Result<Child, std::io::Error> {
+        let mut command = recording_command("ffmpeg");
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        spawn_recording_child(&mut command)
     }
 
-    let candidates: [(&str, Vec<&str>); 3] = [
+    let bitrate = format!("{}M", options.bitrate_mbps);
+    let mut candidates: Vec<(&str, Vec<String>)> = vec![
         (
             "NVENC",
-            vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "12M"],
+            vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", &bitrate]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         ),
         (
             "AMD AMF",
-            vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", "12M"],
+            vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", &bitrate]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         ),
         (
             "Intel Quick Sync",
-            vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "12M"],
+            vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", &bitrate]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        (
+            "Media Foundation",
+            vec!["-c:v", "h264_mf", "-hw_encoding", "1", "-b:v", &bitrate]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         ),
     ];
+    if options.allow_software_encoder {
+        candidates.push((
+            "x264 compatibility fallback",
+            vec![
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-b:v",
+                &bitrate,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ));
+    }
+    candidates.sort_by_key(|(name, _)| gpu_vendor.encoder_rank(name));
     for (name, codec_args) in candidates {
         let test_src = format!("color=black:s={size}:r=1");
         let mut probe_args = vec![
@@ -1378,9 +2201,12 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
             &test_src,
             "-frames:v",
             "1",
-        ];
-        probe_args.extend(codec_args.iter().copied());
-        probe_args.extend(["-f", "null", "-"]);
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        probe_args.extend(codec_args.iter().cloned());
+        probe_args.extend(["-f", "null", "-"].into_iter().map(str::to_string));
         let probe_ok = background_command("ffmpeg")
             .args(&probe_args)
             .stdin(Stdio::null())
@@ -1393,6 +2219,7 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
             eprintln!("[Snap] {name} hardware probe failed; trying next GPU encoder");
             continue;
         }
+        let fps = options.fps.to_string();
         let mut args = vec![
             "-y",
             "-hide_banner",
@@ -1406,12 +2233,19 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
             "-video_size",
             &size,
             "-framerate",
-            "60",
+            &fps,
             "-i",
             "pipe:0",
-        ];
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
         args.extend(codec_args);
-        args.extend(["-pix_fmt", "yuv420p", output_path]);
+        args.extend(
+            ["-pix_fmt", "yuv420p", output_path]
+                .into_iter()
+                .map(str::to_string),
+        );
         if let Ok(mut child) = try_ffmpeg(&args) {
             let stdin = child
                 .stdin
@@ -1420,7 +2254,7 @@ fn spawn_ffmpeg(output_path: &str, width: u32, height: u32) -> Result<(Child, Ch
             return Ok((child, stdin, name.to_string()));
         }
     }
-    Err(Error::new(E_FAIL, "No supported hardware H.264 encoder found. Install an FFmpeg build with NVENC, AMF, or Quick Sync support and update the GPU driver."))
+    Err(Error::new(E_FAIL, "No compatible H.264 encoder could start. Update the display driver or enable Snap's compatibility encoder fallback."))
 }
 
 // ── FFmpeg lifecycle ─────────────────────────────────────────────────────────
@@ -1584,19 +2418,30 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        desktop_duplication_source, gfxcapture_region_source, gfxcapture_source,
-        parse_gpu_progress_line, validate_capture_segment, CropRect, EDITOR_READY_FPS_FILTER,
-        EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
+        constrained_size, desktop_duplication_source, editor_ready_fps_filter,
+        gfxcapture_region_source, gfxcapture_source, parse_gpu_progress_line,
+        validate_capture_segment, CropRect, RecordingOptions, EDITOR_READY_MOVFLAGS,
+        RESILIENT_MP4_MOVFLAGS,
     };
+
+    fn quality_options() -> RecordingOptions {
+        RecordingOptions {
+            fps: 60,
+            bitrate_mbps: 12,
+            max_width: None,
+            max_height: None,
+            allow_software_encoder: true,
+        }
+    }
 
     #[test]
     fn window_gpu_source_targets_the_exact_hwnd_without_cursor_or_border() {
-        let (source, label) = gfxcapture_source("window:12345", None).unwrap();
+        let (source, label) = gfxcapture_source("window:12345", None, quality_options()).unwrap();
         assert_eq!(label, "window");
         assert!(source.starts_with("gfxcapture=hwnd=12345:"));
         assert!(source.contains("capture_cursor=0"));
         assert!(source.contains("display_border=0"));
-        assert!(source.contains("width=-2:height=-2"));
+        assert!(source.contains("width=1920:height=1080"));
     }
 
     #[test]
@@ -1611,6 +2456,7 @@ mod tests {
             },
             1920,
             1080,
+            quality_options(),
         );
         assert!(source.contains("hmonitor=88"));
         assert!(source.contains("crop_left=100"));
@@ -1621,7 +2467,7 @@ mod tests {
 
     #[test]
     fn full_display_prefers_the_compositor_friendly_monitor_source() {
-        let (source, label) = gfxcapture_source("monitor:88", None).unwrap();
+        let (source, label) = gfxcapture_source("monitor:88", None, quality_options()).unwrap();
         assert_eq!(label, "full display");
         assert!(source.starts_with("gfxcapture=hmonitor=88:"));
         assert!(source.contains("max_framerate=60"));
@@ -1630,7 +2476,7 @@ mod tests {
 
     #[test]
     fn full_display_fallback_keeps_a_continuous_audio_aligned_timeline() {
-        let source = desktop_duplication_source(2);
+        let source = desktop_duplication_source(2, quality_options());
         assert!(source.contains("output_idx=2"));
         assert!(source.contains("framerate=60"));
         assert!(source.contains("dup_frames=1"));
@@ -1645,9 +2491,20 @@ mod tests {
 
     #[test]
     fn editor_ready_video_uses_constant_frame_rate_and_fast_start() {
-        assert!(EDITOR_READY_FPS_FILTER.contains("fps=60"));
-        assert!(EDITOR_READY_FPS_FILTER.contains("start_time=0"));
+        let filter = editor_ready_fps_filter(60);
+        assert!(filter.contains("fps=60"));
+        assert!(filter.contains("start_time=0"));
         assert_eq!(EDITOR_READY_MOVFLAGS, "+faststart");
+    }
+
+    #[test]
+    fn balanced_profile_scales_4k_to_1080p_without_changing_aspect() {
+        let options = RecordingOptions::default();
+        assert_eq!(constrained_size(3840, 2160, options), (1920, 1080));
+        assert_eq!(
+            editor_ready_fps_filter(options.fps),
+            "fps=fps=30:round=near:start_time=0"
+        );
     }
 
     #[test]

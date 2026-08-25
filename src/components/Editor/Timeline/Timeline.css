@@ -91,6 +91,8 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+.add-audio-timeline-btn { color: var(--text-secondary); border-color: var(--border-subtle); background: var(--bg-surface-sunken); }
+.add-audio-timeline-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-default)); }
 
 .aspect-dropdown-menu {
   position: absolute;
@@ -348,6 +350,7 @@
 }
 .track-label-button:hover { color: var(--text-primary); }
 .track-label-button.muted { color: #f87171; }
+.track-label-name { max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .audio-state-dot {
   width: 6px;
@@ -417,6 +420,26 @@
   flex: 0 0 32px;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.imported-audio-badge {
+  position: absolute;
+  top: 5px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  max-width: 38%;
+  gap: 5px;
+  padding: 2px 6px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .ss-track-row.audio-track.mic-audio {

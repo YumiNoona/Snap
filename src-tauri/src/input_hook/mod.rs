@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 use rdev::EventType;
 use serde::Serialize;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::process::recording_diagnostic(format_args!($($arg)*)) };
+}
 
 // ── Globals — one persistent hook, one active writer ─────────────────────────
 
@@ -45,10 +49,13 @@ static LAST_POSITION_Y: AtomicU64 = AtomicU64::new(0f64.to_bits());
 static SESSION_START: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Ensures the rdev::listen thread is spawned exactly once.
-static HOOK_STARTED: OnceLock<()> = OnceLock::new();
+static WRITER_STARTED: OnceLock<()> = OnceLock::new();
+static HOOK_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
+static HOOK_HEALTH: AtomicU8 = AtomicU8::new(0); // 0 idle, 1 starting, 2 listening, 3 failed
 static EVENT_TX: OnceLock<SyncSender<WriterMessage>> = OnceLock::new();
 static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_FPS: AtomicU64 = AtomicU64::new(30);
 
 fn active_session_elapsed_ms() -> Option<u64> {
     let session_start = (*SESSION_START.lock().ok()?)?;
@@ -110,8 +117,8 @@ fn button_name(btn: &rdev::Button) -> String {
 
 // ── Ensure the hook thread exists (called once, idempotent) ─────────────────
 
-fn ensure_hook_started() {
-    HOOK_STARTED.get_or_init(|| {
+fn ensure_hook_started() -> std::result::Result<(), String> {
+    WRITER_STARTED.get_or_init(|| {
         // The Windows low-level hook must return immediately. JSON encoding and
         // disk writes happen on this bounded worker instead of inside the hook
         // callback, so a slow disk can never stall mouse/keyboard delivery.
@@ -147,109 +154,144 @@ fn ensure_hook_started() {
                 }
             }
         });
+    });
 
-        thread::spawn(move || {
-            eprintln!("[Snap Input] rdev::listen hook started (once, persistent)");
+    if HOOK_THREAD_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return if HOOK_HEALTH.load(Ordering::Acquire) == 3 {
+            Err("Windows input hook is unavailable".to_string())
+        } else {
+            Ok(())
+        };
+    }
+    let event_tx = EVENT_TX
+        .get()
+        .cloned()
+        .ok_or_else(|| "Input event writer is unavailable".to_string())?;
+    HOOK_HEALTH.store(1, Ordering::Release);
+    thread::spawn(move || {
+        eprintln!("[Snap Input] rdev::listen hook started (once, persistent)");
 
-            let callback = move |event: rdev::Event| {
-                if !IS_ACTIVE.load(Ordering::Relaxed) {
-                    return;
-                }
-                if IS_PAUSED.load(Ordering::Relaxed) {
-                    return;
-                }
+        let callback = move |event: rdev::Event| {
+            if !IS_ACTIVE.load(Ordering::Relaxed) {
+                return;
+            }
+            if IS_PAUSED.load(Ordering::Relaxed) {
+                return;
+            }
 
-                let log_event = match event.event_type {
-                    EventType::MouseMove { x, y } => {
-                        LAST_POSITION_X.store(x.to_bits(), Ordering::Relaxed);
-                        LAST_POSITION_Y.store(y.to_bits(), Ordering::Relaxed);
-                        let now_us =
-                            HOOK_EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64;
-                        let previous = LAST_MOUSE_US.load(Ordering::Relaxed);
-                        // 120 Hz is denser than the 60 fps video. Gate before
-                        // touching the session clock so discarded 500/1000 Hz
-                        // mouse packets never contend with recorder control.
-                        if previous != 0 && now_us.saturating_sub(previous) < 8_000 {
-                            return;
-                        }
-                        LAST_MOUSE_US.store(now_us.max(1), Ordering::Relaxed);
-                        let Some(ts) = active_session_elapsed_ms() else {
-                            return;
-                        };
-                        LogEvent {
-                            ts,
-                            event_type: "mousemove",
-                            x: Some(x),
-                            y: Some(y),
-                            key: None,
-                            button: None,
-                        }
+            let log_event = match event.event_type {
+                EventType::MouseMove { x, y } => {
+                    LAST_POSITION_X.store(x.to_bits(), Ordering::Relaxed);
+                    LAST_POSITION_Y.store(y.to_bits(), Ordering::Relaxed);
+                    let now_us = HOOK_EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64;
+                    let previous = LAST_MOUSE_US.load(Ordering::Relaxed);
+                    // Keep cursor sampling at roughly twice the selected video
+                    // rate. More samples cannot appear in the recording and
+                    // only add hook callbacks, JSON writes, and editor memory.
+                    let sample_hz = CAPTURE_FPS
+                        .load(Ordering::Relaxed)
+                        .saturating_mul(2)
+                        .clamp(48, 120);
+                    let minimum_interval_us = 1_000_000 / sample_hz;
+                    if previous != 0 && now_us.saturating_sub(previous) < minimum_interval_us {
+                        return;
                     }
-                    EventType::KeyPress(key) => LogEvent {
-                        ts: active_session_elapsed_ms().unwrap_or_default(),
-                        event_type: "keydown",
-                        x: None,
-                        y: None,
-                        key: Some(key_name(&key)),
-                        button: None,
-                    },
-                    EventType::KeyRelease(key) => LogEvent {
-                        ts: active_session_elapsed_ms().unwrap_or_default(),
-                        event_type: "keyup",
-                        x: None,
-                        y: None,
-                        key: Some(key_name(&key)),
-                        button: None,
-                    },
-                    EventType::ButtonPress(btn) => {
-                        // Attach last known mouse position to click events
-                        let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
-                        let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
-                        LogEvent {
-                            ts: active_session_elapsed_ms().unwrap_or_default(),
-                            event_type: "mousedown",
-                            x: Some(px),
-                            y: Some(py),
-                            key: None,
-                            button: Some(button_name(&btn)),
-                        }
-                    }
-                    EventType::ButtonRelease(btn) => {
-                        let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
-                        let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
-                        LogEvent {
-                            ts: active_session_elapsed_ms().unwrap_or_default(),
-                            event_type: "mouseup",
-                            x: Some(px),
-                            y: Some(py),
-                            key: None,
-                            button: Some(button_name(&btn)),
-                        }
-                    }
-                    EventType::Wheel { delta_x, delta_y } => LogEvent {
-                        ts: active_session_elapsed_ms().unwrap_or_default(),
-                        event_type: "wheel",
-                        x: Some(delta_x as f64),
-                        y: Some(delta_y as f64),
+                    LAST_MOUSE_US.store(now_us.max(1), Ordering::Relaxed);
+                    let Some(ts) = active_session_elapsed_ms() else {
+                        return;
+                    };
+                    LogEvent {
+                        ts,
+                        event_type: "mousemove",
+                        x: Some(x),
+                        y: Some(y),
                         key: None,
                         button: None,
-                    },
-                };
-
-                let message = WriterMessage::Event {
-                    generation: SESSION_GENERATION.load(Ordering::Acquire),
-                    event: log_event,
-                };
-                if let Err(TrySendError::Full(_)) = event_tx.try_send(message) {
-                    DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
+                EventType::KeyPress(key) => LogEvent {
+                    ts: active_session_elapsed_ms().unwrap_or_default(),
+                    event_type: "keydown",
+                    x: None,
+                    y: None,
+                    key: Some(key_name(&key)),
+                    button: None,
+                },
+                EventType::KeyRelease(key) => LogEvent {
+                    ts: active_session_elapsed_ms().unwrap_or_default(),
+                    event_type: "keyup",
+                    x: None,
+                    y: None,
+                    key: Some(key_name(&key)),
+                    button: None,
+                },
+                EventType::ButtonPress(btn) => {
+                    // Attach last known mouse position to click events
+                    let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
+                    let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
+                    LogEvent {
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
+                        event_type: "mousedown",
+                        x: Some(px),
+                        y: Some(py),
+                        key: None,
+                        button: Some(button_name(&btn)),
+                    }
+                }
+                EventType::ButtonRelease(btn) => {
+                    let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
+                    let py = f64::from_bits(LAST_POSITION_Y.load(Ordering::Relaxed));
+                    LogEvent {
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
+                        event_type: "mouseup",
+                        x: Some(px),
+                        y: Some(py),
+                        key: None,
+                        button: Some(button_name(&btn)),
+                    }
+                }
+                EventType::Wheel { delta_x, delta_y } => LogEvent {
+                    ts: active_session_elapsed_ms().unwrap_or_default(),
+                    event_type: "wheel",
+                    x: Some(delta_x as f64),
+                    y: Some(delta_y as f64),
+                    key: None,
+                    button: None,
+                },
             };
 
-            if let Err(e) = rdev::listen(callback) {
-                eprintln!("[Snap Input] rdev listen error: {e:?}");
+            let message = WriterMessage::Event {
+                generation: SESSION_GENERATION.load(Ordering::Acquire),
+                event: log_event,
+            };
+            if let Err(TrySendError::Full(_)) = event_tx.try_send(message) {
+                DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
             }
-        });
+        };
+
+        HOOK_HEALTH.store(2, Ordering::Release);
+        if let Err(e) = rdev::listen(callback) {
+            eprintln!("[Snap Input] rdev listen error: {e:?}");
+        }
+        HOOK_HEALTH.store(3, Ordering::Release);
+        HOOK_THREAD_STARTED.store(false, Ordering::Release);
     });
+    thread::sleep(Duration::from_millis(100));
+    if HOOK_HEALTH.load(Ordering::Acquire) == 3 {
+        Err(
+            "Windows rejected the global input hook; cursor tracking and Auto Zoom cannot start"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+pub fn configure_capture_fps(fps: u32) {
+    CAPTURE_FPS.store(fps.clamp(24, 60) as u64, Ordering::Release);
 }
 
 fn flush_event_queue() -> std::result::Result<(), String> {
@@ -332,7 +374,18 @@ pub async fn start_input_logging(
     *ACTIVE_WRITER.lock().map_err(|e| e.to_string())? = Some(writer);
     IS_ACTIVE.store(true, Ordering::SeqCst);
 
-    ensure_hook_started();
+    if let Err(error) = ensure_hook_started() {
+        // Leave no half-open logging session behind when Windows rejects the
+        // global hook. The session coordinator can then retry cleanly after
+        // permissions, secure-desktop state, or another transient condition
+        // changes.
+        IS_ACTIVE.store(false, Ordering::SeqCst);
+        *SESSION_START.lock().map_err(|e| e.to_string())? = None;
+        if let Some(mut writer) = ACTIVE_WRITER.lock().map_err(|e| e.to_string())?.take() {
+            let _ = writer.flush();
+        }
+        return Err(error);
+    }
 
     eprintln!("[Snap Input] Step 2: logging active");
     Ok(())
@@ -400,10 +453,9 @@ pub fn capture_timeline_elapsed_ms() -> u64 {
 }
 
 /// Record the relationship between wall-clock capture time and the encoded
-/// video's frame clock. WGC occasionally delivers fewer than 60 frames/sec;
-/// FFmpeg still timestamps every submitted frame at 60 FPS, so without this
-/// correction input events gradually fall behind the actual video.
-pub fn mark_capture_end(frames_sent: u64) {
+/// video's configured frame clock. WGC can deliver fewer frames than the
+/// selected rate; this metadata lets the editor correct any residual drift.
+pub fn mark_capture_end(frames_sent: u64, fps: u32) {
     if !IS_ACTIVE.load(Ordering::Relaxed) {
         return;
     }
@@ -412,7 +464,7 @@ pub fn mark_capture_end(frames_sent: u64) {
     };
     let start_ms = CAPTURE_START_MS.load(Ordering::Relaxed);
     let capture_elapsed_ms = now_ms.saturating_sub(start_ms);
-    let video_duration_ms = frames_sent.saturating_mul(1000) / 60;
+    let video_duration_ms = frames_sent.saturating_mul(1000) / fps.max(1) as u64;
     if let Ok(mut guard) = ACTIVE_WRITER.lock() {
         if let Some(ref mut writer) = *guard {
             let _ = writeln!(writer, "{{\"type\":\"meta\",\"captureElapsedMs\":{capture_elapsed_ms},\"videoDurationMs\":{video_duration_ms}}}");

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -7,6 +8,12 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use wasapi::*;
+
+use crate::process::recording_command;
+
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::process::recording_diagnostic(format_args!($($arg)*)) };
+}
 
 // ── Device type ──────────────────────────────────────────────────────────────
 
@@ -23,7 +30,39 @@ struct AudioCaptureHandle {
     is_recording: Arc<AtomicBool>,
     is_paused: Arc<AtomicBool>,
     mic_muted: Arc<AtomicBool>,
-    done_rx: tokio::sync::oneshot::Receiver<std::result::Result<(), String>>,
+    done_rx: tokio::sync::oneshot::Receiver<std::result::Result<AudioCaptureReport, String>>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioCaptureReport {
+    pub warnings: Vec<String>,
+}
+
+#[derive(Default)]
+struct AudioSignal {
+    sum_squares: f64,
+    samples: u64,
+}
+
+impl AudioSignal {
+    fn observe_pcm16(&mut self, bytes: &VecDeque<u8>) {
+        let contiguous = bytes.as_slices();
+        for slice in [contiguous.0, contiguous.1] {
+            for sample in slice.chunks_exact(2) {
+                let value = i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0;
+                self.sum_squares += value * value;
+                self.samples += 1;
+            }
+        }
+    }
+
+    fn rms_db(&self) -> Option<f64> {
+        if self.samples == 0 || self.sum_squares == 0.0 {
+            return None;
+        }
+        Some(20.0 * (self.sum_squares / self.samples as f64).sqrt().log10())
+    }
 }
 
 struct AudioCaptureConfig {
@@ -67,9 +106,14 @@ pub fn enumerate_audio_devices() -> std::result::Result<Vec<AudioDevice>, String
         }
     }
 
+    let default_output_name = enumerator
+        .get_default_device_for_role(&Direction::Render, &Role::Console)
+        .and_then(|device| device.get_friendlyname())
+        .map(|name| format!("System default — {name}"))
+        .unwrap_or_else(|_| "System default output".to_string());
     devices.push(AudioDevice {
         id: "default".to_string(),
-        name: "Default system output".to_string(),
+        name: default_output_name,
         device_type: "speaker".to_string(),
     });
 
@@ -185,7 +229,7 @@ pub fn set_audio_paused(paused: bool) -> std::result::Result<(), String> {
 // ── Stop audio capture (async) ───────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn stop_audio_capture() -> std::result::Result<(), String> {
+pub async fn stop_audio_capture() -> std::result::Result<AudioCaptureReport, String> {
     let handle = {
         let mut guard = AUDIO_STATE.lock().map_err(|e| e.to_string())?;
         guard
@@ -203,6 +247,101 @@ pub async fn stop_audio_capture() -> std::result::Result<(), String> {
     }
 }
 
+/// Add a normal AAC mix to the saved MP4 while retaining the editable WAV
+/// sidecars. This keeps the raw recording useful in any media player; the
+/// editor mutes the embedded recovery mix whenever the sidecars are present.
+pub async fn attach_audio_to_video(
+    video_path: String,
+    audio_dir: String,
+) -> std::result::Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let video = std::path::PathBuf::from(&video_path);
+        let audio_dir = std::path::PathBuf::from(audio_dir);
+        let tracks = [audio_dir.join("system_audio.wav"), audio_dir.join("mic_audio.wav")]
+            .into_iter()
+            .filter(|path| {
+                std::fs::metadata(path)
+                    .map(|metadata| metadata.len() > 80)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        if tracks.is_empty() {
+            return Ok(());
+        }
+
+        let stem = video
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("snap");
+        let parent = video.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let temporary = parent.join(format!(".{stem}.audio-mix.tmp.mp4"));
+        let backup = parent.join(format!(
+            ".{stem}.video-only.{}.bak.mp4",
+            std::process::id()
+        ));
+
+        let mut command = recording_command("ffmpeg");
+        command
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&video);
+        for track in &tracks {
+            command.arg("-i").arg(track);
+        }
+        if tracks.len() == 1 {
+            command.args(["-map", "0:v:0", "-map", "1:a:0"]);
+        } else {
+            command.args([
+                "-filter_complex",
+                "[1:a:0][2:a:0]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[a]",
+                "-map",
+                "0:v:0",
+                "-map",
+                "[a]",
+            ]);
+        }
+        let output = command
+            .args([
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+            ])
+            .arg(&temporary)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("Start audio mux: {error}"))?;
+        if !output.status.success()
+            || std::fs::metadata(&temporary)
+                .map(|metadata| metadata.len() <= 1024)
+                .unwrap_or(true)
+        {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!(
+                "Add audio to recording: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        std::fs::rename(&video, &backup)
+            .map_err(|error| format!("Protect video before adding audio: {error}"))?;
+        if let Err(error) = std::fs::rename(&temporary, &video) {
+            let _ = std::fs::rename(&backup, &video);
+            return Err(format!("Install recording with audio: {error}"));
+        }
+        let _ = std::fs::remove_file(&backup);
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Audio mux worker failed: {error}"))?
+}
+
 // ── Audio capture threads ────────────────────────────────────────────────────
 
 fn run_audio_threads(
@@ -211,7 +350,7 @@ fn run_audio_threads(
     is_paused: Arc<AtomicBool>,
     mic_muted: Arc<AtomicBool>,
     startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<AudioCaptureReport, String> {
     let out_dir = std::path::PathBuf::from(config.output_dir);
     let mic_id = config.mic_device_id;
     let speaker_id = config.speaker_device_id;
@@ -230,12 +369,14 @@ fn run_audio_threads(
 
     let capture_system = speaker_id != "disabled";
     let capture_mic = mic_id != "disabled";
+    let system_signal = Arc::new(Mutex::new(AudioSignal::default()));
     let sys_handle = if capture_system {
         eprintln!(
             "[Snap Audio] Step 2: starting system loopback capture -> {}",
             sys_file.display()
         );
         let startup = startup_tx.clone();
+        let signal = system_signal.clone();
         Some(thread::spawn(move || {
             let result = capture_loopback(
                 &speaker_id,
@@ -244,6 +385,7 @@ fn run_audio_threads(
                 sys_paused,
                 config.process_id,
                 startup.clone(),
+                signal,
             );
             if let Err(error) = &result {
                 let _ = startup.send(Err(format!("Desktop audio could not start: {error}")));
@@ -279,19 +421,24 @@ fn run_audio_threads(
     };
 
     // Wait for both threads
-    let mut errors = Vec::new();
+    // A device can disappear after startup (USB unplug, Bluetooth profile
+    // switch, sleep/resume). Startup errors are already reported through the
+    // acknowledgement channel and abort the session. Runtime errors must not
+    // invalidate an otherwise healthy screen recording or the other audio
+    // track, so retain them as diagnostics and save every usable stream.
+    let mut warnings = Vec::new();
     if let Some(handle) = sys_handle {
         match handle.join() {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => errors.push(format!("system audio: {error}")),
-            Err(_) => errors.push("system audio thread crashed".to_string()),
+            Ok(Err(error)) => warnings.push(format!("system audio: {error}")),
+            Err(_) => warnings.push("system audio thread crashed".to_string()),
         }
     }
     if let Some(handle) = mic_handle {
         match handle.join() {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => errors.push(format!("microphone: {error}")),
-            Err(_) => errors.push("microphone audio thread crashed".to_string()),
+            Ok(Err(error)) => warnings.push(format!("microphone: {error}")),
+            Err(_) => warnings.push("microphone audio thread crashed".to_string()),
         }
     }
 
@@ -308,7 +455,7 @@ fn run_audio_threads(
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         eprintln!("[Snap Audio] {label} output: exists={exists}, size={size} bytes");
         if !exists {
-            errors.push(format!("{label} file missing: {}", path.display()));
+            warnings.push(format!("{label} file missing: {}", path.display()));
         } else if size <= 44 {
             // A valid header-only file means the endpoint started correctly
             // but delivered no packets (for example, desktop audio remained
@@ -321,12 +468,22 @@ fn run_audio_threads(
         }
     }
 
-    if !errors.is_empty() {
-        return Err(errors.join("; "));
+    if !warnings.is_empty() {
+        eprintln!(
+            "[Snap Audio] Recording preserved with audio warnings: {}",
+            warnings.join("; ")
+        );
+    }
+
+    if capture_system {
+        let level = system_signal.lock().ok().and_then(|signal| signal.rms_db());
+        if level.is_none_or(|db| db < -55.0) {
+            warnings.push("Desktop audio was captured, but it was effectively silent. Check that the browser is playing through the selected Windows output device.".to_string());
+        }
     }
 
     eprintln!("[Snap Audio] Capture complete");
-    Ok(())
+    Ok(AudioCaptureReport { warnings })
 }
 
 // ── WAV helpers ──────────────────────────────────────────────────────────────
@@ -350,13 +507,14 @@ pub fn audio_waveform(
     let mut riff = [0u8; 12];
     file.read_exact(&mut riff)
         .map_err(|error| format!("Unable to read WAV header: {error}"))?;
-    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
+    if (&riff[0..4] != b"RIFF" && &riff[0..4] != b"RF64") || &riff[8..12] != b"WAVE" {
         return Err("Audio track is not a valid WAV file".to_string());
     }
 
     let mut channels = 1usize;
     let mut bits = 16usize;
     let mut data = None::<(u64, u64)>;
+    let mut rf64_data_size = None;
     loop {
         let mut header = [0u8; 8];
         if file.read_exact(&mut header).is_err() {
@@ -367,6 +525,12 @@ pub fn audio_waveform(
             .stream_position()
             .map_err(|error| format!("Unable to inspect WAV chunks: {error}"))?;
         match &header[0..4] {
+            b"ds64" if size >= 28 => {
+                let mut ds64 = [0u8; 28];
+                file.read_exact(&mut ds64)
+                    .map_err(|error| format!("Unable to read RF64 sizes: {error}"))?;
+                rf64_data_size = Some(u64::from_le_bytes(ds64[8..16].try_into().unwrap()));
+            }
             b"fmt " if size >= 16 => {
                 let mut format = [0u8; 16];
                 file.read_exact(&mut format)
@@ -380,7 +544,12 @@ pub fn audio_waveform(
                     .map_err(|error| format!("Unable to inspect audio track: {error}"))?
                     .len()
                     .saturating_sub(start);
-                data = Some((start, size.min(available)));
+                let declared = if size == u32::MAX as u64 {
+                    rf64_data_size.unwrap_or(size)
+                } else {
+                    size
+                };
+                data = Some((start, declared.min(available)));
                 break;
             }
             _ => {}
@@ -451,7 +620,7 @@ pub fn audio_waveform(
 fn write_wav_header(
     writer: &mut impl Write,
     channels: u16,
-    data_size: u32,
+    data_size: u64,
 ) -> std::result::Result<(), std::io::Error> {
     let sample_rate = SAMPLE_RATE as u32;
     let byte_rate = sample_rate * channels as u32 * (BITS_PER_SAMPLE / 8) as u32;
@@ -459,8 +628,16 @@ fn write_wav_header(
 
     // RIFF header
     writer.write_all(b"RIFF")?;
-    writer.write_all(&(36u32 + data_size).to_le_bytes())?;
+    writer
+        .write_all(&(72u32.saturating_add(data_size.min(u32::MAX as u64) as u32)).to_le_bytes())?;
     writer.write_all(b"WAVE")?;
+
+    // Reserve enough room for an RF64 `ds64` chunk. Short recordings keep a
+    // standard RIFF file with a harmless JUNK chunk; long recordings convert
+    // this reserved area in place without rewriting gigabytes of audio.
+    writer.write_all(b"JUNK")?;
+    writer.write_all(&28u32.to_le_bytes())?;
+    writer.write_all(&[0u8; 28])?;
 
     // fmt chunk
     writer.write_all(b"fmt ")?;
@@ -474,7 +651,7 @@ fn write_wav_header(
 
     // data chunk header (actual samples follow)
     writer.write_all(b"data")?;
-    writer.write_all(&data_size.to_le_bytes())?;
+    writer.write_all(&(data_size.min(u32::MAX as u64) as u32).to_le_bytes())?;
 
     Ok(())
 }
@@ -483,15 +660,31 @@ fn write_wav_header(
 /// with the actual number of bytes written.
 fn finalize_wav_header(
     file: &mut std::fs::File,
-    data_size: u32,
+    data_size: u64,
+    channels: u16,
 ) -> std::result::Result<(), std::io::Error> {
-    // Byte 4: RIFF chunk size = 36 + data_size
-    file.seek(SeekFrom::Start(4))?;
-    file.write_all(&(36u32 + data_size).to_le_bytes())?;
-
-    // Byte 40: data chunk size
-    file.seek(SeekFrom::Start(40))?;
-    file.write_all(&data_size.to_le_bytes())?;
+    let riff_size = 72u64.saturating_add(data_size);
+    if data_size <= u32::MAX as u64 - 72 {
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(b"RIFF")?;
+        file.write_all(&(riff_size as u32).to_le_bytes())?;
+        file.seek(SeekFrom::Start(76))?;
+        file.write_all(&(data_size as u32).to_le_bytes())?;
+    } else {
+        let block_align = channels as u64 * (BITS_PER_SAMPLE / 8) as u64;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(b"RF64")?;
+        file.write_all(&u32::MAX.to_le_bytes())?;
+        file.seek(SeekFrom::Start(12))?;
+        file.write_all(b"ds64")?;
+        file.write_all(&28u32.to_le_bytes())?;
+        file.write_all(&riff_size.to_le_bytes())?;
+        file.write_all(&data_size.to_le_bytes())?;
+        file.write_all(&(data_size / block_align.max(1)).to_le_bytes())?;
+        file.write_all(&0u32.to_le_bytes())?;
+        file.seek(SeekFrom::Start(76))?;
+        file.write_all(&u32::MAX.to_le_bytes())?;
+    }
 
     file.flush()?;
     Ok(())
@@ -636,6 +829,45 @@ fn endpoint_audio_client(
     }
 }
 
+fn device_has_active_audio_session(device: &Device) -> bool {
+    let Ok(manager) = device.get_iaudiosessionmanager() else {
+        return false;
+    };
+    let Ok(sessions) = manager.get_audiosessionenumerator() else {
+        return false;
+    };
+    let Ok(count) = sessions.get_count() else {
+        return false;
+    };
+    (0..count).any(|index| {
+        sessions
+            .get_session(index)
+            .and_then(|session| session.get_state())
+            .is_ok_and(|state| state == SessionState::Active)
+    })
+}
+
+/// Windows can route an individual browser or meeting app to an endpoint that
+/// differs from the global default. In "System default" mode, prefer the
+/// console endpoint while it has active audio; otherwise follow the first
+/// active render endpoint so a per-app route is not recorded as silence.
+fn active_system_output(enumerator: &DeviceEnumerator) -> std::result::Result<Device, String> {
+    let default = enumerator
+        .get_default_device_for_role(&Direction::Render, &Role::Console)
+        .map_err(|error| format!("Get default render device: {error}"))?;
+    if device_has_active_audio_session(&default) {
+        return Ok(default);
+    }
+    if let Ok(collection) = enumerator.get_device_collection(&Direction::Render) {
+        for candidate in (&collection).into_iter().flatten() {
+            if device_has_active_audio_session(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
+    Ok(default)
+}
+
 fn capture_loopback(
     speaker_device_id: &str,
     output_path: std::path::PathBuf,
@@ -643,6 +875,7 @@ fn capture_loopback(
     is_paused: Arc<AtomicBool>,
     process_id: Option<u32>,
     startup_tx: std::sync::mpsc::Sender<std::result::Result<(), String>>,
+    signal_result: Arc<Mutex<AudioSignal>>,
 ) -> std::result::Result<(), String> {
     initialize_mta()
         .ok()
@@ -651,9 +884,7 @@ fn capture_loopback(
     let enumerator = DeviceEnumerator::new().map_err(|e| format!("DeviceEnumerator: {e}"))?;
 
     let device = if speaker_device_id == "default" || speaker_device_id.is_empty() {
-        enumerator
-            .get_default_device(&Direction::Render)
-            .map_err(|e| format!("Get default render device: {e}"))?
+        active_system_output(&enumerator)?
     } else if let Some(idx_str) = speaker_device_id.strip_prefix("speaker:") {
         let idx: usize = idx_str
             .parse()
@@ -782,6 +1013,7 @@ fn capture_loopback(
     // laptops), so sound that began later appeared too close to clip start.
     let timeline_offset = Duration::from_millis(crate::input_hook::capture_timeline_elapsed_ms());
     let mut timeline = AudioTimelineClock::new(timeline_offset);
+    let mut signal = AudioSignal::default();
 
     eprintln!("[Snap Audio] Loopback stream started, capturing...");
 
@@ -824,6 +1056,7 @@ fn capture_loopback(
             eprintln!("[Snap Audio] Loopback discontinuity detected; repairing timeline gap");
         }
         if !sample_queue.is_empty() {
+            signal.observe_pcm16(&sample_queue);
             let packet_frames = sample_queue.len() as u64 / blockalign as u64;
             let packet_start = first_packet_qpc
                 .and_then(crate::input_hook::audio_packet_timeline)
@@ -857,16 +1090,12 @@ fn capture_loopback(
         &mut total_data_bytes,
     )?;
 
-    // Cap at u32::MAX for classic WAV (about 6.2 hours of stereo 16-bit/48 kHz audio).
-    let data_size_u32 = if total_data_bytes > u32::MAX as u64 {
-        eprintln!("[Snap Audio] WARNING: loopback data exceeds WAV 4GB limit, truncating header");
-        u32::MAX
-    } else {
-        total_data_bytes as u32
-    };
-
-    finalize_wav_header(&mut file, data_size_u32)
+    finalize_wav_header(&mut file, total_data_bytes, SYS_CHANNELS)
         .map_err(|e| format!("Finalize loopback WAV header: {e}"))?;
+
+    if let Ok(mut result) = signal_result.lock() {
+        *result = signal;
+    }
 
     eprintln!("[Snap Audio] Loopback stopped — {total_data_bytes} bytes streamed to WAV");
     eprintln!("[Snap Audio] Loopback WAV written OK");
@@ -1069,14 +1298,7 @@ fn capture_microphone(
         &mut total_data_bytes,
     )?;
 
-    let data_size_u32 = if total_data_bytes > u32::MAX as u64 {
-        eprintln!("[Snap Audio] WARNING: mic data exceeds WAV 4GB limit, truncating header");
-        u32::MAX
-    } else {
-        total_data_bytes as u32
-    };
-
-    finalize_wav_header(&mut file, data_size_u32)
+    finalize_wav_header(&mut file, total_data_bytes, MIC_CHANNELS)
         .map_err(|e| format!("Finalize mic WAV header: {e}"))?;
 
     eprintln!("[Snap Audio] Mic stopped — {total_data_bytes} bytes streamed to WAV");
@@ -1140,7 +1362,7 @@ mod tests {
         let frame_count = 320u32;
         let data_size = frame_count * 4;
         let mut file = std::fs::File::create(&path).unwrap();
-        write_wav_header(&mut file, 2, data_size).unwrap();
+        write_wav_header(&mut file, 2, data_size as u64).unwrap();
         for _ in 0..frame_count {
             file.write_all(&12_000i16.to_le_bytes()).unwrap();
             file.write_all(&(-12_000i16).to_le_bytes()).unwrap();
@@ -1151,6 +1373,35 @@ mod tests {
         let waveform = audio_waveform(path.to_string_lossy().to_string(), Some(16)).unwrap();
         assert_eq!(waveform.len(), 16);
         assert!(waveform.iter().all(|value| *value > 0.3));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn long_wav_uses_rf64_sizes_instead_of_truncating_the_header() {
+        let path = std::env::temp_dir().join(format!(
+            "snap-rf64-header-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        write_wav_header(&mut file, 2, 0).unwrap();
+        let long_size = u32::MAX as u64 + 48_000;
+        finalize_wav_header(&mut file, long_size, 2).unwrap();
+        drop(file);
+        let header = std::fs::read(&path).unwrap();
+        assert_eq!(&header[0..4], b"RF64");
+        assert_eq!(&header[12..16], b"ds64");
+        assert_eq!(
+            u64::from_le_bytes(header[28..36].try_into().unwrap()),
+            long_size
+        );
+        assert_eq!(
+            u32::from_le_bytes(header[76..80].try_into().unwrap()),
+            u32::MAX
+        );
         std::fs::remove_file(path).unwrap();
     }
 }

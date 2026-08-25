@@ -351,7 +351,7 @@ fn align_to_audio_activity(
             let last = overlaps.last()?;
             let start_ms = segment.start_ms.max(first.start_ms);
             let end_ms = segment.end_ms.min(last.end_ms);
-            (end_ms.saturating_sub(start_ms) >= 120).then_some(TranscriptionSegment {
+            (end_ms > start_ms).then_some(TranscriptionSegment {
                 start_ms,
                 end_ms,
                 text: segment.text,
@@ -514,6 +514,23 @@ mod tests {
         assert_eq!(aligned.len(), 1);
         assert_eq!(aligned[0].start_ms, 14_100);
         assert_eq!(aligned[0].end_ms, 15_920);
+    }
+
+    #[test]
+    fn preserves_audible_short_words_for_frontend_grouping() {
+        let aligned = align_to_audio_activity(
+            vec![TranscriptionSegment {
+                start_ms: 22_260,
+                end_ms: 22_360,
+                text: "to".into(),
+            }],
+            &[AudioActivityRange {
+                start_ms: 22_200,
+                end_ms: 22_500,
+            }],
+        );
+        assert_eq!(aligned.len(), 1);
+        assert_eq!(aligned[0].text, "to");
     }
 
     #[test]

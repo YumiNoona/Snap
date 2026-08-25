@@ -3,11 +3,12 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
 import { MorphIcon } from "morphicons/react";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Plus, Music2 } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
+import { timelineHeightBounds } from "../../../lib/timelineLayout";
 import "./Timeline.css";
 
 interface Props {
@@ -32,6 +33,9 @@ interface Props {
   onRedo: () => void;
   onKeyframesChange: (keyframes: Keyframe[]) => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
+  onAddAudio: () => void;
+  onAudioTrackChange: (track: AudioTrack) => void;
+  onAudioTrackRemove: (trackId: string) => void;
   onPlaybackRateChange: (rate: number) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
   onZoomRegionSelect: (region: ZoomRegionSelection) => void;
@@ -85,6 +89,9 @@ export default function Timeline({
   onRedo,
   onKeyframesChange,
   onAudioMuteChange,
+  onAddAudio,
+  onAudioTrackChange,
+  onAudioTrackRemove,
   onPlaybackRateChange,
   selectedZoomRegion,
   onZoomRegionSelect,
@@ -106,15 +113,15 @@ export default function Timeline({
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
-  const [waveforms, setWaveforms] = useState<{ sys?: number[]; mic?: number[] }>({});
-  const [waveformErrors, setWaveformErrors] = useState<{ sys?: boolean; mic?: boolean }>({});
+  const [waveforms, setWaveforms] = useState<Record<string, number[] | undefined>>({});
+  const [waveformErrors, setWaveformErrors] = useState<Set<string>>(() => new Set());
   const [contentWidth, setContentWidth] = useState(600);
   const [timelineHeight, setTimelineHeight] = useState(240);
   const [contextMenu, setContextMenu] = useState<
     | { kind: "zoom"; x: number; y: number; region: ZoomRegionSelection }
     | { kind: "layer"; x: number; y: number; layer: Layer }
     | { kind: "caption"; x: number; y: number; trackId: string; segment: CaptionSegment }
-    | { kind: "audio"; x: number; y: number; channel: "system" | "mic"; muted: boolean; label: string }
+    | { kind: "audio"; x: number; y: number; track: AudioTrack; muted: boolean; label: string }
     | { kind: "clip"; x: number; y: number }
     | null
   >(null);
@@ -154,9 +161,12 @@ export default function Timeline({
   const deviceTrack = audioTracks.find((track) => track.kind === "device");
   const systemTrack = deviceTrack ?? audioTracks.find((track) => track.kind === "system");
   const micTrack = audioTracks.find((track) => track.kind === "microphone");
-  const hasSys = !!systemTrack;
-  const hasMic = !!micTrack;
-  const hasDeviceAudio = !!deviceTrack;
+  const importedTracks = audioTracks.filter((track) => track.kind === "imported");
+  const timelineAudioTracks = [
+    ...(systemTrack ? [systemTrack] : []),
+    ...(micTrack ? [micTrack] : []),
+    ...importedTracks,
+  ];
   // Quantize bucket counts so resizing the panel does not launch a new native
   // WAV scan for every pixel. The canvas stretches cached data between steps.
   const waveformBuckets = Math.max(64, Math.min(2000, Math.round(contentWidth * zoomScale / 192) * 64));
@@ -166,22 +176,18 @@ export default function Timeline({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [systemResult, micResult] = await Promise.allSettled([
-        systemTrack ? loadWaveformWithRetry(systemTrack.path, waveformBuckets) : Promise.resolve(undefined),
-        micTrack ? loadWaveformWithRetry(micTrack.path, waveformBuckets) : Promise.resolve(undefined),
-      ]);
+      const results = await Promise.allSettled(
+        timelineAudioTracks.map((track) => loadWaveformWithRetry(track.path, waveformBuckets)),
+      );
       if (cancelled) return;
-      setWaveforms({
-        sys: systemResult.status === "fulfilled" ? systemResult.value : undefined,
-        mic: micResult.status === "fulfilled" ? micResult.value : undefined,
-      });
-      setWaveformErrors({
-        sys: systemResult.status === "rejected",
-        mic: micResult.status === "rejected",
-      });
+      setWaveforms(Object.fromEntries(timelineAudioTracks.map((track, index) => [
+        track.id,
+        results[index]?.status === "fulfilled" ? results[index].value : undefined,
+      ])));
+      setWaveformErrors(new Set(timelineAudioTracks.flatMap((track, index) => results[index]?.status === "rejected" ? [track.id] : [])));
     })();
     return () => { cancelled = true; };
-  }, [micTrack?.path, systemTrack?.path, waveformBuckets]);
+  }, [audioTracks, waveformBuckets]);
 
   // Track the timeline width once so px-per-second stays stable
   useEffect(() => {
@@ -214,6 +220,37 @@ export default function Timeline({
     () => (["text", "shape", "mask"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
     [layers]
   );
+  const visibleCaptionTracks = captionTracks.filter((track) => track.segments.length > 0);
+
+  const visibleTrackCount = 1
+    + timelineAudioTracks.length
+    + (zoomSegments.length > 0 ? 1 : 0)
+    + visibleCaptionTracks.length
+    + visibleLayerTypes.length;
+  const { minimum: minimumTimelineHeight, maximum: maximumTimelineHeight } = timelineHeightBounds(visibleTrackCount);
+
+  useEffect(() => {
+    setTimelineHeight((height) => Math.min(height, maximumTimelineHeight));
+  }, [maximumTimelineHeight]);
+
+  const audioTrackMuted = (track: AudioTrack) => (
+    track.muted
+    || (track.kind === "microphone" && config.audio.micMuted)
+    || ((track.kind === "system" || track.kind === "device") && config.audio.systemMuted)
+  );
+
+  const setAudioTrackMuted = (track: AudioTrack, muted: boolean) => {
+    if (track.kind === "microphone") onAudioMuteChange("mic", muted);
+    else if (track.kind === "system" || track.kind === "device") onAudioMuteChange("system", muted);
+    else onAudioTrackChange({ ...track, muted });
+  };
+
+  const audioTrackLabel = (track: AudioTrack) => {
+    if (track.kind === "microphone") return "Mic";
+    if (track.kind === "device") return "Device";
+    if (track.kind === "system") return "Desktop";
+    return track.label;
+  };
 
   const beginZoomEdit = (event: React.PointerEvent, segment: ZoomSegment, mode: "move" | "start" | "end") => {
     if (event.button !== 0) return;
@@ -396,8 +433,15 @@ export default function Timeline({
     const initialStart = segment.startMs / 1000;
     const initialEnd = segment.endMs / 1000;
     const clipDuration = Math.max(0.1, initialEnd - initialStart);
-    const minTime = config.trimStart;
-    const maxTime = config.trimEnd || duration;
+    const track = captionTracks.find((candidate) => candidate.id === trackId);
+    const ordered = [...(track?.segments ?? [])].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+    const segmentIndex = ordered.findIndex((candidate) => candidate.id === segment.id);
+    const previous = segmentIndex > 0 ? ordered[segmentIndex - 1] : null;
+    const next = segmentIndex >= 0 && segmentIndex < ordered.length - 1 ? ordered[segmentIndex + 1] : null;
+    // Captions are exclusive intervals. Constraining edits to adjacent cards
+    // prevents an overlap from making one card disappear in preview/export.
+    const minTime = Math.max(config.trimStart, (previous?.endMs ?? 0) / 1000);
+    const maxTime = Math.min(config.trimEnd || duration, (next?.startMs ?? Number.POSITIVE_INFINITY) / 1000);
     let visualStart = initialStart, visualEnd = initialEnd;
     let pending: CaptionSegment | null = null;
     const move = (moveEvent: PointerEvent) => {
@@ -435,7 +479,7 @@ export default function Timeline({
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = timelineHeight;
-    const move = (e: MouseEvent) => setTimelineHeight(Math.max(190, Math.min(620, startHeight - (e.clientY - startY))));
+    const move = (e: MouseEvent) => setTimelineHeight(Math.max(minimumTimelineHeight, Math.min(maximumTimelineHeight, startHeight - (e.clientY - startY))));
     const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -573,6 +617,11 @@ export default function Timeline({
             <Crop size={16} />
             <span>Crop</span>
           </button>
+
+          <button className="ss-tb-btn add-audio-timeline-btn" onClick={onAddAudio} title="Add an audio file to the timeline">
+            <Plus size={15} />
+            <span>Audio</span>
+          </button>
         </div>
 
         {/* Center Transport Controls & Timecode */}
@@ -636,28 +685,18 @@ export default function Timeline({
         {/* Left label rail */}
         <div className="ss-labels-col">
           <div className="track-label video-label">Video</div>
-          <div className="track-label audio-label">
-            <button
-              className={`track-label-button ${config.audio.systemMuted ? "muted" : ""}`}
-              onClick={() => onAudioMuteChange("system", !config.audio.systemMuted)}
-              title={config.audio.systemMuted ? `Unmute ${hasDeviceAudio ? "device" : "desktop"} audio` : `Mute ${hasDeviceAudio ? "device" : "desktop"} audio`}
-            >
-              <span>{hasDeviceAudio ? "Device" : "Desktop"}</span>
-              <span className="audio-state-dot" aria-hidden="true" />
-            </button>
-          </div>
-          <div className="track-label audio-label">
-            <button
-              className={`track-label-button ${config.audio.micMuted ? "muted" : ""}`}
-              onClick={() => onAudioMuteChange("mic", !config.audio.micMuted)}
-              title={config.audio.micMuted ? "Unmute microphone" : "Mute microphone"}
-            >
-              <span>Mic</span>
-              <span className="audio-state-dot" aria-hidden="true" />
-            </button>
-          </div>
+          {timelineAudioTracks.map((track) => {
+            const muted = audioTrackMuted(track);
+            const label = audioTrackLabel(track);
+            return <div className="track-label audio-label" key={track.id}>
+              <button className={`track-label-button ${muted ? "muted" : ""}`} onClick={() => setAudioTrackMuted(track, !muted)} title={`${muted ? "Unmute" : "Mute"} ${label}`}>
+                <span className="track-label-name">{label}</span>
+                <span className="audio-state-dot" aria-hidden="true" />
+              </button>
+            </div>;
+          })}
           {zoomSegments.length > 0 && <div className="track-label zoom-label">Zoom</div>}
-          {captionTracks.map((track) => <div className="track-label caption-label" key={track.id}>Captions</div>)}
+          {visibleCaptionTracks.map((track) => <div className="track-label caption-label" key={track.id}>Captions</div>)}
           {visibleLayerTypes.map((type) => (
             <div key={type} className={`track-label layer-label ${type}-label`}>
               {type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}
@@ -696,33 +735,23 @@ export default function Timeline({
             ))}
           </div>
 
-          {/* System Audio layer */}
-          <div
-            className={`ss-track-row audio-track sys-audio ${hasSys ? "" : "empty"} ${config.audio.systemMuted ? "muted" : ""}`}
-            title={hasSys ? `${hasDeviceAudio ? "Device" : "Desktop"} audio` : "No desktop audio was recorded"}
-            onContextMenu={(event) => {
-              if (!hasSys) return;
-              event.preventDefault();
-              event.stopPropagation();
-              setContextMenu({ kind: "audio", ...menuPosition(event), channel: "system", muted: config.audio.systemMuted, label: hasDeviceAudio ? "Device audio" : "Desktop audio" });
-            }}
-          >
-            {hasSys ? (waveforms.sys ? <WaveRow data={waveforms.sys} /> : <span className="empty-track-label">{waveformErrors.sys ? "Waveform unavailable" : "Reading desktop audio…"}</span>) : <span className="empty-track-label">No desktop audio</span>}
-          </div>
-
-          {/* Mic Audio layer */}
-          <div
-            className={`ss-track-row audio-track mic-audio ${hasMic ? "" : "empty"} ${config.audio.micMuted ? "muted" : ""}`}
-            title={hasMic ? "Microphone audio" : "No microphone audio was recorded"}
-            onContextMenu={(event) => {
-              if (!hasMic) return;
-              event.preventDefault();
-              event.stopPropagation();
-              setContextMenu({ kind: "audio", ...menuPosition(event), channel: "mic", muted: config.audio.micMuted, label: "Microphone audio" });
-            }}
-          >
-            {hasMic ? (waveforms.mic ? <WaveRow data={waveforms.mic} /> : <span className="empty-track-label">{waveformErrors.mic ? "Waveform unavailable" : "Reading microphone audio…"}</span>) : <span className="empty-track-label">No microphone audio</span>}
-          </div>
+          {timelineAudioTracks.map((track) => {
+            const muted = audioTrackMuted(track);
+            const waveform = waveforms[track.id];
+            return <div
+              className={`ss-track-row audio-track ${track.kind}-audio ${muted ? "muted" : ""}`}
+              title={track.label}
+              key={track.id}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setContextMenu({ kind: "audio", ...menuPosition(event), track, muted, label: track.label });
+              }}
+            >
+              {waveform ? <WaveRow data={waveform} /> : <span className="empty-track-label">{waveformErrors.has(track.id) ? "Waveform unavailable" : "Reading waveform…"}</span>}
+              {track.kind === "imported" && <span className="imported-audio-badge"><Music2 size={10} />{track.label}</span>}
+            </div>;
+          })}
 
           {/* Zoom / Animation layer */}
           {zoomSegments.length > 0 && <div className="ss-track-row zoom-track">
@@ -757,7 +786,7 @@ export default function Timeline({
             ))}
           </div>}
 
-          {captionTracks.map((track) => (
+          {visibleCaptionTracks.map((track) => (
             <div className="ss-track-row caption-track" key={track.id}>
               {track.segments.map((segment) => (
                 <div
@@ -884,13 +913,21 @@ export default function Timeline({
               <Trash2 size={15} /> Remove
             </button>
           </>}
-          {contextMenu.kind === "audio" && <button role="menuitem" onClick={() => {
-            onAudioMuteChange(contextMenu.channel, !contextMenu.muted);
-            setContextMenu(null);
-          }}>
-            {contextMenu.muted ? <Volume2 size={15} /> : <VolumeX size={15} />}
-            {contextMenu.muted ? "Unmute track" : "Mute track"}
-          </button>}
+          {contextMenu.kind === "audio" && <>
+            <button role="menuitem" onClick={() => {
+              setAudioTrackMuted(contextMenu.track, !contextMenu.muted);
+              setContextMenu(null);
+            }}>
+              {contextMenu.muted ? <Volume2 size={15} /> : <VolumeX size={15} />}
+              {contextMenu.muted ? "Unmute track" : "Mute track"}
+            </button>
+            {contextMenu.track.kind === "imported" && <>
+              <div className="timeline-context-separator" />
+              <button className="danger" role="menuitem" onClick={() => { onAudioTrackRemove(contextMenu.track.id); setContextMenu(null); }}>
+                <Trash2 size={15} /> Remove audio
+              </button>
+            </>}
+          </>}
           {contextMenu.kind === "clip" && <>
             <div className="timeline-context-speed">
               <span>Clip speed</span>

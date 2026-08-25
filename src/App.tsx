@@ -161,9 +161,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isEditorPreview && (windowLabel === "main" || isEditorWindow || isTeleprompterWindow || isSettingsWindow || isDeviceWindow || isLibraryWindow || isDonateWindow || isWindowPickerWindow)) {
-      invoke("window_ready").catch(() => {});
-    }
+    if (isEditorPreview || !(windowLabel === "main" || isEditorWindow || isTeleprompterWindow || isSettingsWindow || isDeviceWindow || isLibraryWindow || isDonateWindow || isWindowPickerWindow)) return;
+    let cancelled = false;
+    const reveal = async () => {
+      // Native windows are created hidden. Give CSS, the first React commit,
+      // and local fonts a bounded moment to settle before revealing the HWND;
+      // this prevents the dark/blank blink and device-list layout jump seen on
+      // slower laptops without ever waiting indefinitely on a web font.
+      const fontsReady = document.fonts?.ready ?? Promise.resolve();
+      await Promise.race([
+        fontsReady.catch(() => undefined),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 350)),
+      ]);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      if (!cancelled) await invoke("window_ready").catch(() => {});
+    };
+    void reveal();
+    return () => { cancelled = true; };
   }, [isEditorPreview, windowLabel, isEditorWindow, isTeleprompterWindow, isSettingsWindow, isDeviceWindow, isLibraryWindow, isDonateWindow, isWindowPickerWindow]);
 
   if (isDockWindow) {

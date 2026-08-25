@@ -12,6 +12,7 @@ interface DockState {
   elapsed: number;
   paused: boolean;
   mic_muted: boolean;
+  session_id: string | null;
 }
 
 export default function RecordingDock() {
@@ -20,6 +21,7 @@ export default function RecordingDock() {
     elapsed: 0,
     paused: false,
     mic_muted: false,
+    session_id: null,
   });
   const [compact, setCompact] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -52,10 +54,33 @@ export default function RecordingDock() {
 
   // Stay in sync with the launcher window.
   useEffect(() => {
-    const un = listen<DockState>("dock-state", (e) => setState(e.payload));
+    const un = listen<DockState>("dock-state", (e) => setState((current) => {
+      const newSession = !!e.payload.session_id && e.payload.session_id !== current.session_id;
+      if (newSession) {
+        setStopping(false);
+        return { ...e.payload, elapsed: e.payload.elapsed };
+      }
+      return {
+        ...e.payload,
+        elapsed: current.recording && e.payload.recording
+          ? Math.max(current.elapsed, e.payload.elapsed)
+          : e.payload.elapsed,
+      };
+    }));
     return () => {
       un.then((fn) => fn());
     };
+  }, []);
+
+  // Keep the visible clock moving even when Windows throttles the minimized
+  // launcher WebView. Backend snapshots still correct pause/mute state.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setState((current) => current.recording && !current.paused
+        ? { ...current, elapsed: current.elapsed + 1 }
+        : current);
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {

@@ -168,7 +168,7 @@ export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<A
   dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01 },
 };
 
-export type AudioTrackKind = "microphone" | "system" | "device";
+export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 
 export interface AudioTrack {
   id: string;

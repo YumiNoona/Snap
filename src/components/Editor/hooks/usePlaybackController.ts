@@ -23,7 +23,7 @@ export type TransportStatus = "idle" | "paused" | "starting" | "playing" | "buff
 const MEDIA_OPERATION_TIMEOUT_MS = 2_500;
 const PLAY_PROGRESS_TIMEOUT_MS = 1_500;
 const PLAYBACK_UI_INTERVAL_MS = 32;
-const SIDECAR_SYNC_INTERVAL_MS = 100;
+const SIDECAR_SYNC_INTERVAL_MS = 50;
 
 /**
  * The video element is the sole editor clock. Every user action invalidates
@@ -60,14 +60,20 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   }, []);
 
   const trackIsMuted = useCallback((track: AudioTrack) => (
-    track.muted || (track.kind === "microphone" ? audioMixRef.current.micMuted : audioMixRef.current.systemMuted)
+    track.muted
+    || (track.kind === "microphone" && audioMixRef.current.micMuted)
+    || ((track.kind === "system" || track.kind === "device") && audioMixRef.current.systemMuted)
   ), []);
 
   const applyAudioMix = useCallback(() => {
     for (const track of audioTracksRef.current) {
       const element = audioElementsRef.current.get(track.id);
       if (!element) continue;
-      const channelVolume = track.kind === "microphone" ? audioMixRef.current.micVolume : audioMixRef.current.systemVolume;
+      const channelVolume = track.kind === "microphone"
+        ? audioMixRef.current.micVolume
+        : track.kind === "imported"
+          ? 100
+          : audioMixRef.current.systemVolume;
       element.muted = trackIsMuted(track);
       element.volume = Math.max(0, Math.min(1, track.volume * channelVolume / 100));
     }
@@ -101,13 +107,14 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     }
   }, [applyAudioMix, syncSidecars, trackIsMuted]);
 
-  const primeSidecars = useCallback((video: HTMLVideoElement, generation: number) => {
+  const primeSidecars = useCallback((video: HTMLVideoElement, generation: number, targetTime = video.currentTime) => {
     // Run inside the original click/space gesture so WebView2 unlocks each
     // independent WAV. They remain muted until the video confirms progress.
     for (const track of audioTracksRef.current) {
       const element = audioElementsRef.current.get(track.id);
       if (!element || trackIsMuted(track)) continue;
-      try { element.currentTime = video.currentTime; } catch { /* metadata is loading */ }
+      element.pause();
+      try { element.currentTime = targetTime; } catch { /* metadata is loading */ }
       element.muted = true;
       void element.play().catch((error) => {
         if (generation === generationRef.current && wantsPlaybackRef.current) {
@@ -230,6 +237,9 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   ) => {
     if (!commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) return;
     setStatus("starting");
+    const rate = Math.max(0.5, Math.min(2, playbackRate || 1));
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
     const initialTime = video.currentTime;
     let playCall: Promise<void>;
     try {
@@ -264,7 +274,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     setCurrentTime(video.currentTime);
     setStatus("playing");
     playSidecars(video, generation);
-  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, setStatus, waitForPresentedFrame]);
+  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, playbackRate, setStatus, waitForPresentedFrame]);
 
   const recover = useCallback((time: number) => {
     const video = videoRef.current;
@@ -311,11 +321,13 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     const { generation, signal } = beginCommand();
     wantsPlaybackRef.current = true;
     recoveryActiveRef.current = false;
-    primeSidecars(video, generation);
     const { start: rangeStart, end: configuredEnd } = boundsRef.current;
     const rangeEnd = configuredEnd || video.duration || duration;
     const rebuild = isAtPlaybackBoundary(video.currentTime, video.ended, rangeStart, rangeEnd);
     const startAt = rebuild ? Math.max(0, rangeStart) : video.currentTime;
+    // Rewind ended WAV sidecars before priming them. Priming at their old end
+    // made replay start with stale/absent audio while captions restarted.
+    primeSidecars(video, generation, startAt);
     setCurrentTime(startAt);
     if (rebuild) {
       setStatus("recovering");

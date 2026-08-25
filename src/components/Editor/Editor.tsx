@@ -18,8 +18,9 @@ import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
 import { useEditorHistory } from "./hooks/useEditorHistory";
 import { useProjectPersistence } from "./hooks/useProjectPersistence";
 import { usePlaybackController } from "./hooks/usePlaybackController";
-import { discoverAudioTracks, mergeAudioTracks } from "../../lib/captions";
+import { discoverAudioTracks, findAvailableCaptionStart, mergeAudioTracks } from "../../lib/captions";
 import { loadProjectAtPath } from "../../lib/project";
+import { recordingDataPaths } from "../../lib/recordingPaths";
 import "./Editor.css";
 
 interface Props {
@@ -106,7 +107,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
   const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
-  const [audioStatus, setAudioStatus] = useState("Finding recorded audio…");
+  const [audioError, setAudioError] = useState("");
+  const [cameraMedia, setCameraMedia] = useState<{ path: string; startOffsetMs: number } | null>(null);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
@@ -242,18 +244,70 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   useEffect(() => {
     let cancelled = false;
-    setAudioStatus("Finding recorded audio…");
+    setAudioError("");
     void discoverAudioTracks(videoPath).then((discovered) => {
       if (cancelled) return;
       setAudioTracks((current) => mergeAudioTracks(discovered, current));
-      setAudioStatus(discovered.length > 0
-        ? `${discovered.length} editable audio ${discovered.length === 1 ? "track" : "tracks"} ready`
-        : "No separate audio tracks were found for this recording");
     }).catch((error) => {
-      if (!cancelled) setAudioStatus(`Audio could not be loaded: ${error}`);
+      if (!cancelled) setAudioError(`Audio could not be loaded: ${error}`);
     });
     return () => { cancelled = true; };
   }, [videoPath]);
+
+  const handleAddAudio = useCallback(async () => {
+    setAudioError("");
+    try {
+      const selected = await openDialog({
+        multiple: true,
+        title: "Add audio to the timeline",
+        filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm"] }],
+      });
+      const sources = typeof selected === "string" ? [selected] : selected ?? [];
+      if (sources.length === 0) return;
+      const additions = await Promise.all(sources.map(async (source, index): Promise<AudioTrack> => {
+        const path = await invoke<string>("import_audio_file", { videoPath, sourcePath: source });
+        const label = source.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || `Audio ${index + 1}`;
+        return {
+          id: `audio-imported-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+          kind: "imported",
+          path,
+          label,
+          muted: false,
+          volume: 1,
+        };
+      }));
+      setAudioTracks((current) => {
+        const known = new Set(current.map((track) => track.path.toLowerCase()));
+        return [...current, ...additions.filter((track) => !known.has(track.path.toLowerCase()))];
+      });
+      setActiveTool("audio");
+    } catch (error) {
+      setAudioError(`Audio could not be added: ${error}`);
+    }
+  }, [videoPath]);
+
+  useEffect(() => {
+    if (isBrowserPreview) return;
+    let cancelled = false;
+    const dataDir = recordingDataPaths(videoPath).dataDir;
+    void Promise.all([
+      invoke<Array<{ name: string; path: string; is_dir: boolean }>>("list_directory", { path: dataDir }),
+      invoke<string | null>("read_optional_text_file", { path: `${dataDir}\\camera.json` }),
+    ]).then(([files, metadataText]) => {
+      if (cancelled) return;
+      const camera = files.find((file) => !file.is_dir && file.name.toLowerCase() === "camera.mp4");
+      if (!camera) {
+        setCameraMedia(null);
+        return;
+      }
+      let startOffsetMs = 0;
+      try {
+        startOffsetMs = Math.max(0, Number(JSON.parse(metadataText || "{}").startOffsetMs) || 0);
+      } catch {}
+      setCameraMedia({ path: camera.path, startOffsetMs });
+    }).catch(() => { if (!cancelled) setCameraMedia(null); });
+    return () => { cancelled = true; };
+  }, [isBrowserPreview, videoPath]);
 
 
   // Persist per-pack cursor hotspot nudges across sessions
@@ -343,13 +397,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setPresetName("");
   }, [config, presetName, savedPresets.length]);
 
-  useEffect(() => {
-    if (isBrowserPreview) return;
-    invoke("window_ready").catch((e) => {
-      console.error("[Snap] window_ready failed — editor window will stay hidden:", e);
-    });
-  }, [isBrowserPreview]);
-
   const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
 
   const handleCropApply = useCallback(
@@ -382,6 +429,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         keyframes,
         config,
         captionTracks,
+        audioTracks,
+        cameraMedia,
         settings,
         config.trimStart,
         config.trimEnd > 0 ? config.trimEnd : duration,
@@ -451,18 +500,31 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   const deleteSelectedZoom = useCallback(() => {
     if (!resolvedSelectedZoom) return;
-    const memberSet = new Set(resolvedSelectedZoom.memberIndices);
-    setKeyframes(keyframes.filter((_, index) => !memberSet.has(index)));
+    const selection: ZoomRegionSelection = {
+      startMs: resolvedSelectedZoom.startMs,
+      endMs: resolvedSelectedZoom.endMs,
+      regionId: resolvedSelectedZoom.regionId,
+    };
+    const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
+    setKeyframes((current) => {
+      const region = findZoomRegion(current, selection, timelineEndMs);
+      if (!region) return current;
+      const memberSet = new Set(region.memberIndices);
+      return current.filter((_, index) => !memberSet.has(index));
+    });
     setSelectedZoomRegion(null);
-  }, [keyframes, resolvedSelectedZoom]);
+  }, [config.trimEnd, duration, resolvedSelectedZoom]);
 
   const deleteZoomRegion = useCallback((selection: ZoomRegionSelection) => {
-    const region = findZoomRegion(keyframes, selection, Math.round((config.trimEnd || duration) * 1000));
-    if (!region) return;
-    const memberSet = new Set(region.memberIndices);
-    setKeyframes(keyframes.filter((_, index) => !memberSet.has(index)));
-    if (selectedZoomRegion?.regionId === region.regionId) setSelectedZoomRegion(null);
-  }, [config.trimEnd, duration, keyframes, selectedZoomRegion?.regionId]);
+    const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
+    setKeyframes((current) => {
+      const region = findZoomRegion(current, selection, timelineEndMs);
+      if (!region) return current;
+      const memberSet = new Set(region.memberIndices);
+      return current.filter((_, index) => !memberSet.has(index));
+    });
+    if (!selection.regionId || selectedZoomRegion?.regionId === selection.regionId) setSelectedZoomRegion(null);
+  }, [config.trimEnd, duration, selectedZoomRegion?.regionId]);
 
   const duplicateZoomRegion = useCallback((selection: ZoomRegionSelection) => {
     const timelineStartMs = Math.round(config.trimStart * 1000);
@@ -865,6 +927,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <Preview
             videoPath={videoPath}
             inputLogPath={isBrowserPreview ? "" : inputLogPath}
+            cameraMedia={cameraMedia}
             config={config}
             keyframes={keyframes}
             onKeyframesChange={setKeyframes}
@@ -929,7 +992,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onClearSelectedZoom={() => { setSelectedZoomRegion(null); setZoomTargetMode(false); manualTargetRangeRef.current = null; }}
           onDeleteSelectedZoom={deleteSelectedZoom}
           audioTracks={audioTracks}
-          audioStatus={audioStatus}
+          audioError={audioError}
+          onAddAudio={handleAddAudio}
+          onAudioTracksChange={setAudioTracks}
           captionTracks={captionTracks}
           onCaptionTracksChange={setCaptionTracks}
           selectedCaption={selectedCaption}
@@ -984,6 +1049,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             ...(track === "system" ? { systemMuted: muted } : { micMuted: muted }),
           },
         }))}
+        onAddAudio={handleAddAudio}
+        onAudioTrackChange={(updated) => setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track))}
+        onAudioTrackRemove={(trackId) => setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId))}
         layers={config.layers}
         selectedLayerId={selectedLayerId}
         onLayerSelect={(id) => {
@@ -1012,16 +1080,30 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           setActiveTool("captions");
           const track = captionTracks.find((candidate) => candidate.id === selection.trackId);
           const segment = track?.segments.find((candidate) => candidate.id === selection.segmentId);
-          if (segment && (currentTime < segment.startMs / 1000 || currentTime > segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01);
+          if (segment && (currentTime < segment.startMs / 1000 || currentTime >= segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01);
         }}
-        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.map((item) => item.id === segment.id ? segment : item) } : track))}
+        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? {
+          ...track,
+          segments: track.segments
+            .map((item) => item.id === segment.id ? segment : item)
+            .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs),
+        } : track))}
         onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => {
           if (track.id !== trackId) return track;
           const source = track.segments.find((segment) => segment.id === segmentId);
           if (!source) return track;
           const durationMs = Math.max(100, source.endMs - source.startMs);
+          const projectStartMs = Math.round(config.trimStart * 1000);
           const projectEndMs = Math.round((config.trimEnd || duration) * 1000);
-          const startMs = Math.min(Math.max(Math.round(config.trimStart * 1000), source.endMs + 100), Math.max(0, projectEndMs - durationMs));
+          const startMs = findAvailableCaptionStart(
+            track.segments,
+            source.id,
+            durationMs,
+            projectStartMs,
+            projectEndMs,
+            source.endMs + 100,
+          );
+          if (startMs === null) return track;
           const copy = { ...source, id: `caption-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, startMs, endMs: startMs + durationMs, userEdited: true };
           return { ...track, segments: [...track.segments, copy].sort((a, b) => a.startMs - b.startMs) };
         }))}

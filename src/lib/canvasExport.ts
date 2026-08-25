@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CaptionTrack, EditorConfig, ExportSettings, Keyframe } from "./types";
+import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe } from "./types";
 import { createExportCompositor } from "./exportCompositor";
 import { captionsToSrt, captionsToVtt } from "./captions";
 
@@ -32,6 +32,8 @@ export async function runCanvasExport(
   keyframes: Keyframe[],
   config: EditorConfig,
   captionTracks: CaptionTrack[],
+  audioTracks: AudioTrack[],
+  cameraMedia: { path: string; startOffsetMs: number } | null,
   exportSettings: ExportSettings,
   trimStart: number,
   trimEnd: number,
@@ -45,6 +47,7 @@ export async function runCanvasExport(
     keyframes,
     config,
     exportSettings.captions === "burned" || exportSettings.captions === "burned-srt" ? captionTracks : [],
+    cameraMedia,
     exportSettings.width,
     exportSettings.height
   );
@@ -150,6 +153,7 @@ export async function runCanvasExport(
           ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => (time - trimStart * 1000) / playbackRate)
           : [],
         audioMix: config.audio,
+        audioTracks,
         trimStartSeconds: trimStart,
         exportDurationSeconds: Math.max(0.01, (trimEnd - trimStart) / playbackRate),
         playbackRate,

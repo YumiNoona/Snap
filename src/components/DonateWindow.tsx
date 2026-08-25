@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Check, Copy, Heart, ShieldCheck, X } from "lucide-react";
 import "./ModuleWindows.css";
@@ -7,7 +6,6 @@ import "./ModuleWindows.css";
 const UPI_ID = "rushikeshingale2001@okicici";
 export default function DonateWindow() {
   const [copied, setCopied] = useState(false);
-  useEffect(() => { void invoke("window_ready"); }, []);
   const copy = async () => { await navigator.clipboard.writeText(UPI_ID); setCopied(true); setTimeout(() => setCopied(false), 1500); };
   return <div className="module-window donate-window">
     <header className="module-titlebar" data-tauri-drag-region><span className="module-mark donate"><Heart size={17} /></span><div data-tauri-drag-region><strong data-tauri-drag-region>Support Snap</strong><small data-tauri-drag-region>Help keep the recorder independent</small></div><button onClick={() => getCurrentWindow().close()}><X size={16} /></button></header>

@@ -15,7 +15,8 @@ describe("editor playback transport", () => {
   });
 
   it("resynchronizes independent audio only after meaningful drift", () => {
-    expect(shouldResyncSidecar(5.08, 5)).toBe(false);
+    expect(shouldResyncSidecar(5.05, 5)).toBe(false);
+    expect(shouldResyncSidecar(5.08, 5)).toBe(true);
     expect(shouldResyncSidecar(5.25, 5)).toBe(true);
     expect(shouldResyncSidecar(5, 5, true)).toBe(true);
   });

@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Download,
   Database,
+  Gauge,
   Frame,
   Minimize2,
   Minus,
@@ -176,7 +177,27 @@ export default function SettingsWindow() {
                   ))}
                 </div>
               </section>
+              <section className="settings-section">
+                <div className="settings-section-title"><Gauge size={15} /><span>Recording performance</span></div>
+                <div className="recording-mode-choice" role="group" aria-label="Recording performance mode">
+                  <button className={settings.recordingPerformanceMode === "automatic" ? "active" : ""} onClick={() => change("recordingPerformanceMode", "automatic")}><strong>Automatic</strong><small>Protect other apps</small></button>
+                  <button className={settings.recordingPerformanceMode === "manual" ? "active" : ""} onClick={() => change("recordingPerformanceMode", "manual")}><strong>Manual</strong><small>Choose limits</small></button>
+                </div>
+                <div className={`recording-performance-grid ${settings.recordingPerformanceMode === "automatic" ? "disabled" : ""}`} aria-disabled={settings.recordingPerformanceMode === "automatic"}>
+                  <label><span>Frame rate</span><select disabled={settings.recordingPerformanceMode === "automatic"} value={settings.recordingFps} onChange={(event) => change("recordingFps", Number(event.target.value) === 60 ? 60 : Number(event.target.value) === 24 ? 24 : 30)}><option value={24}>24 FPS · lowest load</option><option value={30}>30 FPS · recommended</option><option value={60}>60 FPS · smoother</option></select></label>
+                  <label><span>Maximum resolution</span><select disabled={settings.recordingPerformanceMode === "automatic"} value={settings.recordingResolution} onChange={(event) => change("recordingResolution", event.target.value as AppSettings["recordingResolution"])}><option value="720p">720p · compatibility</option><option value="1080p">1080p · recommended</option><option value="native">Native display</option></select></label>
+                  <label className="recording-bitrate-control"><span>Video bitrate <strong>{settings.recordingBitrateMbps} Mbps</strong></span><input disabled={settings.recordingPerformanceMode === "automatic"} type="range" min={2} max={50} step={1} value={settings.recordingBitrateMbps} onChange={(event) => change("recordingBitrateMbps", Number(event.target.value))} /></label>
+                </div>
+                {settings.recordingPerformanceMode === "automatic" && settings.automaticRecordingProfile && (
+                  <div className="automatic-profile-status">
+                    <span><strong>PC check complete</strong><small>{settings.automaticRecordingProfile.summary}</small></span>
+                    <button type="button" onClick={() => change("automaticRecordingProfile", null)}>Re-test this PC</button>
+                  </div>
+                )}
+                <p className="recording-performance-note">{settings.recordingPerformanceMode === "automatic" ? (settings.automaticRecordingProfile ? "This saved profile is reused instantly. Snap will only test the PC again when you choose Re-test this PC." : "Snap will test the working encoder once, save the result, and prioritize low impact on browsers, games, and creative apps.") : "24–30 FPS is safest alongside Unreal Engine, games, browser video, or video calls. Native 60 FPS is intended for machines with spare GPU capacity."}</p>
+              </section>
               <div className="settings-options-stack">
+                <SettingsToggle icon={<Gauge size={18} />} title="Compatibility encoder fallback" description="Allow a low-priority CPU encoder if no GPU encoder works" checked={settings.allowSoftwareEncoder} onChange={(value) => change("allowSoftwareEncoder", value)} />
                 <SettingsToggle icon={<Timer size={18} />} title="3–2–1 countdown" description="Give yourself time before recording starts" checked={settings.countdown} onChange={(value) => change("countdown", value)} />
                 <SettingsToggle icon={<Minimize2 size={18} />} title="Minimize while recording" description="Keep the launcher out of your capture" checked={settings.minimizeWhileRecording} onChange={(value) => change("minimizeWhileRecording", value)} />
                 <SettingsToggle icon={<PanelTopOpen size={18} />} title="Open editor after recording" description="Open the finished recording automatically" checked={settings.autoOpenEditor} onChange={(value) => change("autoOpenEditor", value)} />

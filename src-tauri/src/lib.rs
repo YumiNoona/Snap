@@ -1,4 +1,5 @@
 mod audio;
+mod camera;
 mod capture;
 mod export;
 mod input_hook;
@@ -57,6 +58,8 @@ struct DockStateSnapshot {
     elapsed: u64,
     paused: bool,
     mic_muted: bool,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -116,14 +119,18 @@ async fn open_editor_window(
     *state.0.lock().map_err(|e| e.to_string())? = Some((video.clone(), log.clone()));
 
     if let Some(win) = app.get_webview_window("editor") {
-        eprintln!("[Snap] open_editor_window: reusing existing editor window");
+        process::recording_diagnostic(format_args!(
+            "[Snap] open_editor_window: reusing existing editor window"
+        ));
         let _ = win.emit("editor-open", (video, log));
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
     }
 
-    eprintln!("[Snap] open_editor_window: creating editor window at runtime");
+    process::recording_diagnostic(format_args!(
+        "[Snap] open_editor_window: creating editor window at runtime"
+    ));
 
     // IMPORTANT: WebviewWindowBuilder::build() deadlocks on Windows when
     // called directly from a synchronous command — see Tauri's own docs:
@@ -154,11 +161,11 @@ async fn open_editor_window(
         .background_color(Color(11, 13, 18, 255))
         .devtools(true)
         .on_page_load(|_webview, payload| {
-            eprintln!(
+            process::recording_diagnostic(format_args!(
                 "[Snap Editor] page load: {:?} {:?}",
                 payload.url(),
                 payload.event()
-            );
+            ));
         })
         .build()
         .map(|win| {
@@ -167,7 +174,9 @@ async fn open_editor_window(
             // Showing immediately re-introduces the black/white pre-content
             // flash (or a permanently blank window if the frontend fails to
             // mount).
-            eprintln!("[Snap] editor window created, emitting editor-open");
+            process::recording_diagnostic(format_args!(
+                "[Snap] editor window created, emitting editor-open"
+            ));
             let _ = win.emit("editor-open", (video_for_thread, log_for_thread));
         })
         .map_err(|e| format!("Failed to create editor window: {e}"));
@@ -1000,6 +1009,89 @@ fn recording_data_paths(video_path: &Path) -> (PathBuf, PathBuf) {
     (data_dir, log_path)
 }
 
+/// Copies user-added audio into the recording's support folder so projects do
+/// not silently break when the original download or music file is moved.
+#[tauri::command]
+async fn import_audio_file(
+    video_path: String,
+    source_path: String,
+) -> std::result::Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        const AUDIO_EXTENSIONS: [&str; 9] = [
+            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm",
+        ];
+        let source = PathBuf::from(&source_path);
+        if !source.is_file() {
+            return Err(format!("Audio file does not exist: {}", source.display()));
+        }
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !AUDIO_EXTENSIONS.contains(&extension.as_str()) {
+            return Err(format!("Unsupported audio format: .{extension}"));
+        }
+        if std::fs::metadata(&source)
+            .map_err(|error| format!("Cannot inspect {}: {error}", source.display()))?
+            .len()
+            == 0
+        {
+            return Err("The selected audio file is empty".to_string());
+        }
+
+        let (data_dir, _) = recording_data_paths(Path::new(&video_path));
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|error| format!("Cannot create {}: {error}", data_dir.display()))?;
+        let original_name = source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("audio");
+        let safe_name = original_name
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let destination = data_dir.join(format!(
+            "imported_{unique}_{}.wav",
+            safe_name.trim_matches('_')
+        ));
+        // Normalize once during import. Playback and waveform rendering then
+        // use the same lightweight PCM format as recorded sidecars, while the
+        // original MP3/M4A/FLAC codec never burdens the live editor loop.
+        let output = process::background_command("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&source)
+            .args(["-vn", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le"])
+            .arg(&destination)
+            .output()
+            .map_err(|error| format!("Cannot start audio import: {error}"))?;
+        if !output.status.success()
+            || std::fs::metadata(&destination)
+                .map(|metadata| metadata.len() <= 80)
+                .unwrap_or(true)
+        {
+            let _ = std::fs::remove_file(&destination);
+            return Err(format!(
+                "The selected file contains no readable audio: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(destination.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| format!("Audio import worker failed: {error}"))?
+}
+
 #[cfg(target_os = "windows")]
 fn set_support_folder_hidden(path: &Path, hidden: bool) -> std::result::Result<(), String> {
     let flag = if hidden { "+H" } else { "-H" };
@@ -1112,18 +1204,40 @@ fn recover_recording_sessions() -> std::result::Result<Vec<RecoveredRecordingSes
         {
             continue;
         }
+        let mut recovered_fragments = false;
+        let existing_size = std::fs::metadata(&manifest.video_path)
+            .map(|value| value.len())
+            .unwrap_or(0);
+        if existing_size <= 1024 {
+            match capture::recover_capture_parts(Path::new(&manifest.video_path)) {
+                Ok(value) => recovered_fragments = value,
+                Err(error) => {
+                    manifest.error = Some(format!(
+                        "Capture fragments were found but could not be assembled: {error}"
+                    ));
+                }
+            }
+        }
         let video_size = std::fs::metadata(&manifest.video_path)
             .map(|value| value.len())
             .unwrap_or(0);
         if video_size > 1024 {
             manifest.status = "incomplete".to_string();
-            manifest.error =
-                Some("Snap closed before recording finalization completed".to_string());
+            manifest.error = Some(if recovered_fragments {
+                "Snap closed unexpectedly; recoverable capture fragments were assembled automatically".to_string()
+            } else {
+                "Snap closed before recording finalization completed".to_string()
+            });
             recovered.push(RecoveredRecordingSession {
                 video_path: manifest.video_path.clone(),
                 status: manifest.status.clone(),
                 message: format!(
-                    "Recovered an interrupted recording ({:.1} MB)",
+                    "{} an interrupted recording ({:.1} MB)",
+                    if recovered_fragments {
+                        "Rebuilt"
+                    } else {
+                        "Recovered"
+                    },
                     video_size as f64 / 1_048_576.0
                 ),
             });
@@ -1196,6 +1310,8 @@ fn organize_recording_data(show_support_files: bool) -> std::result::Result<usiz
                         "events.json",
                         "system_audio.wav",
                         "mic_audio.wav",
+                        "camera.mp4",
+                        "camera.json",
                         "device_audio.wav",
                         "mobile-recording.json",
                         "mobile-capture.partial.mkv",
@@ -1278,6 +1394,7 @@ pub fn run() {
             capture::get_target_bounds,
             capture::get_videos_dir,
             capture::recording_preflight,
+            capture::recommend_recording_options,
             capture::install_ffmpeg,
             audio::enumerate_audio_devices,
             enumerate_video_devices,
@@ -1329,6 +1446,7 @@ pub fn run() {
             read_optional_text_file,
             write_text_file_atomic,
             list_directory,
+            import_audio_file,
             prepare_recording_data,
             update_recording_session,
             recover_recording_sessions,

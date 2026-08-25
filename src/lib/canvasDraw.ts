@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CaptionTrack, ClickEffect, CursorStyle, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
-import { captionAnimationFrame, revealCaptionText } from "./captionAnimation";
+import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
 export function drawCaptionTrack(
   ctx: CanvasRenderingContext2D,
@@ -12,15 +12,19 @@ export function drawCaptionTrack(
   const segment = track.segments.find((item) => timeMs >= item.startMs && timeMs < item.endMs);
   if (!segment?.text.trim()) return;
   const style = track.style;
-  const animation = style.animation ?? "none";
+  const requestedAnimation = style.animation ?? "none";
   // A short phrase must still reach its stable/readable state well before it
   // leaves the screen. Otherwise reveal animations make the final words appear
   // missing even though the caption timing itself is correct.
   const segmentDuration = segment.endMs - segment.startMs;
-  const entranceDuration = Math.min(style.animationDurationMs ?? 420, Math.max(120, segmentDuration * .45));
+  const { animation, durationMs: entranceDuration } = effectiveCaptionEntrance(
+    requestedAnimation,
+    segmentDuration,
+    style.animationDurationMs ?? 420,
+  );
   const entrance = captionAnimationFrame(animation, timeMs - segment.startMs, entranceDuration);
-  const captionText = animation === "reveal" ? revealCaptionText(segment.text, entrance.reveal) : segment.text.trim();
-  if (!captionText) return;
+  const { layoutText, visibleText } = captionRenderText(segment.text, animation, entrance.reveal);
+  if (!layoutText || !visibleText) return;
   const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
   const maxWidth = Math.max(80, frame.w * style.maxWidth);
   ctx.save();
@@ -28,7 +32,7 @@ export function drawCaptionTrack(
   (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${style.letterSpacing ?? 0}px`;
   ctx.textAlign = style.align;
   ctx.textBaseline = "middle";
-  const words = captionText.split(/\s+/u);
+  const words = layoutText.split(/\s+/u);
   const lines: string[] = [];
   let line = "";
   for (const word of words) {
@@ -42,25 +46,46 @@ export function drawCaptionTrack(
   const paddingX = fontSize * paddingScale;
   const paddingY = fontSize * paddingScale * .6;
   const widest = Math.min(maxWidth, Math.max(...lines.map((value) => ctx.measureText(value).width), 1));
-  const centerX = frame.x + frame.w * style.x + entrance.slide * fontSize * 1.25;
-  const centerY = frame.y + frame.h * style.y + entrance.rise * fontSize * .55;
-  ctx.globalAlpha *= entrance.alpha;
-  if (entrance.blur > 0) ctx.filter = `blur(${entrance.blur * Math.max(2, fontSize * .12)}px)`;
-  if (entrance.scale !== 1) {
-    ctx.translate(centerX, centerY);
-    ctx.scale(entrance.scale, entrance.scale);
-    ctx.translate(-centerX, -centerY);
-  }
+  const centerX = frame.x + frame.w * style.x;
+  const centerY = frame.y + frame.h * style.y;
+
+  // Paint the box once at its final geometry. Applying entrance opacity,
+  // blur, or partially-revealed text to this translucent background caused
+  // it to pulse like a dark tint on WebView2 at every caption boundary.
   ctx.fillStyle = style.backgroundColor;
+  // Canvas paths are not part of save()/restore(). Without beginPath(), this
+  // fill can also repaint an old full-frame clip or shape with the caption's
+  // translucent black background, producing a one-frame video-wide tint.
+  ctx.beginPath();
   roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * (style.backgroundRadius ?? .18));
   ctx.fill();
-  lines.forEach((value, index) => {
-    const y = centerY + (index - (lines.length - 1) / 2) * lineHeight;
+
+  const textCenterX = centerX + entrance.slide * fontSize * 1.25;
+  const textCenterY = centerY + entrance.rise * fontSize * .55;
+  ctx.save();
+  ctx.globalAlpha *= entrance.alpha;
+  if (entrance.scale !== 1) {
+    ctx.translate(textCenterX, textCenterY);
+    ctx.scale(entrance.scale, entrance.scale);
+    ctx.translate(-textCenterX, -textCenterY);
+  }
+
+  // Preserve final line positions during a typewriter reveal. This avoids
+  // text and its shadow jumping when a second line begins.
+  let remainingCharacters = Array.from(visibleText).length;
+  lines.forEach((fullLine, index) => {
+    const characters = Array.from(fullLine);
+    const value = characters.slice(0, Math.max(0, remainingCharacters)).join("");
+    remainingCharacters -= characters.length;
+    if (remainingCharacters > 0) remainingCharacters -= 1; // wrapped space
+    if (!value) return;
+    const y = textCenterY + (index - (lines.length - 1) / 2) * lineHeight;
     if (style.shadow) { ctx.shadowColor = "rgba(0,0,0,.7)"; ctx.shadowBlur = fontSize * (style.shadowBlur ?? .18); ctx.shadowOffsetY = fontSize * 0.08; }
-    if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2; ctx.lineJoin = "round"; ctx.strokeText(value, centerX, y, maxWidth); }
+    if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2; ctx.lineJoin = "round"; ctx.strokeText(value, textCenterX, y, maxWidth); }
     ctx.fillStyle = style.color;
-    ctx.fillText(value, centerX, y, maxWidth);
+    ctx.fillText(value, textCenterX, y, maxWidth);
   });
+  ctx.restore();
   ctx.restore();
 }
 
@@ -472,6 +497,43 @@ export function drawVideoWithMotionBlur(
     }
   }
   ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
+}
+
+/** Draw the optional webcam track as a lightweight bottom-right picture-in-picture. */
+export function drawCameraBubble(
+  ctx: CanvasRenderingContext2D,
+  camera: HTMLVideoElement,
+  area: { x: number; y: number; w: number; h: number },
+) {
+  if (camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || camera.videoWidth <= 0) return;
+  const width = Math.min(area.w * 0.24, 320);
+  const aspect = camera.videoWidth / Math.max(1, camera.videoHeight);
+  const height = Math.min(width / aspect, area.h * 0.34);
+  const actualWidth = height * aspect;
+  const margin = Math.max(10, Math.min(area.w, area.h) * 0.025);
+  const x = area.x + area.w - actualWidth - margin;
+  const y = area.y + area.h - height - margin;
+  const radius = Math.min(18, actualWidth * 0.08, height * 0.16);
+  const source = computeCoverRect(0, 0, camera.videoWidth, camera.videoHeight, actualWidth, height);
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,.42)";
+  ctx.shadowBlur = Math.max(8, actualWidth * 0.04);
+  ctx.beginPath();
+  roundRect(ctx, x, y, actualWidth, height, radius);
+  ctx.fillStyle = "#05070a";
+  ctx.fill();
+  ctx.clip();
+  ctx.drawImage(camera, source.x, source.y, source.w, source.h, x, y, actualWidth, height);
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.7)";
+  ctx.lineWidth = Math.max(1, actualWidth / 180);
+  ctx.beginPath();
+  roundRect(ctx, x, y, actualWidth, height, radius);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export function roundRect(

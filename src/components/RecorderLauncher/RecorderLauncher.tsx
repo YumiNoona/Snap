@@ -27,7 +27,7 @@ import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
 import DonateButton from "../shared/DonateButton";
-import { type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
+import { AUTOMATIC_PROFILE_VERSION, type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
 import { recordingDataPaths } from "../../lib/recordingPaths";
 import snapAppIcon from "../../../src-tauri/icons/snap.png";
 import "./RecorderLauncher.css";
@@ -58,6 +58,21 @@ interface RecordingSessionSnapshot {
   error?: string | null;
 }
 
+interface RecordingOptionsRequest {
+  fps: 24 | 30 | 60;
+  bitrateMbps: number;
+  maxWidth: number | null;
+  maxHeight: number | null;
+  allowSoftwareEncoder: boolean;
+}
+
+interface RecordingRecommendation {
+  options: RecordingOptionsRequest;
+  encoder: string;
+  hardwareEncoding: boolean;
+  summary: string;
+}
+
 interface Props {
   onOpenEditor: (videoPath: string, logPath: string) => void | Promise<void>;
   onOpenTeleprompter: () => void;
@@ -79,10 +94,16 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
-  const [_selectedTarget, setSelectedTarget] = useState("");
-  const [selectedCamera, setSelectedCamera] = useState(() => localStorage.getItem("snap.selectedCamera") || "");
+  const [selectedTarget, setSelectedTarget] = useState("");
+  const [selectedCamera, setSelectedCamera] = useState(() => localStorage.getItem("snap.selectedCamera") || "disabled");
   const [selectedMic, setSelectedMic] = useState(() => localStorage.getItem("snap.selectedMic") || "");
-  const [selectedSpeaker, setSelectedSpeaker] = useState(() => localStorage.getItem("snap.selectedSpeaker") || "");
+  const [selectedSpeaker, setSelectedSpeaker] = useState(() => {
+    // Migrate older builds that silently persisted a concrete endpoint while
+    // presenting it as the default. The new default follows Windows and
+    // per-app routing; explicit device choices are persisted after migration.
+    if (localStorage.getItem("snap.audioSelectionVersion") !== "2") return "default";
+    return localStorage.getItem("snap.selectedSpeaker") || "default";
+  });
 
   // Settings (persisted)
   const [settings, setSettings] = useState<AppSettings>(readAppSettings);
@@ -122,7 +143,21 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const startingRef = useRef(false);
   const pauseTransitionRef = useRef(false);
   const activeSessionIdRef = useRef("");
+  const recordingStartedAtRef = useRef(0);
+  const pauseStartedAtRef = useRef(0);
+  const pausedDurationRef = useRef(0);
   const windowTargetHandlerRef = useRef<(targetId: string) => void>(() => {});
+
+  const beginElapsedClock = () => {
+    if (elapsedRef.current) return;
+    elapsedRef.current = setInterval(() => {
+      const startedAt = recordingStartedAtRef.current;
+      if (startedAt === 0) return;
+      const activePause = pauseStartedAtRef.current > 0 ? Date.now() - pauseStartedAtRef.current : 0;
+      const activeMs = Date.now() - startedAt - pausedDurationRef.current - activePause;
+      setElapsed(Math.max(0, Math.floor(activeMs / 1000)));
+    }, 250);
+  };
 
   // Keep the ref in sync so the elapsed interval can pause without re-creating.
   useEffect(() => {
@@ -154,6 +189,18 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       if (payload.sessionId !== activeSessionIdRef.current) return;
       if (payload.phase === "countingDown") setRecordStatus(`Recording in ${payload.countdown ?? "…"}`);
       else if (payload.phase === "starting") setRecordStatus("Starting capture…");
+      else if (payload.phase === "recording") {
+        if (recordingStartedAtRef.current === 0) {
+          recordingStartedAtRef.current = Date.now();
+          pauseStartedAtRef.current = 0;
+          pausedDurationRef.current = 0;
+          setElapsed(0);
+        }
+        beginElapsedClock();
+        setProcessingRecording(false);
+        setRecording(true);
+        setRecordStatus("Recording");
+      }
       else if (payload.phase === "pausing") setRecordStatus("Pausing…");
       else if (payload.phase === "resuming") setRecordStatus("Resuming…");
       else if (payload.phase === "stopping") {
@@ -194,7 +241,10 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   }, [selectedMic]);
 
   useEffect(() => {
-    try { localStorage.setItem("snap.selectedSpeaker", selectedSpeaker); } catch {}
+    try {
+      localStorage.setItem("snap.selectedSpeaker", selectedSpeaker);
+      localStorage.setItem("snap.audioSelectionVersion", "2");
+    } catch {}
   }, [selectedSpeaker]);
 
   const checkForUpdates = async (manual = true) => {
@@ -270,41 +320,57 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   // ── Load devices ───────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      try {
-        const cameras = await invoke<CameraDevice[]>("enumerate_video_devices");
+      // Device APIs are independent and some Bluetooth/USB drivers take
+      // seconds to answer. Discover them concurrently so one slow microphone
+      // cannot make the whole launcher appear frozen.
+      const [cameraResult, targetResult, audioResult] = await Promise.allSettled([
+        invoke<CameraDevice[]>("enumerate_video_devices"),
+        invoke<DisplayTarget[]>("enumerate_targets"),
+        invoke<AudioDevice[]>("enumerate_audio_devices"),
+      ]);
+      if (cameraResult.status === "fulfilled") {
+        const cameras = cameraResult.value;
         setCameraDevices(cameras);
-        setSelectedCamera((current) => cameras.some((camera) => camera.id === current) ? current : cameras[0]?.id || "");
-      } catch (e) {
-        console.error("Failed to enumerate cameras:", e);
+        setSelectedCamera((current) => current === "disabled" || cameras.some((camera) => camera.id === current) ? current : "disabled");
+      } else {
+        console.error("Failed to enumerate cameras:", cameraResult.reason);
       }
-      try {
-        const t = await invoke<DisplayTarget[]>("enumerate_targets");
+      if (targetResult.status === "fulfilled") {
+        const t = targetResult.value;
         setTargets(t);
         const firstMonitor = t.find((x) => x.target_type === "monitor");
         if (firstMonitor) setSelectedTarget(firstMonitor.id);
-      } catch (e) {
-        console.error("Failed to enumerate targets:", e);
+      } else {
+        console.error("Failed to enumerate targets:", targetResult.reason);
       }
-      try {
-        const d = await invoke<AudioDevice[]>("enumerate_audio_devices");
+      if (audioResult.status === "fulfilled") {
+        const d = audioResult.value;
         setAudioDevices(d);
         const microphones = d.filter((device) => device.device_type === "microphone");
         const speakers = d.filter((device) => device.device_type === "speaker");
-        setSelectedMic((current) => microphones.some((device) => device.id === current) ? current : "default");
-        setSelectedSpeaker((current) => speakers.some((device) => device.id === current) ? current : "default");
-      } catch (e) {
-        console.error("Failed to enumerate audio devices:", e);
+        setSelectedMic((current) => current === "disabled" || microphones.some((device) => device.id === current) ? current : "default");
+        setSelectedSpeaker((current) => current === "disabled" || speakers.some((device) => device.id === current) ? current : "default");
+      } else {
+        console.error("Failed to enumerate audio devices:", audioResult.reason);
       }
     })();
   }, []);
 
   const [shutterFlash, setShutterFlash] = useState(false);
+  const recordStatusIsActionable = /^(Error:|Cannot |No monitor|Region must|Pause failed|Recording needs attention|Recording saved, but)/i.test(recordStatus);
 
   // ── Recording Actions ──────────────────────────────────────────────────
   const startRecording = async (targetId: string, captureRegion: { x: number; y: number; w: number; h: number } | null = null) => {
     if (startingRef.current || recording) return;
     startingRef.current = true;
     lastDataDirRef.current = "";
+    if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+    recordingStartedAtRef.current = 0;
+    pauseStartedAtRef.current = 0;
+    pausedDurationRef.current = 0;
+    setElapsed(0);
+    setIsPaused(false);
+    setProcessingRecording(false);
     try {
       // The editor owns a continuously rendered preview canvas. Keep it out of
       // the capture hot path even if the user left that window open.
@@ -314,13 +380,52 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       const sessionId = `desktop-${stamp}`;
       activeSessionIdRef.current = sessionId;
       const videoPath = `${videosDir}\\snap_${stamp}.mp4`;
+      const manualOptions: RecordingOptionsRequest = {
+        fps: settings.recordingFps,
+        bitrateMbps: settings.recordingBitrateMbps,
+        maxWidth: settings.recordingResolution === "native" ? null : settings.recordingResolution === "720p" ? 1280 : 1920,
+        maxHeight: settings.recordingResolution === "native" ? null : settings.recordingResolution === "720p" ? 720 : 1080,
+        allowSoftwareEncoder: settings.allowSoftwareEncoder,
+      };
+      let recordingOptions = manualOptions;
+      if (settings.recordingPerformanceMode === "automatic") {
+        const savedProfile = settings.automaticRecordingProfile;
+        if (savedProfile?.version === AUTOMATIC_PROFILE_VERSION) {
+          recordingOptions = savedProfile.options;
+          setRecordStatus(`Automatic: ${savedProfile.summary}`);
+        } else {
+          setRecordStatus("Checking this PC once for the lightest recording profile…");
+          let recommendation: RecordingRecommendation;
+          try {
+            recommendation = await invoke<RecordingRecommendation>("recommend_recording_options", { targetId });
+          } catch (recommendationError) {
+            if (!String(recommendationError).toLowerCase().includes("ffmpeg")) throw recommendationError;
+            setRecordStatus("Installing the required FFmpeg video engine…");
+            await invoke("install_ffmpeg");
+            recommendation = await invoke<RecordingRecommendation>("recommend_recording_options", { targetId });
+          }
+          recordingOptions = recommendation.options;
+          setSettings((current) => ({
+            ...current,
+            automaticRecordingProfile: {
+              version: AUTOMATIC_PROFILE_VERSION,
+              calibratedAt: Date.now(),
+              summary: recommendation.summary,
+              encoder: recommendation.encoder,
+              hardwareEncoding: recommendation.hardwareEncoding,
+              options: recommendation.options,
+            },
+          }));
+          setRecordStatus(`Automatic: ${recommendation.summary}`);
+        }
+      }
       try {
-        await invoke("recording_preflight", { outputPath: videoPath, expectedSeconds: 3600 });
+        await invoke("recording_preflight", { outputPath: videoPath, expectedSeconds: 3600, bitrateMbps: recordingOptions.bitrateMbps });
       } catch (preflightError) {
-        if (!String(preflightError).includes("FFmpeg is unavailable")) throw preflightError;
+        if (!String(preflightError).toLowerCase().includes("ffmpeg")) throw preflightError;
         setRecordStatus("Installing the required FFmpeg video engine…");
         await invoke("install_ffmpeg");
-        await invoke("recording_preflight", { outputPath: videoPath, expectedSeconds: 3600 });
+        await invoke("recording_preflight", { outputPath: videoPath, expectedSeconds: 3600, bitrateMbps: recordingOptions.bitrateMbps });
       }
       const preferredPaths = recordingDataPaths(videoPath);
       const prepared = await invoke<{ dataDir: string; logPath: string }>("prepare_recording_data", {
@@ -360,9 +465,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           audioDir,
           micDeviceId: selectedMic,
           speakerDeviceId: selectedSpeaker,
+          cameraDeviceName: selectedCamera === "disabled"
+            ? null
+            : cameraDevices.find((camera) => camera.id === selectedCamera)?.name ?? null,
           region: captureRegion,
           inputRegion: region,
           countdownSeconds: settings.countdown ? 3 : 0,
+          recordingOptions,
         },
       });
 
@@ -372,12 +481,6 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
       setRecording(true);
       setIsPaused(false);
-      setElapsed(0);
-
-      elapsedRef.current = setInterval(
-        () => setElapsed((p) => (pausedRef.current ? p : p + 1)),
-        1000
-      );
       setRecordStatus("Recording");
       startingRef.current = false;
       await invoke("update_recording_session", { dataDir: audioDir, videoPath, status: "recording", error: null }).catch(() => {});
@@ -388,7 +491,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       // Show the floating dock on the desktop (its own small window).
       invoke("set_dock_visible", { visible: true }).catch(() => {});
       invoke("update_dock_state", {
-        snapshot: { recording: true, elapsed: 0, paused: false, mic_muted: false },
+        snapshot: { recording: true, elapsed: 0, paused: false, mic_muted: false, session_id: sessionId },
       }).catch(() => {});
 
       // Draw the recording-area border overlay (red / dashed / off).
@@ -402,6 +505,11 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     } catch (e) {
       startingRef.current = false;
       activeSessionIdRef.current = "";
+      setRecording(false);
+      setIsPaused(false);
+      recordingStartedAtRef.current = 0;
+      pauseStartedAtRef.current = 0;
+      pausedDurationRef.current = 0;
       console.error("[Snap] startRecording failed:", e);
       setRecordStatus(`Error: ${e}`);
       if (lastDataDirRef.current && lastVideoRef.current) {
@@ -413,6 +521,9 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
 
   const stopRecording = async () => {
     if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+    recordingStartedAtRef.current = 0;
+    pauseStartedAtRef.current = 0;
+    pausedDurationRef.current = 0;
     setRecordStatus("");
     setProcessingRecording(true);
     setProcessingMessage("Closing video and audio streams…");
@@ -422,16 +533,21 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     // red border visible makes the session look as though it is still live.
     // The launcher processing surface now owns feedback until the editor opens.
     await Promise.allSettled([
+      invoke("update_dock_state", {
+        snapshot: { recording: false, elapsed, paused: false, mic_muted: micMuted, session_id: activeSessionIdRef.current || null },
+      }),
       invoke("set_dock_visible", { visible: false }),
       invoke("set_recording_overlay", { enabled: false, style: "off", region: null }),
       invoke("set_overlay_paused", { paused: false }),
     ]);
 
     const failures: string[] = [];
+    let completionNotice = "";
     try {
-      await invoke<RecordingSessionSnapshot>("stop_recording_session", {
+      const completed = await invoke<RecordingSessionSnapshot>("stop_recording_session", {
         sessionId: activeSessionIdRef.current,
       });
+      completionNotice = completed.error || "";
       setProcessingMessage("Checking audio sync and project data…");
     } catch (error) {
       failures.push(String(error));
@@ -442,13 +558,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     pausedRef.current = false;
     pauseTransitionRef.current = false;
     activeSessionIdRef.current = "";
-    setRecordStatus(failures.length > 0 ? `Recording needs attention: ${failures.join(" · ")}` : "");
+    setRecordStatus(failures.length > 0 ? `Recording needs attention: ${failures.join(" · ")}` : completionNotice);
     if (lastDataDirRef.current && lastVideoRef.current) {
       await invoke("update_recording_session", {
         dataDir: lastDataDirRef.current,
         videoPath: lastVideoRef.current,
         status: failures.length > 0 ? "incomplete" : "complete",
-        error: failures.length > 0 ? failures.join("; ") : null,
+        error: failures.length > 0 ? failures.join("; ") : completionNotice || null,
       }).catch(() => {});
     }
 
@@ -471,7 +587,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   };
 
   const handleFullScreen = async () => {
-    const monitor = targets.find((t) => t.target_type === "monitor");
+    const monitor = targets.find((t) => t.id === selectedTarget && t.target_type === "monitor")
+      ?? targets.find((t) => t.target_type === "monitor");
     if (!monitor) { setRecordStatus("No monitor found"); return; }
     setSelectedTarget(monitor.id);
     startWithCountdown(monitor.id);
@@ -583,6 +700,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       });
       setIsPaused(next);
       pausedRef.current = next;
+      if (next) {
+        pauseStartedAtRef.current = Date.now();
+      } else if (pauseStartedAtRef.current > 0) {
+        pausedDurationRef.current += Date.now() - pauseStartedAtRef.current;
+        pauseStartedAtRef.current = 0;
+      }
       setRecordStatus(next ? "Paused" : "Recording");
     } catch (error) {
       setRecordStatus(`Pause failed: ${error}`);
@@ -595,7 +718,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   useEffect(() => {
     if (!recording) return;
     invoke("update_dock_state", {
-      snapshot: { recording: true, elapsed, paused: isPaused, mic_muted: micMuted },
+      snapshot: { recording: true, elapsed, paused: isPaused, mic_muted: micMuted, session_id: activeSessionIdRef.current || null },
     }).catch(() => {});
   }, [recording, elapsed, isPaused, micMuted]);
 
@@ -760,13 +883,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         {/* Right Sidebar: Device & Tool Panel */}
         <aside className="focusee-sidebar">
           {/* Camera Dropdown */}
-          <div className="setup-field" aria-label="Camera"><span className="setup-field-icon" title="Camera"><Video size={18} /></span>{cameraDevices.length > 0 ? <Dropdown value={selectedCamera} onChange={setSelectedCamera} options={cameraDevices.map((camera) => ({ value: camera.id, label: camera.name }))} /> : <div className="device-unavailable-row"><span>Connect a camera</span></div>}</div>
+          <div className="setup-field" aria-label="Camera"><span className="setup-field-icon" title="Camera"><Video size={18} /></span><Dropdown value={selectedCamera} onChange={setSelectedCamera} options={[{ value: "disabled", label: "Camera off · lowest load" }, ...cameraDevices.map((camera) => ({ value: camera.id, label: camera.name }))]} /></div>
 
           {/* Microphone Dropdown */}
-          <div className="setup-field" aria-label="Microphone"><span className="setup-field-icon" title="Microphone"><Mic size={18} /></span>{microphones.length > 0 ? <Dropdown value={selectedMic} onChange={setSelectedMic} options={microphones.map((microphone) => ({ value: microphone.id, label: microphone.name }))} /> : <div className="device-unavailable-row"><span>Connect a microphone</span></div>}</div>
+          <div className="setup-field" aria-label="Microphone"><span className="setup-field-icon" title="Microphone"><Mic size={18} /></span><Dropdown value={selectedMic} onChange={setSelectedMic} options={[{ value: "disabled", label: "Microphone off" }, ...microphones.map((microphone) => ({ value: microphone.id, label: microphone.name }))]} /></div>
 
           {/* Speaker Dropdown */}
-          <div className="setup-field" aria-label="Desktop audio"><span className="setup-field-icon" title="Desktop audio"><Volume2 size={18} /></span>{speakers.length > 0 ? <Dropdown value={selectedSpeaker} onChange={setSelectedSpeaker} options={speakers.map((speaker) => ({ value: speaker.id, label: speaker.name }))} /> : <div className="device-unavailable-row"><span>Connect an output</span></div>}</div>
+          <div className="setup-field" aria-label="Desktop audio"><span className="setup-field-icon" title="Desktop audio"><Volume2 size={18} /></span><Dropdown value={selectedSpeaker} onChange={setSelectedSpeaker} options={[{ value: "disabled", label: "Desktop audio off" }, ...speakers.map((speaker) => ({ value: speaker.id, label: speaker.name }))]} /></div>
 
           {/* Teleprompter Button */}
           <button
@@ -813,8 +936,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         </div>
       )}
 
-      {recordStatus && recordStatus !== "Recording" && (
-        <div className={`recording-status-toast ${recordStatus.startsWith("Error:") || recordStatus.includes("failed") ? "error" : ""}`} role="status">
+      {recordStatusIsActionable && (
+        <div className="recording-status-toast error" role="alert">
           <span>{recordStatus}</span>
           {!recording && <button onClick={() => setRecordStatus("")} aria-label="Dismiss status"><X size={13} /></button>}
         </div>

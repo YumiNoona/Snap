@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::fs::File;
-use std::io::Read;
 use std::io::{BufWriter, Write};
 use std::process::Stdio;
 use std::sync::{Mutex as StdMutex, OnceLock};
@@ -190,22 +189,15 @@ pub async fn export_video(request: ExportRequest) -> std::result::Result<String,
 
     eprintln!("[Snap Export] FFmpeg command: ffmpeg {}", args.join(" "));
 
-    let mut child = background_command("ffmpeg")
+    let output = background_command("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
-
-    let status = child
-        .wait()
-        .map_err(|e| format!("FFmpeg wait error: {e}"))?;
-
-    let mut stderr = String::new();
-    if let Some(mut s) = child.stderr {
-        let _ = s.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if !status.success() {
         eprintln!("[Snap Export] FFmpeg stderr:\n{stderr}");
@@ -358,6 +350,8 @@ pub struct CanvasExportRequest {
     pub click_times_ms: Vec<f64>,
     #[serde(rename = "audioMix", default)]
     pub audio_mix: CanvasAudioMix,
+    #[serde(rename = "audioTracks", default)]
+    pub audio_tracks: Vec<CanvasAudioTrack>,
     #[serde(rename = "trimStartSeconds", default)]
     pub trim_start_seconds: f64,
     #[serde(rename = "exportDurationSeconds", default)]
@@ -366,6 +360,16 @@ pub struct CanvasExportRequest {
     pub playback_rate: f64,
     #[serde(rename = "captionSrt", default)]
     pub caption_srt: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasAudioTrack {
+    pub path: String,
+    pub label: String,
+    pub kind: String,
+    pub muted: bool,
+    pub volume: f64,
 }
 
 fn default_playback_rate() -> f64 {
@@ -529,42 +533,85 @@ pub async fn finalize_canvas_export(
         // The canvas WebM has already been recorded at the selected clip
         // speed. Source WAVs still use original recording time, so retime only
         // those tracks; generated click audio is already placed in output time.
-        let mut audio_sources: Vec<(usize, f64, &str, bool)> = Vec::new();
+        let mut audio_sources: Vec<(usize, f64, String, bool)> = Vec::new();
         let mut input_index = 1usize;
-        if has_sys && !request.audio_mix.system_muted {
-            if request.trim_start_seconds > 0.0 {
-                args.push("-ss".into());
-                args.push(format!("{:.6}", request.trim_start_seconds));
+        let requested_audio = request
+            .audio_tracks
+            .iter()
+            .filter(|track| {
+                !track.muted
+                    && std::fs::metadata(&track.path)
+                        .map(|metadata| metadata.len() > 0)
+                        .unwrap_or(false)
+                    && if track.kind == "microphone" {
+                        !request.audio_mix.mic_muted
+                    } else if track.kind == "system" || track.kind == "device" {
+                        !request.audio_mix.system_muted
+                    } else {
+                        true
+                    }
+            })
+            .collect::<Vec<_>>();
+
+        if !request.audio_tracks.is_empty() {
+            for track in requested_audio {
+                if request.trim_start_seconds > 0.0 {
+                    args.push("-ss".into());
+                    args.push(format!("{:.6}", request.trim_start_seconds));
+                }
+                args.push("-i".into());
+                args.push(track.path.clone());
+                let channel_volume = if track.kind == "microphone" {
+                    request.audio_mix.mic_volume / 100.0
+                } else if track.kind == "system" || track.kind == "device" {
+                    request.audio_mix.system_volume / 100.0
+                } else {
+                    1.0
+                };
+                audio_sources.push((
+                    input_index,
+                    channel_volume * track.volume.clamp(0.0, 2.0),
+                    track.label.clone(),
+                    true,
+                ));
+                input_index += 1;
             }
-            args.push("-i".into());
-            args.push(sys_wav.to_string_lossy().to_string());
-            audio_sources.push((
-                input_index,
-                request.audio_mix.system_volume / 100.0,
-                "Desktop audio",
-                true,
-            ));
-            input_index += 1;
-        }
-        if has_mic && !request.audio_mix.mic_muted {
-            if request.trim_start_seconds > 0.0 {
-                args.push("-ss".into());
-                args.push(format!("{:.6}", request.trim_start_seconds));
+        } else {
+            if has_sys && !request.audio_mix.system_muted {
+                if request.trim_start_seconds > 0.0 {
+                    args.push("-ss".into());
+                    args.push(format!("{:.6}", request.trim_start_seconds));
+                }
+                args.push("-i".into());
+                args.push(sys_wav.to_string_lossy().to_string());
+                audio_sources.push((
+                    input_index,
+                    request.audio_mix.system_volume / 100.0,
+                    "Desktop audio".into(),
+                    true,
+                ));
+                input_index += 1;
             }
-            args.push("-i".into());
-            args.push(mic_wav.to_string_lossy().to_string());
-            audio_sources.push((
-                input_index,
-                request.audio_mix.mic_volume / 100.0,
-                "Microphone",
-                true,
-            ));
-            input_index += 1;
+            if has_mic && !request.audio_mix.mic_muted {
+                if request.trim_start_seconds > 0.0 {
+                    args.push("-ss".into());
+                    args.push(format!("{:.6}", request.trim_start_seconds));
+                }
+                args.push("-i".into());
+                args.push(mic_wav.to_string_lossy().to_string());
+                audio_sources.push((
+                    input_index,
+                    request.audio_mix.mic_volume / 100.0,
+                    "Microphone".into(),
+                    true,
+                ));
+                input_index += 1;
+            }
         }
         if has_clicks {
             args.push("-i".into());
             args.push(click_wav.to_string_lossy().to_string());
-            audio_sources.push((input_index, 1.0, "Click effects", false));
+            audio_sources.push((input_index, 1.0, "Click effects".into(), false));
             input_index += 1;
         }
 
@@ -699,22 +746,15 @@ pub async fn finalize_canvas_export(
         args.join(" ")
     );
 
-    let mut child = background_command("ffmpeg")
+    let output = background_command("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
-
-    let status = child
-        .wait()
-        .map_err(|e| format!("FFmpeg wait error: {e}"))?;
-
-    let mut stderr = String::new();
-    if let Some(mut s) = child.stderr {
-        let _ = s.read_to_string(&mut stderr);
-    }
+    let status = output.status;
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if !status.success() {
         eprintln!("[Snap Export] FFmpeg stderr:\n{stderr}");
@@ -784,5 +824,25 @@ mod tests {
         assert!(filter.contains("zoompan"));
         assert!(filter.contains("2.00000"));
         assert!(filter.contains("fps=60"));
+    }
+
+    #[test]
+    fn canvas_export_accepts_project_audio_tracks() {
+        let request: CanvasExportRequest = serde_json::from_value(serde_json::json!({
+            "tempWebmPath": "temp.webm",
+            "inputVideo": "recording.mp4",
+            "exportSettings": {
+                "format": "mp4", "fps": 30, "width": 1280, "height": 720,
+                "quality": "medium", "outputPath": "output.mp4"
+            },
+            "audioTracks": [{
+                "path": "music.wav", "label": "Music", "kind": "imported",
+                "muted": false, "volume": 0.65
+            }]
+        }))
+        .expect("canvas export request");
+        assert_eq!(request.audio_tracks.len(), 1);
+        assert_eq!(request.audio_tracks[0].kind, "imported");
+        assert_eq!(request.audio_tracks[0].volume, 0.65);
     }
 }

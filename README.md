@@ -27,8 +27,10 @@ exports without uploading recordings to a cloud service.
 This release concentrates on smooth post-recording playback, dependable
 captions, and a calmer editor workflow:
 
-- Recording fragments are compiled into a constant-frame-rate, fast-start MP4
-  before editing, with a visible preparation stage instead of an unresponsive dock.
+- Live capture is constant-frame-rate and normally becomes an editor-ready MP4
+  through a fast stream copy; older/recovered VFR fragments retain the safe conversion path.
+- Automatic performance mode probes working encoders and selects a conservative
+  profile for dedicated, integrated, or CPU-only systems.
 - Preview composition follows decoded frames directly and re-arms itself after
   replay, seeking, or decoder recovery without duplicating canvas work.
 - Captions retain speech-aligned timestamps, resolve overlapping transcription
@@ -45,7 +47,7 @@ captions, and a calmer editor workflow:
 
 - Full-screen, custom-region, window, Android USB, and iPhone/iPad UVC capture
 - Hardware-oriented native recording with a lightweight floating control dock
-- Independent microphone, desktop, and supported mobile-device audio tracks
+- Independent microphone, desktop, camera, and supported mobile-device tracks
 - Offline English, Hindi, and multilingual transcription with editable captions
 - Burned-in captions plus SRT, VTT, and embedded MP4 subtitle export
 - Editable Auto Zoom plus manual zoom regions with focus points and easing
@@ -66,11 +68,19 @@ captions, and a calmer editor workflow:
 - Windows 10 or Windows 11, 64-bit
 - Microsoft WebView2 Runtime
 - Internet access on first use if FFmpeg or offline caption dependencies need installation
-- A supported GPU/driver for hardware-accelerated capture where available
+- A current Windows display driver is recommended. Snap tries NVENC, AMD AMF,
+  Intel Quick Sync, and Windows Media Foundation, then can use a low-priority
+  CPU compatibility encoder when no GPU encoder is available.
 
 Snap can install FFmpeg and the offline whisper.cpp caption engine when they
 are missing. The multilingual speech model is stored per user rather than
 embedded in every installer.
+
+Automatic performance mode is the default. It verifies which hardware encoder
+can actually start and chooses 1080p/30 on suitable dedicated GPUs, 720p/30 on
+integrated graphics, or 540p–720p/24–30 with a bounded low-priority CPU encoder.
+Manual mode provides 24/30/60 FPS, 2–50 Mbps bitrate, and native/1080p/720p
+limits. Camera capture is opt-in and defaults off for the lowest background load.
 
 ### To develop Snap
 
@@ -159,6 +169,8 @@ Videos/
         ├── events.json
         ├── system_audio.wav
         ├── mic_audio.wav
+        ├── camera.mp4
+        ├── camera.json
         └── device_audio.wav
 ```
 
