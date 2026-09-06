@@ -8,6 +8,7 @@
     "opener:default",
     "process:allow-restart",
     "dialog:allow-open",
+    "dialog:allow-save",
     "updater:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",

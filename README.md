@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-4.0.0-10b981?style=flat-square" alt="Version 4.0.0" />
+    <img src="https://img.shields.io/badge/version-5.0.0-10b981?style=flat-square" alt="Version 5.0.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,26 +22,26 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 4.0.0
+## Snap 5.0.0
 
-This release concentrates on smooth post-recording playback, dependable
-captions, and a calmer editor workflow:
+Snap 5 focuses on lightweight recording, reliable recovery, precise captions,
+and a complete editor refresh:
 
-- Live capture is constant-frame-rate and normally becomes an editor-ready MP4
-  through a fast stream copy; older/recovered VFR fragments retain the safe conversion path.
-- Automatic performance mode probes working encoders and selects a conservative
-  profile for dedicated, integrated, or CPU-only systems.
-- Preview composition follows decoded frames directly and re-arms itself after
-  replay, seeking, or decoder recovery without duplicating canvas work.
-- Captions retain speech-aligned timestamps, resolve overlapping transcription
-  segments, and complete entrance animations before short phrases disappear.
-- Dense caption clips keep their real timeline duration and empty Zoom rows hide
-  automatically when the last zoom region is removed.
-- Presets use a roomier, more consistent popover layout.
-- Neutral Vercel-inspired dark and light surfaces replace the previous warm and
-  blue-violet editor colors, with a restrained green interaction accent.
-- Stop feedback is immediate: the floating dock acknowledges the action, closes,
-  and hands progress to the recording preparation surface.
+- Automatic recording uses hardware encoding with a conservative 720p/30 profile;
+  CPU compatibility recording is available only when explicitly selected.
+- The capture path avoids synchronous frame readback and keeps encoder diagnostics
+  bounded, reducing CPU, GPU, RAM, and VRAM pressure during games and creative work.
+- The editor has new neutral light and dark themes, clearer layouts and states,
+  twenty distinct gradients, improved text, additional shapes, and advanced masks.
+- Camera movement supports per-region easing, cinematic curves, smooth sine motion,
+  and corrected motion-blur compositing in preview and export.
+- Timeline duration is recovered natively when browser metadata is incomplete.
+  Unplayable MP4s receive a cached fast-start preview without changing the original.
+- Playback, pause, seek, and boundary jumps avoid unnecessary decoder rebuilds.
+- Offline captions install once per PC, verify downloaded files, persist locally,
+  and align captions to measured speech activity without an artificial reveal delay.
+- Recording and project files use scoped access, bounded IPC, atomic project saves,
+  safer export destinations, and crash-recoverable recording fragments.
 
 ## What Snap includes
 
@@ -73,14 +73,13 @@ captions, and a calmer editor workflow:
   CPU compatibility encoder when no GPU encoder is available.
 
 Snap can install FFmpeg and the offline whisper.cpp caption engine when they
-are missing. The multilingual speech model is stored per user rather than
-embedded in every installer.
+are missing. Verified caption binaries and the multilingual speech model are
+stored per user and reused instead of being downloaded for every project.
 
-Automatic performance mode is the default. It verifies which hardware encoder
-can actually start and chooses 1080p/30 on suitable dedicated GPUs, 720p/30 on
-integrated graphics, or 540p–720p/24–30 with a bounded low-priority CPU encoder.
-Manual mode provides 24/30/60 FPS, 2–50 Mbps bitrate, and native/1080p/720p
-limits. Camera capture is opt-in and defaults off for the lowest background load.
+Automatic performance mode is the default. It verifies a working hardware
+encoder and records at a conservative 720p/30 profile. Manual mode provides
+24/30/60 FPS, 2–50 Mbps bitrate, native/1080p/720p limits, and an explicit CPU
+compatibility option. Camera capture is opt-in and defaults off.
 
 ### To develop Snap
 
@@ -195,8 +194,8 @@ layouts when opening previous recordings.
 | Renderer | `src/lib/canvasDraw.ts` | Shared preview and export drawing primitives |
 | Export | `src/lib/canvasExport.ts` | Frame compositing and FFmpeg encoding |
 
-Recording remains native and lightweight. The heavier React editor is used
-after capture, where timeline editing and rich visual rendering are appropriate.
+Recording remains native and lightweight. The heavier React editor loads after
+capture, where timeline editing and rich visual rendering are appropriate.
 
 ## Updates and releases
 

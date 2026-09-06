@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::Stdio;
 use std::sync::{Mutex as StdMutex, OnceLock};
+use tauri::Manager;
 
 use crate::process::background_command;
 
@@ -63,7 +64,21 @@ pub struct ExportRequest {
 /// The editor now uses `finalize_canvas_export` (below) instead, which
 /// encodes the exact frames the canvas preview draws — true WYSIWYG.
 #[tauri::command]
-pub async fn export_video(request: ExportRequest) -> std::result::Result<String, String> {
+pub async fn export_video(
+    app: tauri::AppHandle,
+    request: ExportRequest,
+) -> std::result::Result<String, String> {
+    crate::access::require(&app, std::path::Path::new(&request.input_video))?;
+    crate::access::require(
+        &app,
+        std::path::Path::new(&request.export_settings.output_path),
+    )?;
+    if request
+        .input_video
+        .eq_ignore_ascii_case(&request.export_settings.output_path)
+    {
+        return Err("Export cannot overwrite the original recording".into());
+    }
     eprintln!("[Snap Export] Starting export...");
     eprintln!("[Snap Export] Input: {}", request.input_video);
     eprintln!(
@@ -305,9 +320,31 @@ fn export_sink() -> &'static StdMutex<Option<BufWriter<File>>> {
 /// Open (create/truncate) the temp file that streamed WebM chunks are
 /// written into. Must be called before any `write_export_chunk` calls.
 #[tauri::command]
-pub fn open_export_sink(path: String) -> std::result::Result<(), String> {
-    let file = File::create(&path).map_err(|e| format!("Cannot create export temp file: {e}"))?;
+pub fn open_export_sink(
+    app: tauri::AppHandle,
+    path: String,
+    output_path: String,
+) -> std::result::Result<(), String> {
+    let output = std::path::Path::new(&output_path);
+    crate::access::require(&app, output)?;
+    let expected = output.with_extension("snapexport.webm");
+    if std::path::Path::new(&path) != expected {
+        return Err("Invalid export staging path".into());
+    }
+    for allowed in [
+        expected,
+        output.with_extension("srt"),
+        output.with_extension("vtt"),
+    ] {
+        app.asset_protocol_scope()
+            .allow_file(allowed)
+            .map_err(|e| e.to_string())?;
+    }
     let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Err("Another export is already running".into());
+    }
+    let file = File::create(&path).map_err(|e| format!("Cannot create export temp file: {e}"))?;
     *guard = Some(BufWriter::new(file));
     Ok(())
 }
@@ -461,9 +498,31 @@ fn write_click_track(
 /// audio and transcode to the user's chosen output format.
 #[tauri::command]
 pub async fn finalize_canvas_export(
+    app: tauri::AppHandle,
     request: CanvasExportRequest,
 ) -> std::result::Result<String, String> {
     let settings = &request.export_settings;
+    crate::access::require(&app, std::path::Path::new(&settings.output_path))?;
+    crate::access::require(&app, std::path::Path::new(&request.input_video))?;
+    crate::access::require(&app, std::path::Path::new(&request.temp_webm_path))?;
+    if settings
+        .output_path
+        .eq_ignore_ascii_case(&request.input_video)
+    {
+        return Err("Export cannot overwrite the original recording".into());
+    }
+    if !["mp4", "gif"].contains(&settings.format.as_str())
+        || !(1..=60).contains(&settings.fps)
+        || !(2..=7680).contains(&settings.width)
+        || !(2..=4320).contains(&settings.height)
+        || !request.export_duration_seconds.is_finite()
+        || !(0.0..=86400.0).contains(&request.export_duration_seconds)
+    {
+        return Err("Invalid export dimensions, frame rate or duration".into());
+    }
+    for track in &request.audio_tracks {
+        crate::access::require(&app, std::path::Path::new(&track.path))?;
+    }
     let playback_rate = request.playback_rate.clamp(0.5, 2.0);
 
     eprintln!(

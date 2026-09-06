@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
@@ -122,6 +122,8 @@ export default function Preview({
   const cameraRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
   const [videoReady, setVideoReady] = useState(false);
+  const [playbackPath, setPlaybackPath] = useState(videoPath);
+  const previewRepairAttemptedRef = useRef(false);
   const decodedFrameCallbackRef = useRef<number | null>(null);
   const renderRef = useRef<() => void>(() => {});
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
@@ -173,6 +175,31 @@ export default function Preview({
 
   // Cache resolved CSS variable colors ONCE — never call getComputedStyle inside rAF.
   const colorsRef = useRef({ shadow: "#0f172a", crop: "rgba(0,0,0,0.45)", border: "#ffffff", cursorWhite: "#ffffff" });
+
+  useEffect(() => {
+    setPlaybackPath(videoPath);
+    setVideoReady(false);
+    setLoadError("");
+    previewRepairAttemptedRef.current = false;
+  }, [videoPath]);
+
+  const repairPreview = useCallback(() => {
+    if (previewRepairAttemptedRef.current || /^https?:\/\//i.test(videoPath)) return;
+    previewRepairAttemptedRef.current = true;
+    setLoadError("Preparing a playable preview…");
+    void invoke<string>("prepare_editor_preview", { path: videoPath })
+      .then((path) => {
+        setPlaybackPath(path);
+        setLoadError("");
+      })
+      .catch((error) => setLoadError(`Video preview could not be prepared: ${error}`));
+  }, [videoPath]);
+
+  useEffect(() => {
+    if (videoReady) return;
+    const timer = window.setTimeout(repairPreview, 2_500);
+    return () => window.clearTimeout(timer);
+  }, [repairPreview, videoReady]);
 
   // Resolve CSS variable colors once on mount
   useEffect(() => {
@@ -303,8 +330,9 @@ export default function Preview({
     const dur = video.duration;
     const vw = video.videoWidth;
     const vh = video.videoHeight;
+    if (Number.isFinite(dur) && dur > 0) onDuration(dur);
+    if (vw <= 0 || vh <= 0) return;
     videoMetaRef.current = { w: vw, h: vh, d: dur };
-    onDuration(dur);
     setVideoReady(true);
     computeCanvasSize(vw, vh);
   };
@@ -477,7 +505,7 @@ export default function Preview({
     // ── Interpolate Zoom ──────────────────────────────────────────────────
     // Shared with the export renderer via lib/canvasDraw.resolveZoom so both
     // compute the exact same pan/zoom for a given timestamp.
-    const zoomResult = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart);
+    const zoomResult = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
     const zoomX = zoomResult.x, zoomY = zoomResult.y, zoomScale = zoomResult.scale;
     if (config.zoomEnabled && keyframes.length > 0) {
       const z = Math.round(zoomScale * 100) / 100;
@@ -743,7 +771,7 @@ export default function Preview({
       const lh = layer.h * videoH;
 
       ctx.save();
-      ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
+      ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity ?? 1));
       ctx.translate(lx + lw / 2, ly + lh / 2);
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
@@ -1238,7 +1266,7 @@ export default function Preview({
     videoRef.current = element;
     onMediaElementChange?.(element);
   }, [onMediaElementChange]);
-  const videoUrl = videoPath.startsWith("/") || /^https?:\/\//i.test(videoPath) ? videoPath : convertFileSrc(videoPath);
+  const videoUrl = playbackPath.startsWith("/") || /^https?:\/\//i.test(playbackPath) ? playbackPath : convertFileSrc(playbackPath);
 
   return (
     <div
@@ -1274,10 +1302,14 @@ export default function Preview({
         playsInline
         className="preview-media-source"
         onLoadedMetadata={onMetadata}
+        onDurationChange={onMetadata}
+        onLoadedData={() => { onMetadata(); renderRef.current(); }}
+        onSeeked={() => renderRef.current()}
         onError={(e) => {
           const el = e.currentTarget as HTMLVideoElement;
           const err = el.error;
-          setLoadError(`Video failed to load: ${err?.message || err?.code || "unknown error"}`);
+          repairPreview();
+          setLoadError((current) => current || `Video failed to load: ${err?.message || err?.code || "unknown error"}`);
           console.error("[Snap Preview] video load error:", err);
         }}
       />

@@ -33,7 +33,7 @@ function formatEstimate(seconds: number) {
 }
 
 export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, onClose, onExport }: Props) {
-  const defaultPath = videoPath.replace(/\.mp4$/i, "_edited.mp4");
+  const defaultPath = videoPath.replace(/\.[^\\/.]+$/i, "_edited.mp4");
   const [settings, setSettings] = useState<ExportSettings>({
     format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false,
   });
@@ -58,7 +58,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
       width: preset.width,
       height: preset.height,
       fps: preset.fps,
-      outputPath: videoPath.replace(/\.mp4$/i, `_${preset.id}.${extension}`),
+      outputPath: videoPath.replace(/\.[^\\/.]+$/i, `_${preset.id}.${extension}`),
     }));
   };
 

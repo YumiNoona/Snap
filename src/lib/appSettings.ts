@@ -17,7 +17,7 @@ export interface AutomaticRecordingProfile {
   };
 }
 
-export const AUTOMATIC_PROFILE_VERSION = 2;
+export const AUTOMATIC_PROFILE_VERSION = 3;
 
 export interface AppSettings {
   borderStyle: BorderStyle;
@@ -47,7 +47,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recordingFps: 30,
   recordingBitrateMbps: 8,
   recordingResolution: "1080p",
-  allowSoftwareEncoder: true,
+  allowSoftwareEncoder: false,
   automaticRecordingProfile: null,
 };
 
@@ -75,7 +75,7 @@ export function readAppSettings(): AppSettings {
       recordingFps,
       recordingBitrateMbps,
       recordingResolution,
-      allowSoftwareEncoder: stored.allowSoftwareEncoder !== false,
+      allowSoftwareEncoder: stored.allowSoftwareEncoder === true,
       automaticRecordingProfile,
     };
   } catch {

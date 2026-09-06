@@ -4,7 +4,6 @@ import type { AudioMixConfig, AudioTrack } from "../../../lib/types";
 import {
   clampPlaybackTime,
   isAtPlaybackBoundary,
-  shouldRebuildForSeek,
   shouldRecoverStalledPlayback,
   shouldResyncSidecar,
 } from "../../../lib/playbackTransport";
@@ -95,10 +94,10 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
 
   const playSidecars = useCallback((video: HTMLVideoElement, generation: number) => {
     applyAudioMix();
-    syncSidecars(video, true);
+    syncSidecars(video);
     for (const track of audioTracksRef.current) {
       const element = audioElementsRef.current.get(track.id);
-      if (!element || trackIsMuted(track)) continue;
+      if (!element || trackIsMuted(track) || !element.paused) continue;
       void element.play().catch((error) => {
         if (generation === generationRef.current && wantsPlaybackRef.current) {
           console.warn(`[Snap] ${track.label} preview playback failed:`, error);
@@ -165,40 +164,10 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     });
   }, []);
 
-  const waitForPresentedFrame = useCallback((
-    video: HTMLVideoElement,
-    signal: AbortSignal,
-    accepts: (mediaTime: number) => boolean,
-  ) => {
-    if (typeof video.requestVideoFrameCallback !== "function") return Promise.resolve(true);
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      let callbackId: number | null = null;
-      let timer = 0;
-      const finish = (value: boolean) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timer);
-        if (callbackId !== null) video.cancelVideoFrameCallback(callbackId);
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      };
-      const requestNext = () => {
-        callbackId = video.requestVideoFrameCallback((_now, metadata) => {
-          callbackId = null;
-          if (accepts(metadata.mediaTime)) finish(true);
-          else if (!signal.aborted) requestNext();
-        });
-      };
-      const onAbort = () => finish(false);
-      signal.addEventListener("abort", onAbort, { once: true });
-      timer = window.setTimeout(() => finish(false), MEDIA_OPERATION_TIMEOUT_MS);
-      requestNext();
-    });
-  }, []);
-
   const seekMedia = useCallback(async (video: HTMLVideoElement, time: number, signal: AbortSignal) => {
     const target = Math.max(0, time);
+    if (signal.aborted) return false;
+    if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && Math.abs(video.currentTime - target) < .001) return true;
     try { video.currentTime = target; } catch { return false; }
     const mediaReady = await waitForMedia(video, signal, ["seeked", "loadeddata", "canplay"], () => (
       video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
@@ -206,11 +175,10 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       && Math.abs(video.currentTime - target) < .09
     ));
     if (!mediaReady || signal.aborted) return false;
-    // A seek is not complete for this canvas-based editor until the target
-    // frame has actually been presented. WebView2 can otherwise report
-    // `seeked` while drawImage() still exposes the pre-seek texture.
-    return waitForPresentedFrame(video, signal, (mediaTime) => Math.abs(mediaTime - target) < .18);
-  }, [waitForMedia, waitForPresentedFrame]);
+    // seeked already makes the decoded frame available to drawImage. Waiting
+    // for a *new* presentation callback here deadlocks paused/hidden video.
+    return true;
+  }, [waitForMedia]);
 
   const reloadMediaAt = useCallback(async (video: HTMLVideoElement, time: number, signal: AbortSignal) => {
     video.pause();
@@ -225,7 +193,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
 
   const confirmPlay = useCallback((video: HTMLVideoElement, signal: AbortSignal, initialTime: number) => (
     waitForMedia(video, signal, ["playing", "timeupdate"], () => (
-      !video.paused && !video.ended && video.currentTime > initialTime + .001
+      !video.paused && !video.ended && (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA || video.currentTime > initialTime + .001)
     ))
   ), [waitForMedia]);
 
@@ -241,6 +209,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     video.defaultPlaybackRate = rate;
     video.playbackRate = rate;
     const initialTime = video.currentTime;
+    lastProgressRef.current = { mediaTime: initialTime, wallTime: performance.now() };
     let playCall: Promise<void>;
     try {
       playCall = video.play();
@@ -252,10 +221,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     // confirmed by media state or a media event before the UI shows Pause.
     const playFailure = new Promise<boolean>((resolve) => { void playCall.catch(() => resolve(false)); });
     const confirmed = await Promise.race([
-      Promise.all([
-        confirmPlay(video, signal, initialTime),
-        waitForPresentedFrame(video, signal, (mediaTime) => mediaTime > initialTime + .001),
-      ]).then((results) => results.every(Boolean)),
+      confirmPlay(video, signal, initialTime),
       playFailure,
       new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), PLAY_PROGRESS_TIMEOUT_MS)),
     ]);
@@ -274,7 +240,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     setCurrentTime(video.currentTime);
     setStatus("playing");
     playSidecars(video, generation);
-  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, playbackRate, setStatus, waitForPresentedFrame]);
+  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, playbackRate, setStatus]);
 
   const recover = useCallback((time: number) => {
     const video = videoRef.current;
@@ -332,7 +298,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     if (rebuild) {
       setStatus("recovering");
       recoveryActiveRef.current = true;
-      void reloadMediaAt(video, startAt, signal).then((ready) => {
+      void seekMedia(video, startAt, signal).then((ready) => {
         recoveryActiveRef.current = false;
         if (!ready || !commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) return;
         syncSidecars(video, true);
@@ -341,7 +307,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       return;
     }
     void requestPlay(video, generation, signal, true);
-  }, [beginCommand, commandIsCurrent, duration, primeSidecars, reloadMediaAt, requestPlay, setStatus, syncSidecars]);
+  }, [beginCommand, commandIsCurrent, duration, primeSidecars, seekMedia, requestPlay, setStatus, syncSidecars]);
 
   const toggle = useCallback(() => {
     const video = videoRef.current;
@@ -354,13 +320,6 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     const video = videoRef.current;
     const end = boundsRef.current.end || video?.duration || duration || time;
     const clamped = clampPlaybackTime(time, boundsRef.current.start, end);
-    const rebuildDecoder = !!video && shouldRebuildForSeek({
-      currentTime: video.currentTime,
-      targetTime: clamped,
-      start: boundsRef.current.start,
-      end,
-      ended: video.ended,
-    });
     const resumeAfterSeek = wantsPlaybackRef.current;
     const { generation, signal } = beginCommand();
     setStatus("seeking");
@@ -370,9 +329,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     }
     setCurrentTime(clamped);
     if (!video) return;
-    const seekOperation = rebuildDecoder
-      ? reloadMediaAt(video, clamped, signal)
-      : seekMedia(video, clamped, signal);
+    const seekOperation = seekMedia(video, clamped, signal);
     void seekOperation.then((ready) => {
       if (!commandIsCurrent(generation, signal)) return;
       if (!ready) {
@@ -384,7 +341,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       if (resumeAfterSeek && wantsPlaybackRef.current) void requestPlay(video, generation, signal, true);
       else setStatus("paused");
     });
-  }, [beginCommand, commandIsCurrent, duration, pauseSidecars, reloadMediaAt, requestPlay, seekMedia, setStatus, syncSidecars]);
+  }, [beginCommand, commandIsCurrent, duration, pauseSidecars, requestPlay, seekMedia, setStatus, syncSidecars]);
 
   useEffect(() => {
     const elements = new Map<string, HTMLAudioElement>();

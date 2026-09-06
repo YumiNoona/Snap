@@ -6,7 +6,7 @@ import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
 import DeviceView from "./components/RecorderLauncher/DeviceView";
 import RecordingDock from "./components/RecorderLauncher/RecordingDock";
 import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
-import Editor from "./components/Editor/Editor";
+const Editor = React.lazy(() => import("./components/Editor/Editor"));
 import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
 import SettingsWindow from "./components/Settings/SettingsWindow";
 import LibraryWindow from "./components/LibraryWindow";

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { MousePointer, MousePointer2, Type, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
@@ -136,8 +136,22 @@ export default function Panels({
         setCaptionStatus("No audible speech was found on this track. No caption layer was added.");
         return;
       }
-      onCaptionTracksChange([...captionTracks, track]);
-      setCaptionStatus(`Created ${track.segments.length} editable caption segments`);
+      const existingIndex = captionTracks.findIndex((candidate) =>
+        candidate.sourceTrackIds.length === 1 && candidate.sourceTrackIds[0] === sourceTrack.id
+      );
+      if (existingIndex >= 0) {
+        onCaptionTracksChange(captionTracks.map((candidate, index) => index === existingIndex ? {
+          ...track,
+          id: candidate.id,
+          visible: candidate.visible,
+          burnedIn: candidate.burnedIn,
+          style: { ...track.style, ...candidate.style, animation: "none", animationDurationMs: 0 },
+        } : candidate));
+        setCaptionStatus(`Re-synced ${track.segments.length} captions to the speech waveform`);
+      } else {
+        onCaptionTracksChange([...captionTracks, track]);
+        setCaptionStatus(`Created ${track.segments.length} speech-synced caption segments`);
+      }
     } catch (error) {
       setCaptionStatus(`Transcription failed: ${error}`);
     } finally {
@@ -215,7 +229,7 @@ export default function Panels({
     const timing = layerTiming();
     return {
       id: genId(), type: "text", ...timing, x: 0.2, y: 0.4, w: 0.6, h: 0.16,
-      content: style === "badge" ? "1" : "Text", style, color: "#ffffff", fontSize: 24,
+      content: "Text", style, color: "#ffffff", fontSize: 24,
       fontFamily: "system", fontWeight: 700, align: "center", backgroundColor: "#059669",
       letterSpacing: 0, opacity: 1, rotation: 0, flipX: false, flipY: false,
     };
@@ -395,10 +409,10 @@ export default function Panels({
           {!selectedLayer && <>
           <Section title="Text">
             <div className="annotation-card-grid">
-              {(["plain", "boxed", "pill", "badge"] as TextLayer["style"][]).map((style) => (
+              {(["plain", "boxed", "pill"] as TextLayer["style"][]).map((style) => (
                 <button type="button" key={style} className="annotation-card icon-choice" onClick={() => addLayer(makeTextLayer(style))} aria-label={`Add ${style} text`} data-tooltip={style.charAt(0).toUpperCase() + style.slice(1)}>
                   <div className={`annotation-preview text-preview text-preview-${style}`}>
-                    <Type size={20} />
+                    <span className="text-style-example">{style === "plain" ? "Text" : style === "boxed" ? "Boxed" : "Pill"}</span>
                   </div>
                 </button>
               ))}
@@ -408,6 +422,9 @@ export default function Panels({
           <Section title="Shape">
             <div className="annotation-card-grid">
               {([
+                { shape: "triangle" as const, label: "Triangle", color: "#a78bfa", icon: <Triangle size={18} /> },
+                { shape: "diamond" as const, label: "Diamond", color: "#38bdf8", icon: <Diamond size={18} /> },
+                { shape: "star" as const, label: "Star", color: "#fbbf24", icon: <Star size={18} /> },
                 { shape: "line" as const, label: "Line", color: "#ef4444", icon: <Minus size={16} color="#ef4444" /> },
                 { shape: "dashedLine" as const, label: "Dashed", color: "#ef4444", icon: <PenLine size={16} color="#ef4444" /> },
                 { shape: "arrow" as const, label: "Arrow", color: "#ef4444", icon: <ArrowRight size={16} color="#ef4444" /> },
@@ -451,13 +468,15 @@ export default function Panels({
                 {selectedLayer.type === "text" && (
                   <>
                     <label className="layer-field-stack"><span>Content</span><textarea className="layer-textarea" rows={3} value={selectedLayer.content} onChange={(e) => updateSelectedLayer({ content: e.target.value })} /></label>
-                    <SelectRow label="Style" value={selectedLayer.style} options={["plain", "boxed", "pill", "badge"]} onChange={(style) => updateSelectedLayer({ style: style as TextLayer["style"] })} />
+                    <SelectRow label="Style" value={selectedLayer.style === "badge" ? "boxed" : selectedLayer.style} options={["plain", "boxed", "pill"]} onChange={(style) => updateSelectedLayer({ style: style as TextLayer["style"] })} />
                     <SelectRow label="Typeface" value={selectedLayer.fontFamily ?? "system"} options={["system", "serif", "mono"]} onChange={(fontFamily) => updateSelectedLayer({ fontFamily: fontFamily as TextLayer["fontFamily"] })} />
                     <SelectRow label="Weight" value={String(selectedLayer.fontWeight ?? 700)} options={["400", "500", "600", "700", "800"]} onChange={(fontWeight) => updateSelectedLayer({ fontWeight: Number(fontWeight) as TextLayer["fontWeight"] })} />
                     <ColorInput label="Text Color" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
                     {selectedLayer.style !== "plain" && <ColorInput label="Background" value={selectedLayer.backgroundColor ?? "#059669"} onChange={(backgroundColor) => updateSelectedLayer({ backgroundColor })} />}
                     <Slider label="Font Size" value={selectedLayer.fontSize} min={10} max={120} step={1} unit="px" onChange={(fontSize) => updateSelectedLayer({ fontSize })} />
                     <Slider label="Letter Space" value={selectedLayer.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateSelectedLayer({ letterSpacing })} />
+                    <Slider label="Line Height" value={selectedLayer.lineHeight ?? 1.3} min={1} max={2} step={0.05} unit="×" onChange={(lineHeight) => updateSelectedLayer({ lineHeight })} />
+                    {selectedLayer.style !== "plain" && <><Slider label="Padding" value={selectedLayer.padding ?? 12} min={0} max={40} step={1} unit="px" onChange={(padding) => updateSelectedLayer({ padding })} /><Slider label="Corner Radius" value={selectedLayer.cornerRadius ?? 8} min={0} max={60} step={1} unit="px" onChange={(cornerRadius) => updateSelectedLayer({ cornerRadius })} /></>}
                     <div className="layer-icon-pills" aria-label="Text alignment">
                       {([ ["left", AlignLeft], ["center", AlignCenter], ["right", AlignRight] ] as const).map(([align, Icon]) => <button key={align} className={(selectedLayer.align ?? "center") === align ? "active" : ""} onClick={() => updateSelectedLayer({ align })} title={`${align} align`}><Icon size={16} /></button>)}
                     </div>
@@ -465,7 +484,7 @@ export default function Panels({
                 )}
                 {selectedLayer.type === "shape" && (
                   <>
-                    <SelectRow label="Shape" value={selectedLayer.shape} options={["line", "dashedLine", "arrow", "rectangle", "roundedRect", "circle", "blob", "downArrow", "pointer"]} onChange={(shape) => updateSelectedLayer({ shape: shape as ShapeLayer["shape"] })} />
+                    <SelectRow label="Shape" value={selectedLayer.shape} options={["line", "dashedLine", "arrow", "rectangle", "roundedRect", "circle", "blob", "downArrow", "pointer", "triangle", "diamond", "star"]} onChange={(shape) => updateSelectedLayer({ shape: shape as ShapeLayer["shape"] })} />
                     <ColorInput label="Stroke" value={selectedLayer.color} onChange={(color) => updateSelectedLayer({ color })} />
                     <ColorInput label="Fill" value={selectedLayer.fillColor ?? selectedLayer.color} onChange={(fillColor) => updateSelectedLayer({ fillColor })} />
                     <Slider label="Stroke Width" value={selectedLayer.strokeWidth} min={1} max={24} step={1} unit="px" onChange={(strokeWidth) => updateSelectedLayer({ strokeWidth })} />
@@ -478,7 +497,9 @@ export default function Panels({
                   <>
                     <SelectRow label="Effect" value={selectedLayer.mask} options={["spotlight", "blur", "magnifier"]} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"] })} />
                     <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.1} onChange={(intensity) => updateSelectedLayer({ intensity })} />
-                    <Slider label="Edge Feather" value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />
+                    <SelectRow label="Mask Shape" value={selectedLayer.shape ?? "ellipse"} options={["ellipse", "rectangle"]} onChange={(shape) => updateSelectedLayer({ shape: shape as MaskLayer["shape"] })} />
+                    {selectedLayer.mask === "magnifier" && <><Slider label="Lens Border" value={selectedLayer.borderWidth ?? 3} min={0} max={12} step={1} unit="px" onChange={(borderWidth) => updateSelectedLayer({ borderWidth })} /><ColorInput label="Border Color" value={selectedLayer.borderColor ?? "#ffffff"} onChange={(borderColor) => updateSelectedLayer({ borderColor })} /></>}
+                    {selectedLayer.mask !== "blur" && <Slider label={selectedLayer.mask === "magnifier" ? "Lens Shadow" : "Edge Feather"} value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
                   </>
                 )}
               </Section>
@@ -524,7 +545,7 @@ export default function Panels({
             <Section title="Motion & timing">
               <Slider label="Transition in" value={selectedZoomRegion.transitionMs} min={40} max={Math.max(80, Math.min(2500, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(transitionMs) => onSelectedZoomChange({ transitionMs })} />
               <Slider label="Transition out" value={selectedZoomRegion.exitTransitionMs} min={40} max={Math.max(80, Math.min(2500, (selectedZoomRegion.endMs - selectedZoomRegion.startMs) / 2))} step={20} unit="ms" onChange={(exitTransitionMs) => onSelectedZoomChange({ exitTransitionMs })} />
-              <SelectRow label="Motion curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
+              <SelectRow label="Motion curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
               <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
               <Slider label="End" value={selectedZoomRegion.endMs / 1000} min={selectedZoomRegion.startMs / 1000 + 0.35} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ endMs: value * 1000 })} />
               <p className="panel-help-text">Drag the focus marker in the preview or use the nine-point framing grid. Timeline edges control the region duration.</p>
@@ -562,6 +583,7 @@ export default function Panels({
               </>
             )}
             <CheckRow label="Zoom Movement" checked={config.zoomMovement.enabled} onChange={(v) => updateZoomMov({ enabled: v })} />
+            <SelectRow label="Camera Curve" value={config.zoomMovement.curve ?? "keyframes"} options={["keyframes", "linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ keyframes: "Per region", linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(curve) => updateZoomMov({ curve: curve as EditorConfig["zoomMovement"]["curve"] })} />
             <SpeedPills speed={config.zoomMovement.speed} onChange={(speed) => updateZoomMov({ speed })} />
             {config.zoomMovement.speed === "custom" && (
               <Slider label="Duration" value={config.zoomMovement.durationMs} min={100} max={3000} step={100} unit="ms" onChange={(v) => updateZoomMov({ durationMs: v })} />
@@ -665,7 +687,7 @@ export default function Panels({
               {installingTranscription && <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>}
             </>}
             <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0 || transcriptionEnv?.available === false} onClick={() => void generateCaptions()}>
-              {transcribing ? "Transcribing…" : "Generate Captions"}
+              {transcribing ? "Transcribing…" : captionTracks.some((track) => track.sourceTrackIds.includes(captionSource)) ? "Regenerate Synced Captions" : "Generate Captions"}
             </button>
             {captionStatus && <p className="panel-help-text" role="status">{captionStatus}</p>}
           </Section>

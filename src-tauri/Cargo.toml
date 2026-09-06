@@ -1,6 +1,6 @@
 [package]
 name = "snap"
-version = "4.0.0"
+version = "5.0.0"
 description = "A native Windows screen recorder with an automatic motion editor"
 authors = ["Snap contributors"]
 edition = "2021"
@@ -25,6 +25,10 @@ tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "0.4"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+sha2 = "0.10"
+sha1 = "0.10"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 wasapi = "0.23"
 rdev = { version = "0.5", features = ["serialize"] }
@@ -47,6 +51,8 @@ windows = { version = "0.61", features = [
     "Win32_System_Performance",
     "Win32_System_Threading",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
     "Foundation",
     "Devices_Enumeration",
 ] }

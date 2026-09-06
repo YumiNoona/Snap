@@ -21,6 +21,7 @@ import { usePlaybackController } from "./hooks/usePlaybackController";
 import { discoverAudioTracks, findAvailableCaptionStart, mergeAudioTracks } from "../../lib/captions";
 import { loadProjectAtPath } from "../../lib/project";
 import { recordingDataPaths } from "../../lib/recordingPaths";
+import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
 import "./Editor.css";
 
 interface Props {
@@ -109,6 +110,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioError, setAudioError] = useState("");
   const [cameraMedia, setCameraMedia] = useState<{ path: string; startOffsetMs: number } | null>(null);
+  const metadataDurationRef = useRef(0);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
@@ -116,7 +118,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
   const [selectedCaption, setSelectedCaption] = useState<CaptionSegmentSelection | null>(null);
-  const [editorTheme, setEditorTheme] = useState<"dark" | "light">(() => localStorage.getItem(EDITOR_THEME_STORAGE_KEY) === "light" ? "light" : "dark");
+  const [editorTheme, setEditorTheme] = useState<"dark" | "light">(() => localStorage.getItem(EDITOR_THEME_STORAGE_KEY) === "dark" ? "dark" : "light");
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
@@ -131,6 +133,24 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
+
+  useEffect(() => {
+    if (isBrowserPreview || duration > 0) return;
+    let cancelled = false;
+    void invoke<number>("probe_media_duration", { path: videoPath })
+      .then((probedDuration) => {
+        if (cancelled || !Number.isFinite(probedDuration) || probedDuration <= 0) return;
+        const previous = metadataDurationRef.current;
+        metadataDurationRef.current = probedDuration;
+        setDuration(probedDuration);
+        setConfig((current) => {
+          const trimEnd = trimEndAfterDurationChange(current.trimEnd, previous, probedDuration);
+          return trimEnd === current.trimEnd ? current : { ...current, trimEnd };
+        });
+      })
+      .catch((error) => setAudioError((current) => current || `Could not read video duration: ${error}`));
+    return () => { cancelled = true; };
+  }, [duration, isBrowserPreview, videoPath]);
 
   useEffect(() => {
     localStorage.setItem(EDITOR_THEME_STORAGE_KEY, editorTheme);
@@ -423,6 +443,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setExportStatus("Exporting...");
     setExportProgress(0);
     try {
+      const selected = await saveDialog({ title: "Export video", defaultPath: settings.outputPath, filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }] });
+      if (!selected) { setExportStatus(""); return; }
+      settings = { ...settings, outputPath: selected };
+      if (selected.toLowerCase() === videoPath.toLowerCase()) throw new Error("Choose a different filename to preserve your source recording");
       const result = await runCanvasExport(
         videoPath,
         inputLogPath,
@@ -874,50 +898,56 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
             onClick={() => setActiveTool("canvas")}
+            aria-pressed={activeTool === "canvas"}
             title="Canvas & Background"
           >
-            <LayoutTemplate size={21} />
+            <LayoutTemplate size={21} /><span className="ss-tool-label">Canvas</span>
           </button>
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "cursor" ? "active" : ""}`}
             onClick={() => setActiveTool("cursor")}
+            aria-pressed={activeTool === "cursor"}
             title="Cursor & Pointer Styling"
           >
-            <MousePointer2 size={21} />
+            <MousePointer2 size={21} /><span className="ss-tool-label">Cursor</span>
           </button>
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "annotations" ? "active" : ""}`}
             onClick={() => setActiveTool("annotations")}
+            aria-pressed={activeTool === "annotations"}
             title="Annotations & Layers"
           >
-            <Type size={21} />
+            <Type size={21} /><span className="ss-tool-label">Layers</span>
           </button>
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "motion" ? "active" : ""}`}
             onClick={() => setActiveTool("motion")}
+            aria-pressed={activeTool === "motion"}
             title="Motion & Blur"
           >
-            <Sparkles size={21} />
+            <Sparkles size={21} /><span className="ss-tool-label">Motion</span>
           </button>
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "audio" ? "active" : ""}`}
             onClick={() => setActiveTool("audio")}
+            aria-pressed={activeTool === "audio"}
             title="Audio"
           >
-            <AudioWaveform size={21} />
+            <AudioWaveform size={21} /><span className="ss-tool-label">Audio</span>
           </button>
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "captions" ? "active" : ""}`}
             onClick={() => setActiveTool("captions")}
+            aria-pressed={activeTool === "captions"}
             title="Captions & Subtitles"
             aria-label="Captions and subtitles"
           >
-            <Captions size={21} />
+            <Captions size={21} /><span className="ss-tool-label">Captions</span>
           </button>
 
         </aside>
@@ -933,8 +963,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             onKeyframesChange={setKeyframes}
             playing={playing}
             onDuration={(d) => {
+              if (!Number.isFinite(d) || d <= 0) return;
+              const previous = metadataDurationRef.current;
+              metadataDurationRef.current = d;
               setDuration(d);
-              setConfig((c) => (c.trimEnd === 0 ? { ...c, trimEnd: d } : c));
+              setConfig((c) => {
+                const trimEnd = trimEndAfterDurationChange(c.trimEnd, previous, d);
+                return trimEnd === c.trimEnd ? c : { ...c, trimEnd };
+              });
             }}
             onMediaElementChange={setMediaElement}
             cropMode={cropMode}

@@ -68,3 +68,10 @@ export function shouldRecoverStalledPlayback(options: {
   const { wantsPlayback, paused, seeking, stalledForMs, thresholdMs = 1_500 } = options;
   return wantsPlayback && !paused && !seeking && stalledForMs >= thresholdMs;
 }
+
+/** Follow corrected media metadata only while the trim still covers the full clip. */
+export function trimEndAfterDurationChange(trimEnd: number, previousDuration: number, duration: number): number {
+  if (!Number.isFinite(duration) || duration <= 0) return trimEnd;
+  if (!Number.isFinite(trimEnd) || trimEnd <= 0 || Math.abs(trimEnd - previousDuration) < 0.001) return duration;
+  return Math.min(trimEnd, duration);
+}

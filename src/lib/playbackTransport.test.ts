@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampPlaybackTime, isAtPlaybackBoundary, isAuthoritativeTransportCommand, shouldRebuildForSeek, shouldRecoverStalledPlayback, shouldResyncSidecar } from "./playbackTransport";
+import { trimEndAfterDurationChange, clampPlaybackTime, isAtPlaybackBoundary, isAuthoritativeTransportCommand, shouldRebuildForSeek, shouldRecoverStalledPlayback, shouldResyncSidecar } from "./playbackTransport";
 
 describe("editor playback transport", () => {
   it("keeps seeks inside the active trim range", () => {
@@ -40,5 +40,17 @@ describe("editor playback transport", () => {
     expect(shouldRebuildForSeek({ currentTime: 99.95, targetTime: 0.03, start: 0, end: 100, ended: false })).toBe(true);
     expect(shouldRebuildForSeek({ currentTime: 60, targetTime: 10, start: 0, end: 100, ended: false })).toBe(false);
     expect(shouldRebuildForSeek({ currentTime: 20, targetTime: 0, start: 0, end: 100, ended: false })).toBe(false);
+  });
+});
+
+describe("progressive video metadata", () => {
+  it("expands the untrimmed clip when an initial fragment duration is corrected", () => {
+    const initial = trimEndAfterDurationChange(0, 0, .1);
+    expect(trimEndAfterDurationChange(initial, .1, 63.21)).toBe(63.21);
+  });
+  it("ignores unknown durations and preserves intentional trims", () => {
+    expect(trimEndAfterDurationChange(0, 0, Infinity)).toBe(0);
+    expect(trimEndAfterDurationChange(0, 0, NaN)).toBe(0);
+    expect(trimEndAfterDurationChange(12, 20, 63.21)).toBe(12);
   });
 });

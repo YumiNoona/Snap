@@ -7,7 +7,7 @@ Snap checks the latest public release at `YumiNoona/Snap` and verifies every upd
 1. Open the repository's **Settings → Secrets and variables → Actions** page.
 2. Create a repository secret named `TAURI_SIGNING_PRIVATE_KEY`.
 3. Set its value to the complete contents of:
-   `C:\Users\ringale\.tauri\snap-updater.key`
+   the updater private key generated and stored securely by the maintainer.
 
 Keep that file private and backed up. Never commit it. Losing it means existing installations cannot trust future updates.
 
@@ -16,7 +16,7 @@ Keep that file private and backed up. Never commit it. Losing it means existing 
 1. Increase the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 2. Commit and push the changes.
 3. Run the validation commands from `README.md`.
-4. Create and push a matching tag, for example `app-v4.0.0`.
+4. Create and push a matching tag, for example `app-v5.0.0`.
 
 The `Publish Snap update` GitHub workflow builds the Windows installers, signs the updater artifacts, publishes the release, and uploads `latest.json`. Existing Snap installations will then show the in-app update prompt and can download and install the release without opening a browser.
 

@@ -40,7 +40,10 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: "Snap v__VERSION__"
-          releaseBody: "Install this release normally or update directly inside Snap."
+          releaseBody: |
+            Snap 5 delivers a lighter hardware-encoded recording path and a redesigned editor with dependable timeline playback, native duration recovery, improved text, shapes, masks, gradients, camera curves, and motion blur. Offline captions now install once, remain cached on the PC, and align more closely with audible speech. File access, project saves, exports, and recording recovery also received security and reliability improvements.
+
+            Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

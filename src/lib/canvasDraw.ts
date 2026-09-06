@@ -353,29 +353,39 @@ export function drawTextLayer(
 ) {
   ctx.save();
   const fontSize = Math.max(8, layer.fontSize);
-  const family = layer.fontFamily === "serif"
-    ? "Georgia, serif"
-    : layer.fontFamily === "mono" ? "ui-monospace, Consolas, monospace" : "system-ui, sans-serif";
+  const family = layer.fontFamily === "serif" ? "Georgia, serif" : layer.fontFamily === "mono" ? "ui-monospace, Consolas, monospace" : "system-ui, sans-serif";
   ctx.font = `${layer.fontWeight ?? 600} ${fontSize}px ${family}`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = layer.align ?? "center";
-  const cx = x + w / 2, cy = y + h / 2;
-  const measured = Math.min(w, ctx.measureText(layer.content).width + fontSize);
-  const boxW = Math.max(fontSize * 1.5, measured);
-  const boxH = Math.min(h, fontSize * 1.75);
-  if (layer.style !== "plain") {
-    ctx.fillStyle = layer.backgroundColor ?? (layer.style === "boxed" ? "rgba(15,23,42,0.82)" : layer.color);
-    ctx.beginPath();
-    if (layer.style === "badge") {
-      ctx.arc(cx, cy, Math.min(boxH, boxW) / 2, 0, Math.PI * 2);
-    } else {
-      roundRect(ctx, cx - boxW / 2, cy - boxH / 2, boxW, boxH, layer.style === "pill" ? boxH / 2 : 8);
+  ctx.letterSpacing = `${layer.letterSpacing ?? 0}px`;
+  const padding = Math.max(0, Math.min(layer.padding ?? 12, w / 4));
+  const available = Math.max(1, w - padding * 2);
+  const lines: string[] = [];
+  for (const paragraph of layer.content.split("\n")) {
+    let line = "";
+    for (const character of paragraph) {
+      if (line && ctx.measureText(line + character).width > available) { lines.push(line); line = character; }
+      else line += character;
     }
+    lines.push(line);
+  }
+  const lineHeight = fontSize * (layer.lineHeight ?? 1.3);
+  const boxW = Math.min(w, Math.max(fontSize, ...lines.map(line => ctx.measureText(line).width)) + padding * 2);
+  const boxH = Math.min(h, lines.length * lineHeight + padding * 2);
+  const align = layer.align ?? "center";
+  const boxX = align === "left" ? x : align === "right" ? x + w - boxW : x + (w - boxW) / 2;
+  const boxY = y + (h - boxH) / 2;
+  if (layer.style !== "plain") {
+    ctx.fillStyle = layer.backgroundColor ?? "#171717";
+    ctx.beginPath();
+    roundRect(ctx, boxX, boxY, boxW, boxH, layer.style === "pill" ? boxH / 2 : Math.min(layer.cornerRadius ?? 8, boxH / 2, boxW / 2));
     ctx.fill();
   }
-  ctx.fillStyle = layer.style === "plain" || layer.style === "boxed" ? layer.color : "#ffffff";
-  const textX = layer.align === "left" ? x + 12 : layer.align === "right" ? x + w - 12 : cx;
-  ctx.fillText(layer.content, textX, cy, Math.max(1, w - 16));
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+  ctx.fillStyle = layer.color;
+  ctx.textAlign = align;
+  ctx.textBaseline = "middle";
+  const textX = align === "left" ? boxX + padding : align === "right" ? boxX + boxW - padding : boxX + boxW / 2;
+  const top = y + (h - lines.length * lineHeight) / 2 + lineHeight / 2;
+  lines.forEach((line, index) => ctx.fillText(line, textX, top + index * lineHeight, available));
   ctx.restore();
 }
 
@@ -389,6 +399,7 @@ export function drawShapeLayer(
 ) {
   const sw = Math.max(1, layer.strokeWidth);
   ctx.save();
+  const baseAlpha = ctx.globalAlpha;
   ctx.strokeStyle = layer.color;
   ctx.fillStyle = layer.fillColor ?? layer.color;
   ctx.lineWidth = sw;
@@ -401,78 +412,110 @@ export function drawShapeLayer(
   const strokeOpacity = Math.max(0, Math.min(1, layer.strokeOpacity ?? 1));
   if (layer.shape === "line" || layer.shape === "dashedLine" || layer.shape === "arrow") {
     if (layer.shape === "dashedLine") ctx.setLineDash([sw * 3, sw * 2]);
-    ctx.globalAlpha = strokeOpacity;
+    ctx.globalAlpha = baseAlpha * (strokeOpacity);
     ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x + w, cy); ctx.stroke();
     if (layer.shape === "arrow") {
       const ah = Math.min(22, Math.max(8, h * 0.25));
-      ctx.globalAlpha = Math.max(fillOpacity, strokeOpacity);
+      ctx.globalAlpha = baseAlpha * (Math.max(fillOpacity, strokeOpacity));
       ctx.beginPath(); ctx.moveTo(x + w, cy); ctx.lineTo(x + w - ah, cy - ah * 0.62); ctx.lineTo(x + w - ah * 0.72, cy); ctx.lineTo(x + w - ah, cy + ah * 0.62); ctx.closePath(); ctx.fill();
     }
   } else if (layer.shape === "rectangle" || layer.shape === "roundedRect") {
     const radius = layer.shape === "roundedRect" ? Math.min(layer.cornerRadius ?? 18, h / 2, w / 2) : 0;
     ctx.beginPath(); roundRect(ctx, x, y, w, h, radius);
-    if (fillOpacity > 0) { ctx.globalAlpha = fillOpacity; ctx.fill(); }
-    ctx.globalAlpha = strokeOpacity; ctx.stroke();
+    if (fillOpacity > 0) { ctx.globalAlpha = baseAlpha * (fillOpacity); ctx.fill(); }
+    ctx.globalAlpha = baseAlpha * (strokeOpacity); ctx.stroke();
   } else if (layer.shape === "circle") {
     ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2);
-    if (fillOpacity > 0) { ctx.globalAlpha = fillOpacity; ctx.fill(); }
-    ctx.globalAlpha = strokeOpacity; ctx.stroke();
+    if (fillOpacity > 0) { ctx.globalAlpha = baseAlpha * (fillOpacity); ctx.fill(); }
+    ctx.globalAlpha = baseAlpha * (strokeOpacity); ctx.stroke();
+  } else if (layer.shape === "triangle" || layer.shape === "diamond" || layer.shape === "star") {
+    const points = layer.shape === "triangle" ? 3 : layer.shape === "diamond" ? 4 : 10;
+    ctx.beginPath();
+    for (let i = 0; i < points; i++) {
+      const angle = -Math.PI / 2 + i / points * Math.PI * 2;
+      const radius = layer.shape === "star" && i % 2 ? .44 : 1;
+      const px = cx + Math.cos(angle) * w / 2 * radius;
+      const py = cy + Math.sin(angle) * h / 2 * radius;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.globalAlpha = baseAlpha * fillOpacity; ctx.fill();
+    ctx.globalAlpha = baseAlpha * strokeOpacity; ctx.stroke();
   } else if (layer.shape === "blob") {
-    ctx.globalAlpha = fillOpacity;
+    ctx.globalAlpha = baseAlpha * (fillOpacity);
     ctx.beginPath();
     ctx.moveTo(x + w * 0.12, cy); ctx.bezierCurveTo(x, y, x + w * 0.62, y - h * 0.08, x + w * 0.9, y + h * 0.25);
     ctx.bezierCurveTo(x + w * 1.08, y + h * 0.72, x + w * 0.55, y + h * 1.08, x + w * 0.2, y + h * 0.86);
-    ctx.bezierCurveTo(x - w * 0.05, y + h * 0.72, x, y + h * 0.35, x + w * 0.12, cy); ctx.fill();
+    ctx.bezierCurveTo(x - w * 0.05, y + h * 0.72, x, y + h * 0.35, x + w * 0.12, cy); ctx.closePath(); ctx.fill(); ctx.globalAlpha = baseAlpha * strokeOpacity; ctx.stroke();
   } else if (layer.shape === "downArrow") {
-    ctx.globalAlpha = fillOpacity;
-    ctx.beginPath(); ctx.moveTo(cx - w * 0.13, y); ctx.quadraticCurveTo(cx - w * 0.16, y, cx - w * 0.16, y + h * 0.56); ctx.lineTo(x + w * 0.2, y + h * 0.56); ctx.lineTo(cx, y + h); ctx.lineTo(x + w * 0.8, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = baseAlpha * (fillOpacity);
+    ctx.beginPath(); ctx.moveTo(cx - w * 0.13, y); ctx.quadraticCurveTo(cx - w * 0.16, y, cx - w * 0.16, y + h * 0.56); ctx.lineTo(x + w * 0.2, y + h * 0.56); ctx.lineTo(cx, y + h); ctx.lineTo(x + w * 0.8, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y + h * 0.56); ctx.lineTo(cx + w * 0.16, y); ctx.closePath(); ctx.fill(); ctx.globalAlpha = baseAlpha * strokeOpacity; ctx.stroke();
   } else {
     // Clean cursor-pointer silhouette with a compact stem instead of the old
     // jagged polygon that distorted badly at non-square sizes.
-    ctx.globalAlpha = fillOpacity;
+    ctx.globalAlpha = baseAlpha * (fillOpacity);
     ctx.translate(x + w * 0.12, y + h * 0.08);
     ctx.beginPath();
     ctx.moveTo(0, 0); ctx.lineTo(w * 0.62, h * 0.48); ctx.lineTo(w * 0.38, h * 0.54);
     ctx.lineTo(w * 0.55, h * 0.86); ctx.lineTo(w * 0.37, h * 0.96);
     ctx.lineTo(w * 0.2, h * 0.62); ctx.lineTo(0, h * 0.8); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = strokeOpacity; ctx.stroke();
+    ctx.globalAlpha = baseAlpha * (strokeOpacity); ctx.stroke();
   }
   ctx.restore();
 }
 
+const maskBuffers = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
+
 export function drawMaskLayer(
-  ctx: CanvasRenderingContext2D,
-  layer: MaskLayer,
-  video: CanvasImageSource,
+  ctx: CanvasRenderingContext2D, layer: MaskLayer, video: CanvasImageSource,
   source: { x: number; y: number; w: number; h: number },
   dest: { x: number; y: number; w: number; h: number },
   rect: { x: number; y: number; w: number; h: number }
 ) {
   const { x, y, w, h } = rect;
-  ctx.save();
-  ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
-  if (layer.mask === "blur") {
-    ctx.beginPath(); roundRect(ctx, x, y, w, h, Math.min(layer.feather ?? 8, w / 2, h / 2)); ctx.clip();
-    ctx.filter = `blur(${Math.max(1, layer.intensity)}px)`;
-    ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
-    ctx.filter = "none";
-    ctx.fillStyle = "rgba(0,0,0,0.12)"; ctx.fillRect(x, y, w, h);
-  } else if (layer.mask === "spotlight") {
-    ctx.fillStyle = `rgba(0,0,0,${Math.min(0.85, 0.3 + layer.intensity * 0.2)})`;
-    ctx.beginPath(); ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill("evenodd");
+  if (w <= 0 || h <= 0 || dest.w <= 0 || dest.h <= 0) return;
+  let buffer = maskBuffers.get(ctx);
+  if (!buffer) { buffer = document.createElement("canvas"); maskBuffers.set(ctx, buffer); }
+  if (buffer.width !== ctx.canvas.width || buffer.height !== ctx.canvas.height) { buffer.width = ctx.canvas.width; buffer.height = ctx.canvas.height; }
+  const g = buffer.getContext("2d")!;
+  g.clearRect(0, 0, buffer.width, buffer.height);
+  const feather = Math.max(0, Math.min(layer.feather ?? 8, Math.min(w, h) / 4));
+  const path = (target: CanvasRenderingContext2D) => {
+    target.beginPath();
+    if (layer.shape === "rectangle") roundRect(target, x, y, w, h, Math.min(12, w / 2, h / 2));
+    else target.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+  };
+  g.save();
+  if (layer.mask === "spotlight") {
+    g.fillStyle = `rgba(0,0,0,${Math.min(0.95, 0.3 + layer.intensity * 0.2)})`;
+    g.fillRect(0, 0, buffer.width, buffer.height);
+    g.globalCompositeOperation = "destination-out";
+    g.filter = `blur(${feather}px)`;
+    g.fillStyle = "#000"; path(g); g.fill();
   } else {
-    const zoom = Math.max(1.1, layer.intensity);
-    const sx = source.x + ((x - dest.x) / dest.w) * source.w;
-    const sy = source.y + ((y - dest.y) / dest.h) * source.h;
-    const sw = (w / dest.w) * source.w / zoom;
-    const sh = (h / dest.h) * source.h / zoom;
-    ctx.shadowColor = "rgba(96,165,250,.38)";
-    ctx.shadowBlur = layer.feather ?? 8;
-    ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.clip();
-    ctx.drawImage(video, sx + ((w / dest.w) * source.w - sw) / 2, sy + ((h / dest.h) * source.h - sh) / 2, sw, sh, x, y, w, h);
-    ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 3; ctx.stroke();
+    g.save(); path(g); g.clip();
+    if (layer.mask === "blur") {
+      g.filter = `blur(${Math.max(1, layer.intensity)}px)`;
+      g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
+    } else {
+      const zoom = Math.max(1.1, Math.min(8, layer.intensity));
+      const sw = Math.min(source.w, w / dest.w * source.w / zoom);
+      const sh = Math.min(source.h, h / dest.h * source.h / zoom);
+      const centerX = source.x + (x + w / 2 - dest.x) / dest.w * source.w;
+      const centerY = source.y + (y + h / 2 - dest.y) / dest.h * source.h;
+      const sx = Math.max(source.x, Math.min(source.x + source.w - sw, centerX - sw / 2));
+      const sy = Math.max(source.y, Math.min(source.y + source.h - sh, centerY - sh / 2));
+      g.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+    }
+    g.restore();
+    if (layer.mask === "magnifier" && (layer.borderWidth ?? 3) > 0) {
+      path(g); g.strokeStyle = layer.borderColor ?? "#ffffff"; g.lineWidth = layer.borderWidth ?? 3;
+      g.shadowColor = "rgba(0,0,0,.2)"; g.shadowBlur = feather; g.stroke();
+    }
   }
-  ctx.restore();
+  g.restore();
+  ctx.save(); ctx.globalAlpha *= Math.max(0, Math.min(1, layer.opacity ?? 1));
+  ctx.drawImage(buffer, 0, 0); ctx.restore();
 }
 
 export function drawVideoWithMotionBlur(
@@ -483,20 +526,23 @@ export function drawVideoWithMotionBlur(
   motion: MotionBlurConfig,
   delta: { x: number; y: number; scale: number } | null
 ) {
-  if (motion.enabled && delta) {
-    const panStrength = Math.min(18, Math.hypot(delta.x, delta.y) * motion.panAmount * 0.05);
-    const zoomStrength = Math.min(0.025, Math.abs(delta.scale) * motion.zoomAmount * 0.002);
-    for (let i = 3; i >= 1; i--) {
-      const f = i / 3;
-      const dx = delta.x === 0 && delta.y === 0 ? 0 : (-delta.x / Math.max(1, Math.hypot(delta.x, delta.y))) * panStrength * f;
-      const dy = delta.x === 0 && delta.y === 0 ? 0 : (-delta.y / Math.max(1, Math.hypot(delta.x, delta.y))) * panStrength * f;
-      const grow = zoomStrength * f;
-      ctx.save(); ctx.globalAlpha = 0.1;
-      ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x + dx - dest.w * grow / 2, dest.y + dy - dest.h * grow / 2, dest.w * (1 + grow), dest.h * (1 + grow));
-      ctx.restore();
-    }
+  const distance = delta ? Math.hypot(delta.x, delta.y) : 0;
+  if (!motion.enabled || !delta || distance > Math.max(dest.w, dest.h) / 3 || Math.abs(delta.scale) > 0.3) {
+    ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h); return;
   }
+  const pan = Math.min(24, distance * motion.panAmount / 100);
+  const zoom = Math.min(0.04, Math.abs(delta.scale) * motion.zoomAmount / 100);
   ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
+  if (pan < .1 && zoom < .0001) return;
+  for (let i = 1; i <= 4; i++) {
+    const t = i / 4;
+    const dx = -delta.x / Math.max(1, distance) * pan * t;
+    const dy = -delta.y / Math.max(1, distance) * pan * t;
+    const grow = zoom * t;
+    ctx.save(); ctx.globalAlpha *= 0.14;
+    ctx.drawImage(video, source.x, source.y, source.w, source.h, dest.x + dx - dest.w * grow / 2, dest.y + dy - dest.h * grow / 2, dest.w * (1 + grow), dest.h * (1 + grow));
+    ctx.restore();
+  }
 }
 
 /** Draw the optional webcam track as a lightweight bottom-right picture-in-picture. */
@@ -560,6 +606,16 @@ export function roundRect(
   ctx.closePath();
 }
 
+export function motionEase(t: number, curve: string = "ease-in-out"): number {
+  t = Math.max(0, Math.min(1, t));
+  if (curve === "linear") return t;
+  if (curve === "ease-in") return t * t * t;
+  if (curve === "ease-out") return 1 - (1 - t) ** 3;
+  if (curve === "sine") return (1 - Math.cos(Math.PI * t)) / 2;
+  if (curve === "smoother") return t * t * t * (t * (6 * t - 15) + 10);
+  return easeInOut(t);
+}
+
 export function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
@@ -617,10 +673,11 @@ export function smoothTowards(
  * keyframe's click position — only scale still animates).
  */
 export function resolveZoom(
-  keyframes: { time: number; duration: number; x: number; y: number; scale: number }[],
+  keyframes: { time: number; duration: number; x: number; y: number; scale: number; easing?: string }[],
   ts: number,
   zoomEnabled: boolean,
-  fixedZoomPart: boolean
+  fixedZoomPart: boolean,
+  curve?: string
 ): { x: number; y: number; scale: number } {
   if (!zoomEnabled || keyframes.length === 0) {
     return { x: 0.5, y: 0.5, scale: 1.0 };
@@ -638,7 +695,7 @@ export function resolveZoom(
     const transStart = segEnd - Math.max(0, next.duration || 0);
     const from = Math.max(kf.time, transStart);
     const span = Math.max(1, segEnd - from);
-    const eased = ts < from ? 0 : easeInOut(Math.min(1, Math.max(0, (ts - from) / span)));
+    const eased = ts < from ? 0 : motionEase(Math.min(1, Math.max(0, (ts - from) / span)), curve && curve !== "keyframes" ? curve : next.easing);
     x = kf.x + (next.x - kf.x) * eased;
     y = kf.y + (next.y - kf.y) * eased;
     scale = kf.scale + (next.scale - kf.scale) * eased;

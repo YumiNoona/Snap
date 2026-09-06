@@ -132,6 +132,21 @@ pub(crate) fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
     let resolved = resolve_media_tool(requested);
     let mut command = match resolved {
         Some(path) => Command::new(path),
+        None if requested.eq_ignore_ascii_case(OsStr::new("ffmpeg"))
+            || requested.eq_ignore_ascii_case(OsStr::new("ffprobe")) =>
+        {
+            let executable = format!("{}.exe", requested.to_string_lossy());
+            let from_path = std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .filter(|directory| directory.is_absolute())
+                    .map(|directory| directory.join(&executable))
+                    .find(|candidate| candidate.is_file())
+            });
+            // Never let Windows search the working directory for media tools.
+            Command::new(from_path.unwrap_or_else(|| {
+                std::path::PathBuf::from(r"C:\Program Files\Snap\tools").join(executable)
+            }))
+        }
         None => Command::new(requested),
     };
 

@@ -498,6 +498,15 @@ const BITS_PER_SAMPLE: u16 = 16;
 
 #[tauri::command]
 pub fn audio_waveform(
+    app: tauri::AppHandle,
+    path: String,
+    buckets: Option<usize>,
+) -> Result<Vec<f32>, String> {
+    crate::access::require(&app, std::path::Path::new(&path))?;
+    read_audio_waveform(path, buckets)
+}
+
+fn read_audio_waveform(
     path: String,
     buckets: Option<usize>,
 ) -> std::result::Result<Vec<f32>, String> {
@@ -1370,7 +1379,7 @@ mod tests {
         file.flush().unwrap();
         drop(file);
 
-        let waveform = audio_waveform(path.to_string_lossy().to_string(), Some(16)).unwrap();
+        let waveform = read_audio_waveform(path.to_string_lossy().to_string(), Some(16)).unwrap();
         assert_eq!(waveform.len(), 16);
         assert!(waveform.iter().all(|value| *value > 0.3));
         std::fs::remove_file(path).unwrap();

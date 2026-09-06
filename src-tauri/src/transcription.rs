@@ -1,8 +1,6 @@
 use crate::process::background_command;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
 use tauri::Emitter;
 
 #[derive(Serialize)]
@@ -64,71 +62,6 @@ fn emit_install_progress(
     );
 }
 
-fn run_installer_step(
-    window: &tauri::Window,
-    script: &str,
-    path: &Path,
-    start: u8,
-    end: u8,
-    total: Option<u64>,
-    phase: &str,
-) -> Result<(), String> {
-    let mut child = background_command("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Unable to start dependency installer: {error}"))?;
-    loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("Unable to monitor dependency installer: {error}"))?
-        {
-            Some(status) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|error| format!("Unable to finish dependency installer: {error}"))?;
-                if !status.success() {
-                    return Err(format!(
-                        "Transcription installation failed: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    ));
-                }
-                emit_install_progress(window, end, phase, total, total);
-                return Ok(());
-            }
-            None => {
-                let downloaded = std::fs::metadata(path)
-                    .map(|value| value.len())
-                    .unwrap_or(0);
-                let percent = total
-                    .map(|bytes| {
-                        start.saturating_add(
-                            ((downloaded.min(bytes) as f64 / bytes as f64) * (end - start) as f64)
-                                .round() as u8,
-                        )
-                    })
-                    .unwrap_or(start);
-                emit_install_progress(
-                    window,
-                    percent.min(end.saturating_sub(1)),
-                    phase,
-                    Some(downloaded),
-                    total,
-                );
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        }
-    }
-}
-
 fn existing_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
@@ -178,23 +111,16 @@ pub async fn install_transcription_dependencies(
     window: tauri::Window,
 ) -> Result<TranscriptionEnvironment, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let root = user_transcription_root();
-        let models = root.join("models");
-        std::fs::create_dir_all(&models).map_err(|error| format!("Unable to create transcription folder: {error}"))?;
-        let root_text = root.to_string_lossy().replace('\'', "''");
-        let zip = root.join("whisper.zip");
-        let engine_script = format!(r#"$ErrorActionPreference='Stop'; $root='{root_text}'; $zip=Join-Path $root 'whisper.zip'; $unpack=Join-Path $root 'unpack'; Invoke-WebRequest -UseBasicParsing 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-bin-x64.zip' -OutFile $zip; if(Test-Path $unpack){{Remove-Item -LiteralPath $unpack -Recurse -Force}}; Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force; Get-ChildItem -LiteralPath $unpack -Recurse -File | Copy-Item -Destination $root -Force; Remove-Item -LiteralPath $unpack -Recurse -Force"#);
-        emit_install_progress(&window, 2, "Downloading caption engine", None, None);
-        run_installer_step(&window, &engine_script, &zip, 2, 20, None, "Installing caption engine")?;
-        let model = models.join("ggml-base.bin");
-        let model_script = format!(r#"$ErrorActionPreference='Stop'; $model='{model}'; Invoke-WebRequest -UseBasicParsing 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true' -OutFile $model; $hash=(Get-FileHash -LiteralPath $model -Algorithm SHA1).Hash.ToLowerInvariant(); if($hash -ne '465707469ff3a37a2b9b8d8f89f2f99de7299dac'){{Remove-Item -LiteralPath $model -Force; throw 'Whisper model checksum verification failed'}}"#, model = model.to_string_lossy().replace('\'', "''"));
-        run_installer_step(&window, &model_script, &model, 20, 99, Some(147_951_465), "Downloading multilingual model")?;
-        let _ = std::fs::remove_file(&zip);
-        let environment = transcription_environment();
-        if !environment.available { return Err("Downloaded transcription files could not be activated".to_string()); }
-        emit_install_progress(&window, 100, "Offline captions ready", None, None);
-        Ok(environment)
-    }).await.map_err(|error| format!("Transcription installer failed: {error}"))?
+        crate::caption_install::install(
+            &user_transcription_root(),
+            |percent, phase, downloaded, total| {
+                emit_install_progress(&window, percent, phase, downloaded, total);
+            },
+        )?;
+        Ok(transcription_environment())
+    })
+    .await
+    .map_err(|error| format!("Caption installer failed: {error}"))?
 }
 
 #[tauri::command]
@@ -213,8 +139,7 @@ pub fn transcription_environment() -> TranscriptionEnvironment {
         message: if available {
             "Offline transcription is ready".to_string()
         } else {
-            "Snap needs whisper-cli.exe and a multilingual ggml model in resources/transcription"
-                .to_string()
+            "Install offline captions once. Files stay on this PC".to_string()
         },
     }
 }
@@ -349,8 +274,19 @@ fn align_to_audio_activity(
                 .collect::<Vec<_>>();
             let first = overlaps.first()?;
             let last = overlaps.last()?;
-            let start_ms = segment.start_ms.max(first.start_ms);
-            let end_ms = segment.end_ms.min(last.end_ms);
+            // Whisper phrase boundaries commonly sit a few hundred
+            // milliseconds inside the audible speech. Snap nearby boundaries
+            // to the measured waveform instead of trimming farther inward.
+            let start_ms = if segment.start_ms.saturating_sub(first.start_ms) <= 600 {
+                first.start_ms
+            } else {
+                segment.start_ms
+            };
+            let end_ms = if last.end_ms.saturating_sub(segment.end_ms) <= 600 {
+                last.end_ms
+            } else {
+                segment.end_ms
+            };
             (end_ms > start_ms).then_some(TranscriptionSegment {
                 start_ms,
                 end_ms,
@@ -404,8 +340,10 @@ fn parse_output(
 
 #[tauri::command]
 pub async fn transcribe_audio(
+    app: tauri::AppHandle,
     request: TranscriptionRequest,
 ) -> Result<TranscriptionResult, String> {
+    crate::access::require(&app, Path::new(&request.audio_path))?;
     tauri::async_runtime::spawn_blocking(move || {
         let executable =
             resolve_executable().ok_or_else(|| "whisper-cli.exe is not installed".to_string())?;

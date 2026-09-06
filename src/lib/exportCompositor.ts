@@ -180,7 +180,7 @@ export async function createExportCompositor(
 
     const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
-    const zoom = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart);
+    const zoom = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
     const zoomX = zoom.x, zoomY = zoom.y, zoomScale = Math.max(0.0001, zoom.scale);
 
     // Background — same bgType-driven priority as Preview (see lib/canvasDraw
@@ -385,7 +385,7 @@ export async function createExportCompositor(
       const lw = layer.w * videoW;
       const lh = layer.h * videoH;
       ctx.save();
-      ctx.globalAlpha = Math.max(0.05, Math.min(1, layer.opacity ?? 1));
+      ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity ?? 1));
       ctx.translate(lx + lw / 2, ly + lh / 2);
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);

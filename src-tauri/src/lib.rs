@@ -1,5 +1,7 @@
+mod access;
 mod audio;
 mod camera;
+mod caption_install;
 mod capture;
 mod export;
 mod input_hook;
@@ -116,6 +118,9 @@ async fn open_editor_window(
     video: String,
     log: String,
 ) -> Result<(), String> {
+    access::require(&app, Path::new(&video))?;
+    access::grant_video(&app, Path::new(&video))?;
+    access::require(&app, Path::new(&log))?;
     *state.0.lock().map_err(|e| e.to_string())? = Some((video.clone(), log.clone()));
 
     if let Some(win) = app.get_webview_window("editor") {
@@ -740,25 +745,169 @@ struct FileEntry {
     size: u64,
 }
 
-#[tauri::command]
-fn read_text_file(path: String) -> std::result::Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))
+fn read_bounded_text(path: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("Not a regular file"));
+    }
+    let mut text = String::new();
+    file.take(LIMIT + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > LIMIT {
+        return Err(std::io::Error::other("Text file exceeds the 64 MiB limit"));
+    }
+    Ok(text)
 }
 
 #[tauri::command]
-fn read_optional_text_file(path: String) -> std::result::Result<Option<String>, String> {
-    match std::fs::read_to_string(&path) {
-        Ok(contents) => Ok(Some(contents)),
+fn read_text_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    access::require(&app, Path::new(&path))?;
+    read_bounded_text(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_optional_text_file(app: tauri::AppHandle, path: String) -> Result<Option<String>, String> {
+    // A selected project grants its recovery backup, not its entire parent folder.
+    if let Some(primary) = path.strip_suffix(".bak") {
+        access::require(&app, Path::new(primary))?;
+        app.asset_protocol_scope()
+            .allow_file(&path)
+            .map_err(|e| e.to_string())?;
+    }
+    access::require(&app, Path::new(&path))?;
+    match read_bounded_text(&path) {
+        Ok(contents) => {
+            access::project_assets(&app, &contents)?;
+            Ok(Some(contents))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Cannot read {path}: {error}")),
     }
+}
+
+#[tauri::command]
+fn probe_media_duration(app: tauri::AppHandle, path: String) -> Result<f64, String> {
+    let media_path = Path::new(&path);
+    access::require(&app, media_path)?;
+    if !media_path.is_file() {
+        return Err("The selected video does not exist".into());
+    }
+    let output = process::background_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(media_path)
+        .output()
+        .map_err(|error| format!("Unable to inspect video duration: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Unable to read video duration: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let duration = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| "The video reported an invalid duration".to_string())?;
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err("The video did not report a usable duration".into());
+    }
+    Ok(duration)
+}
+
+#[tauri::command]
+async fn prepare_editor_preview(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let source = PathBuf::from(&path);
+    access::require(&app, &source)?;
+    if !source.is_file() {
+        return Err("The selected video does not exist".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let (data_dir, _) = recording_data_paths(&source);
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|error| format!("Unable to create preview cache: {error}"))?;
+        let preview = data_dir.join("editor_preview.mp4");
+        let source_modified = source
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let preview_is_current = preview
+            .metadata()
+            .ok()
+            .filter(|metadata| metadata.len() > 1_024)
+            .and_then(|metadata| metadata.modified().ok())
+            .zip(source_modified)
+            .is_some_and(|(cached, original)| cached >= original);
+        if !preview_is_current {
+            let temporary = data_dir.join("editor_preview.part.mp4");
+            let output = process::background_command("ffmpeg")
+                .args(["-y", "-v", "error", "-i"])
+                .arg(&source)
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-an",
+                    "-c:v",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                ])
+                .arg(&temporary)
+                .output()
+                .map_err(|error| format!("Unable to repair the editor preview: {error}"))?;
+            if !output.status.success() {
+                let _ = std::fs::remove_file(&temporary);
+                return Err(format!(
+                    "Unable to repair the editor preview: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            if preview.exists() {
+                std::fs::remove_file(&preview)
+                    .map_err(|error| format!("Unable to replace the preview cache: {error}"))?;
+            }
+            std::fs::rename(&temporary, &preview)
+                .map_err(|error| format!("Unable to publish the repaired preview: {error}"))?;
+        }
+        app.asset_protocol_scope()
+            .allow_file(&preview)
+            .map_err(|error| error.to_string())?;
+        Ok(preview.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|error| format!("Preview repair worker failed: {error}"))?
 }
 
 /// Persist editor projects through a sibling temporary file. The previous
 /// valid document is retained as `.bak`, allowing recovery from interrupted
 /// writes or malformed project data.
 #[tauri::command]
-fn write_text_file_atomic(path: String, contents: String) -> std::result::Result<(), String> {
+fn write_text_file_atomic(
+    app: tauri::AppHandle,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    access::require(&app, Path::new(&path))?;
+    let extension = Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !["snap", "json", "srt", "vtt"].contains(&extension.as_str())
+        || contents.len() > 64 * 1024 * 1024
+    {
+        return Err("Only Snap projects and caption documents up to 64 MiB can be saved".into());
+    }
+    persist_text_atomic(path, contents)
+}
+
+fn persist_text_atomic(path: String, contents: String) -> std::result::Result<(), String> {
     use std::io::Write;
 
     let destination = PathBuf::from(&path);
@@ -768,7 +917,9 @@ fn write_text_file_atomic(path: String, contents: String) -> std::result::Result
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("Cannot create {}: {error}", parent.display()))?;
 
-    let temporary = PathBuf::from(format!("{path}.tmp"));
+    static SAVE_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = SAVE_LOCK.lock().map_err(|e| e.to_string())?;
+    let temporary = PathBuf::from(format!("{path}.{}.tmp", std::process::id()));
     let backup = PathBuf::from(format!("{path}.bak"));
     let mut file = std::fs::File::create(&temporary)
         .map_err(|error| format!("Cannot create {}: {error}", temporary.display()))?;
@@ -779,11 +930,25 @@ fn write_text_file_atomic(path: String, contents: String) -> std::result::Result
     if destination.exists() {
         std::fs::copy(&destination, &backup)
             .map_err(|error| format!("Cannot back up {}: {error}", destination.display()))?;
-        std::fs::remove_file(&destination)
-            .map_err(|error| format!("Cannot replace {}: {error}", destination.display()))?;
     }
-    std::fs::rename(&temporary, &destination)
-        .map_err(|error| format!("Cannot commit {}: {error}", destination.display()))?;
+    drop(file);
+    use windows::core::HSTRING;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    unsafe {
+        MoveFileExW(
+            &HSTRING::from(temporary.as_os_str()),
+            &HSTRING::from(destination.as_os_str()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| {
+        format!(
+            "Cannot commit {} (previous file retained): {error}",
+            destination.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -974,7 +1139,11 @@ fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
 }
 
 #[tauri::command]
-fn list_directory(path: String) -> std::result::Result<Vec<FileEntry>, String> {
+fn list_directory(
+    app: tauri::AppHandle,
+    path: String,
+) -> std::result::Result<Vec<FileEntry>, String> {
+    access::require(&app, Path::new(&path))?;
     let mut entries = Vec::new();
     let dir = std::fs::read_dir(&path).map_err(|e| format!("Cannot read directory {path}: {e}"))?;
     for entry in dir.flatten() {
@@ -1013,6 +1182,7 @@ fn recording_data_paths(video_path: &Path) -> (PathBuf, PathBuf) {
 /// not silently break when the original download or music file is moved.
 #[tauri::command]
 async fn import_audio_file(
+    app: tauri::AppHandle,
     video_path: String,
     source_path: String,
 ) -> std::result::Result<String, String> {
@@ -1021,6 +1191,8 @@ async fn import_audio_file(
             "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm",
         ];
         let source = PathBuf::from(&source_path);
+        access::require(&app, &source)?;
+        access::require(&app, Path::new(&video_path))?;
         if !source.is_file() {
             return Err(format!("Audio file does not exist: {}", source.display()));
         }
@@ -1117,10 +1289,13 @@ fn set_support_folder_hidden(_path: &Path, _hidden: bool) -> std::result::Result
 /// presents a clean recording library owned by Snap.
 #[tauri::command]
 fn prepare_recording_data(
+    app: tauri::AppHandle,
     video_path: String,
     show_support_files: bool,
 ) -> std::result::Result<RecordingDataPaths, String> {
+    access::require(&app, Path::new(&video_path))?;
     let (data_dir, log_path) = recording_data_paths(Path::new(&video_path));
+    access::require(&app, &data_dir)?;
     std::fs::create_dir_all(&data_dir)
         .map_err(|error| format!("Unable to create recording-data folder: {error}"))?;
     set_support_folder_hidden(&data_dir, !show_support_files)?;
@@ -1150,12 +1325,18 @@ struct RecoveredRecordingSession {
 
 #[tauri::command]
 fn update_recording_session(
+    app: tauri::AppHandle,
     data_dir: String,
     video_path: String,
     status: String,
     error: Option<String>,
 ) -> std::result::Result<(), String> {
     let directory = PathBuf::from(&data_dir);
+    access::require(&app, &directory)?;
+    access::require(&app, Path::new(&video_path))?;
+    if directory != recording_data_paths(Path::new(&video_path)).0 {
+        return Err("Session folder does not match recording".into());
+    }
     std::fs::create_dir_all(&directory)
         .map_err(|value| format!("Unable to create recording session folder: {value}"))?;
     let manifest = RecordingSessionManifest {
@@ -1168,7 +1349,7 @@ fn update_recording_session(
             .as_millis(),
         error,
     };
-    write_text_file_atomic(
+    persist_text_atomic(
         directory
             .join("recording-session.json")
             .to_string_lossy()
@@ -1252,7 +1433,7 @@ fn recover_recording_sessions() -> std::result::Result<Vec<RecoveredRecordingSes
             });
         }
         manifest.updated_at_ms = now;
-        write_text_file_atomic(
+        persist_text_atomic(
             manifest_path.to_string_lossy().to_string(),
             serde_json::to_string_pretty(&manifest).map_err(|value| value.to_string())?,
         )?;
@@ -1444,6 +1625,8 @@ pub fn run() {
             set_countdown,
             read_text_file,
             read_optional_text_file,
+            probe_media_duration,
+            prepare_editor_preview,
             write_text_file_atomic,
             list_directory,
             import_audio_file,
@@ -1462,7 +1645,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod project_file_tests {
-    use super::write_text_file_atomic;
+    use super::persist_text_atomic;
     use std::path::PathBuf;
 
     #[test]
@@ -1479,8 +1662,8 @@ mod project_file_tests {
         let path = root.join("edit.snap");
         let path_text = path.to_string_lossy().to_string();
 
-        write_text_file_atomic(path_text.clone(), "first".into()).unwrap();
-        write_text_file_atomic(path_text.clone(), "second".into()).unwrap();
+        persist_text_atomic(path_text.clone(), "first".into()).unwrap();
+        persist_text_atomic(path_text.clone(), "second".into()).unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
         assert_eq!(

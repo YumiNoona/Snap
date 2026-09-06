@@ -91,8 +91,6 @@
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
-.add-audio-timeline-btn { color: var(--text-secondary); border-color: var(--border-subtle); background: var(--bg-surface-sunken); }
-.add-audio-timeline-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border-default)); }
 
 .aspect-dropdown-menu {
   position: absolute;
@@ -323,7 +321,7 @@
   text-transform: uppercase;
   white-space: nowrap;
 }
-.track-label.video-label { flex-basis: 40px; }
+.track-label.video-label { flex-basis: 64px; }
 .track-label.audio-label { flex-basis: 32px; }
 .track-label.zoom-label { flex-basis: 30px; }
 .track-label.layer-label { flex-basis: 28px; }
@@ -411,7 +409,7 @@
 }
 
 .ss-track-row.video-track {
-  flex: 0 0 40px;
+  flex: 0 0 64px;
   background: rgba(245, 166, 35, 0.06);
   border: 1px solid rgba(245, 166, 35, 0.12);
 }
@@ -849,3 +847,17 @@
   from { opacity: 0; transform: translateY(-3px) scale(.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+
+/* Ruler and separate clip-edge grips keep trim distinct from the playhead. */
+.timeline-ruler, .timeline-ruler-label { flex: 0 0 24px; height: 24px; position: relative; color: var(--text-tertiary); font: 10px var(--font-mono); }
+.timeline-ruler-label { text-align: right; padding-top: 3px; }
+.timeline-ruler { border-bottom: 1px solid var(--border-subtle); }
+.timeline-ruler > span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.timeline-ruler > span:first-child { transform: none; }
+.timeline-ruler > span:last-child { transform: translateX(-100%); }
+.timeline-ruler > .timeline-loading-label:last-child { transform: none; }
+.ss-trim-handle { top: 28px; bottom: auto; height: 64px; width: 8px; background: var(--bg-surface-raised); border: 1px solid var(--border-default); }
+.ss-trim-handle::after { content: ""; position: absolute; top: 22px; bottom: 22px; left: 3px; width: 1px; background: var(--text-secondary); }
+.ss-trim-handle.in-handle { transform: none; }
+.ss-trim-handle.out-handle { transform: translateX(-100%); }
+.tb-transport-btn:disabled, .tb-play-icon-btn:disabled { opacity: .4; cursor: default; }

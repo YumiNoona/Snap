@@ -13,7 +13,7 @@ export interface Keyframe {
   x: number;
   y: number;
   scale: number;
-  easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out";
+  easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "smoother" | "sine";
   source?: "auto" | "manual";
   /** Stable identity shared by every keyframe that belongs to one zoom bar. */
   regionId?: string;
@@ -105,11 +105,14 @@ export interface TextLayer extends BaseLayer {
   align?: "left" | "center" | "right";
   backgroundColor?: string;
   letterSpacing?: number;
+  lineHeight?: number;
+  padding?: number;
+  cornerRadius?: number;
 }
 
 export interface ShapeLayer extends BaseLayer {
   type: "shape";
-  shape: "line" | "dashedLine" | "arrow" | "rectangle" | "roundedRect" | "circle" | "blob" | "downArrow" | "pointer";
+  shape: "line" | "dashedLine" | "arrow" | "rectangle" | "roundedRect" | "circle" | "blob" | "downArrow" | "pointer" | "triangle" | "diamond" | "star";
   color: string;
   strokeWidth: number;
   fillColor?: string;
@@ -123,6 +126,9 @@ export interface MaskLayer extends BaseLayer {
   mask: "spotlight" | "blur" | "magnifier";
   intensity: number;
   feather?: number;
+  shape?: "ellipse" | "rectangle";
+  borderWidth?: number;
+  borderColor?: string;
 }
 
 export type Layer = TextLayer | ShapeLayer | MaskLayer;
@@ -137,6 +143,7 @@ export interface MotionBlurConfig {
 export type MovementSpeed = "slow" | "medium" | "fast" | "rapid" | "custom";
 
 export interface MovementConfig {
+  curve?: Keyframe["easing"] | "keyframes";
   enabled: boolean;
   speed: MovementSpeed;
   durationMs: number;
@@ -284,7 +291,7 @@ export interface ExportSettings {
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   backgroundColor: "#1b1714",
   bgType: "wallpaper",
-  wallpaperUrl: "gradient-sunset",
+  wallpaperUrl: "gradient-new-arctic",
   bgBlur: 0,
   padding: 48,
   borderRadius: 14,

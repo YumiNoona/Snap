@@ -64,6 +64,8 @@ exports/
 
 # Local release artifacts and signing material
 release-artifacts/
+src-tauri/target/release/snap-before-*.exe
+src-tauri/target/release/bundle/
 *.exe
 *.msi
 *.msix

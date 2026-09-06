@@ -283,7 +283,9 @@ export async function transcribeTrack(track: AudioTrack, language: Transcription
       shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82,
       fontStyle: "normal", letterSpacing: 0, lineHeight: 1.22,
       backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,
-      animation: "reveal", animationDurationMs: 520,
+      // Show the complete phrase at its speech-aligned timestamp. A reveal
+      // animation creates a second artificial delay that looks out of sync.
+      animation: "none", animationDurationMs: 0,
     },
     segments,
   };

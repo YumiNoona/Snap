@@ -28,7 +28,7 @@ export interface WallpaperPreset {
 // Warm, filmic editor palette. IDs remain stable so existing projects migrate
 // without missing presets, while the visual language avoids cold blue/violet UI.
 
-export const GRADIENT_PRESETS: GradientPreset[] = [
+const LEGACY_GRADIENT_PRESETS: GradientPreset[] = [
   { id: "gradient-sunset", name: "Terracotta Sunset", type: "linear", angle: 135, colors: [
     { color: "#f0b27a", offset: 0 }, { color: "#d86f45", offset: 52 }, { color: "#7f3528", offset: 100 } ] },
   { id: "gradient-aurora", name: "Sage Morning", type: "linear", angle: 135, colors: [
@@ -60,6 +60,27 @@ export const GRADIENT_PRESETS: GradientPreset[] = [
 ];
 
 // ── 10 curated solid colors ─────────────────────────────────────────────────
+
+export const GRADIENT_PRESETS: GradientPreset[] = [{"id": "gradient-new-arctic", "name": "Arctic Glass", "type": "linear", "angle": 135, "colors": [{"color": "#e0f2fe", "offset": 0}, {"color": "#38bdf8", "offset": 50}, {"color": "#164e63", "offset": 100}]},
+  {"id": "gradient-new-neon", "name": "Neon Nights", "type": "linear", "angle": 45, "colors": [{"color": "#0f172a", "offset": 0}, {"color": "#7c3aed", "offset": 50}, {"color": "#f472b6", "offset": 100}]},
+  {"id": "gradient-new-lagoon", "name": "Blue Lagoon", "type": "radial", "angle": 0, "colors": [{"color": "#ccfbf1", "offset": 0}, {"color": "#2dd4bf", "offset": 50}, {"color": "#1e40af", "offset": 100}]},
+  {"id": "gradient-new-citrus", "name": "Citrus Pop", "type": "linear", "angle": 110, "colors": [{"color": "#fef08a", "offset": 0}, {"color": "#a3e635", "offset": 50}, {"color": "#15803d", "offset": 100}]},
+  {"id": "gradient-new-sorbet", "name": "Berry Sorbet", "type": "linear", "angle": 25, "colors": [{"color": "#fce7f3", "offset": 0}, {"color": "#fb7185", "offset": 50}, {"color": "#7e22ce", "offset": 100}]},
+  {"id": "gradient-new-graphite", "name": "Graphite", "type": "linear", "angle": 150, "colors": [{"color": "#fafafa", "offset": 0}, {"color": "#a3a3a3", "offset": 50}, {"color": "#262626", "offset": 100}]},
+  {"id": "gradient-new-solar", "name": "Solar Flare", "type": "radial", "angle": 0, "colors": [{"color": "#fef9c3", "offset": 0}, {"color": "#fb923c", "offset": 50}, {"color": "#be123c", "offset": 100}]},
+  {"id": "gradient-new-cosmos", "name": "Cosmos", "type": "radial", "angle": 0, "colors": [{"color": "#c4b5fd", "offset": 0}, {"color": "#4338ca", "offset": 50}, {"color": "#020617", "offset": 100}]},
+  {"id": "gradient-new-mint", "name": "Mint Chocolate", "type": "linear", "angle": 65, "colors": [{"color": "#d1fae5", "offset": 0}, {"color": "#34d399", "offset": 50}, {"color": "#292524", "offset": 100}]},
+  {"id": "gradient-new-roseice", "name": "Rose Ice", "type": "linear", "angle": 120, "colors": [{"color": "#fecdd3", "offset": 0}, {"color": "#f5f3ff", "offset": 50}, {"color": "#7dd3fc", "offset": 100}]},
+  {"id": "gradient-new-electric", "name": "Electric Lime", "type": "linear", "angle": 160, "colors": [{"color": "#bef264", "offset": 0}, {"color": "#22d3ee", "offset": 50}, {"color": "#4f46e5", "offset": 100}]},
+  {"id": "gradient-new-dune", "name": "Desert Sky", "type": "linear", "angle": 180, "colors": [{"color": "#0369a1", "offset": 0}, {"color": "#fbcfe8", "offset": 50}, {"color": "#fdba74", "offset": 100}]},
+  {"id": "gradient-new-cherry", "name": "Cherry Ink", "type": "radial", "angle": 0, "colors": [{"color": "#fda4af", "offset": 0}, {"color": "#e11d48", "offset": 50}, {"color": "#18181b", "offset": 100}]},
+  {"id": "gradient-new-pearl", "name": "Pearl", "type": "linear", "angle": 70, "colors": [{"color": "#e2e8f0", "offset": 0}, {"color": "#ffffff", "offset": 50}, {"color": "#c7d2fe", "offset": 100}]},
+  {"id": "gradient-new-orchid", "name": "Orchid Gold", "type": "linear", "angle": 135, "colors": [{"color": "#581c87", "offset": 0}, {"color": "#e879f9", "offset": 50}, {"color": "#fde68a", "offset": 100}]},
+  {"id": "gradient-new-abyss", "name": "Abyss", "type": "linear", "angle": 180, "colors": [{"color": "#06b6d4", "offset": 0}, {"color": "#0e7490", "offset": 50}, {"color": "#020617", "offset": 100}]},
+  {"id": "gradient-new-cobalt", "name": "Cobalt Peach", "type": "linear", "angle": 35, "colors": [{"color": "#1d4ed8", "offset": 0}, {"color": "#a5b4fc", "offset": 50}, {"color": "#fed7aa", "offset": 100}]},
+  {"id": "gradient-new-forest", "name": "Forest Mist", "type": "radial", "angle": 0, "colors": [{"color": "#f7fee7", "offset": 0}, {"color": "#65a30d", "offset": 50}, {"color": "#134e4a", "offset": 100}]},
+  {"id": "gradient-new-candy", "name": "Candy Shop", "type": "linear", "angle": 145, "colors": [{"color": "#f9a8d4", "offset": 0}, {"color": "#c084fc", "offset": 50}, {"color": "#67e8f9", "offset": 100}]},
+  {"id": "gradient-new-copper", "name": "Copper & Teal", "type": "linear", "angle": 105, "colors": [{"color": "#9a3412", "offset": 0}, {"color": "#fdba74", "offset": 50}, {"color": "#115e59", "offset": 100}]}];
 
 export const COLOR_PRESETS: ColorPreset[] = [
   { id: "color-slate", name: "Espresso", color: "#1b1714" },
@@ -98,7 +119,7 @@ export function getWallpaperPreset(idOrUrl: string): WallpaperPreset | undefined
 }
 
 export function getGradientPreset(id: string): GradientPreset | undefined {
-  return GRADIENT_PRESETS.find((p) => p.id === id);
+  return [...GRADIENT_PRESETS, ...LEGACY_GRADIENT_PRESETS].find((p) => p.id === id);
 }
 
 /** Build a CSS gradient string for panel swatches / previews. */

@@ -55,12 +55,14 @@ export async function runCanvasExport(
   const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.webm";
 
   let sinkOpen = false;
+  let recorder: MediaRecorder | null = null;
+  let stream: MediaStream | null = null;
   try {
-    await invoke("open_export_sink", { path: tempWebmPath });
+    await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
     sinkOpen = true;
 
-    const stream = compositor.canvas.captureStream(exportSettings.fps);
-    const recorder = new MediaRecorder(stream, {
+    stream = compositor.canvas.captureStream(exportSettings.fps);
+    recorder = new MediaRecorder(stream, {
       mimeType: pickMimeType(),
       videoBitsPerSecond: 12_000_000,
     });
@@ -87,9 +89,10 @@ export async function runCanvasExport(
       });
     };
 
+    const activeRecorder = recorder;
     const stopped = new Promise<void>((resolve, reject) => {
-      recorder.addEventListener("stop", () => resolve(), { once: true });
-      recorder.addEventListener("error", (e: Event) => {
+      activeRecorder.addEventListener("stop", () => resolve(), { once: true });
+      activeRecorder.addEventListener("error", (e: Event) => {
         const err = (e as unknown as { error?: Error }).error;
         reject(err ?? new Error("MediaRecorder error"));
       }, { once: true });
@@ -97,11 +100,16 @@ export async function runCanvasExport(
 
     const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
 
-    // Seek to the trim start before recording begins.
-    compositor.video.currentTime = trimStart;
-    await new Promise<void>((resolve) => {
-      compositor.video.addEventListener("seeked", () => resolve(), { once: true });
-    });
+    // Install the listener before seeking; seeking to the current time may emit nothing.
+    if (Math.abs(compositor.video.currentTime - trimStart) > 0.001) {
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timeout); compositor.video.removeEventListener("seeked", done); };
+        const done = () => { cleanup(); resolve(); };
+        const timeout = setTimeout(() => { cleanup(); reject(new Error("Video seek timed out")); }, 15000);
+        compositor.video.addEventListener("seeked", done, { once: true });
+        compositor.video.currentTime = trimStart;
+      });
+    }
 
     compositor.video.defaultPlaybackRate = playbackRate;
     compositor.video.playbackRate = playbackRate;
@@ -111,7 +119,14 @@ export async function runCanvasExport(
     const totalMs = Math.max(1, (trimEnd - trimStart) * 1000);
 
     await new Promise<void>((resolve, reject) => {
+      let lastTime = compositor.video.currentTime;
+      let lastAdvance = performance.now();
       const check = () => {
+        if (compositor.video.currentTime !== lastTime) { lastTime = compositor.video.currentTime; lastAdvance = performance.now(); }
+        if (compositor.video.error || performance.now() - lastAdvance > 15000) {
+          reject(new Error("Export stopped because video playback stalled. Check that the source file is readable."));
+          return;
+        }
         if (writeError) {
           reject(new Error(writeError));
           return;
@@ -170,6 +185,8 @@ export async function runCanvasExport(
     onProgress({ phase: "done", progress: 1, message: result });
     return result;
   } finally {
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    stream?.getTracks().forEach((track) => track.stop());
     if (sinkOpen) await invoke("close_export_sink").catch(() => {});
     compositor.destroy();
   }

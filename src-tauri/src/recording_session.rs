@@ -164,6 +164,14 @@ pub async fn start_recording_session(
     app: tauri::AppHandle,
     request: StartRecordingSessionRequest,
 ) -> Result<RecordingSessionSnapshot, String> {
+    for path in [&request.video_path, &request.log_path, &request.audio_dir] {
+        crate::access::require(&app, std::path::Path::new(path))?;
+    }
+    if std::path::Path::new(&request.audio_dir)
+        != crate::recording_data_paths(std::path::Path::new(&request.video_path)).0
+    {
+        return Err("Recording support folder does not match video".into());
+    }
     if request.session_id.trim().is_empty() {
         return Err("Recording session id is required".to_string());
     }

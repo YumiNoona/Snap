@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
@@ -189,11 +189,11 @@ export default function Timeline({
     return () => { cancelled = true; };
   }, [audioTracks, waveformBuckets]);
 
-  // Track the timeline width once so px-per-second stays stable
-  useEffect(() => {
+  // Measure before paint and keep the fit-to-width scale current.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setContentWidth(Math.max(0, el.clientWidth));
+    const measure = () => { if (el.clientWidth > 0) setContentWidth(el.clientWidth); };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -230,8 +230,8 @@ export default function Timeline({
   const { minimum: minimumTimelineHeight, maximum: maximumTimelineHeight } = timelineHeightBounds(visibleTrackCount);
 
   useEffect(() => {
-    setTimelineHeight((height) => Math.min(height, maximumTimelineHeight));
-  }, [maximumTimelineHeight]);
+    setTimelineHeight((height) => Math.max(minimumTimelineHeight, Math.min(height, maximumTimelineHeight)));
+  }, [minimumTimelineHeight, maximumTimelineHeight]);
 
   const audioTrackMuted = (track: AudioTrack) => (
     track.muted
@@ -629,13 +629,14 @@ export default function Timeline({
           <span className="tb-timecode-text">{formatTimecode(currentTime)}</span>
 
           <div className="tb-transport-buttons">
-            <button className="tb-transport-btn" onClick={() => onSeek(0)} title="Jump to Start">
+            <button className="tb-transport-btn" disabled={duration <= 0} onClick={() => onSeek(config.trimStart)} title="Jump to Start">
               <SkipBack size={16} fill="currentColor" />
             </button>
 
             <button
               className={`tb-play-icon-btn ${playing ? "is-playing" : "is-paused"} ${["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "is-loading" : ""}`}
               onClick={onTogglePlay}
+              disabled={duration <= 0}
               title={["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "Cancel playback loading" : playing ? "Pause" : "Play"}
               aria-label={["starting", "buffering", "seeking", "recovering"].includes(playbackStatus) ? "Cancel playback loading" : playing ? "Pause preview" : "Play preview"}
             >
@@ -644,7 +645,7 @@ export default function Timeline({
                 : <span className="tb-play-morph-icon" aria-hidden="true"><MorphIcon icon={playing ? Pause : Play} spring="snappy" size={19} /></span>}
             </button>
 
-            <button className="tb-transport-btn" onClick={() => onSeek(duration)} title="Jump to End">
+            <button className="tb-transport-btn" disabled={duration <= 0} onClick={() => onSeek(config.trimEnd || duration)} title="Jump to End">
               <SkipForward size={16} fill="currentColor" />
             </button>
           </div>
@@ -684,6 +685,7 @@ export default function Timeline({
       <div className="ss-tracks-wrapper">
         {/* Left label rail */}
         <div className="ss-labels-col">
+          <div className="timeline-ruler-label">Time</div>
           <div className="track-label video-label">Video</div>
           {timelineAudioTracks.map((track) => {
             const muted = audioTrackMuted(track);
@@ -706,14 +708,17 @@ export default function Timeline({
 
         {/* Shared timeline columns */}
         <div className={`ss-timeline-scroll ${zoomScale > 1 ? "is-zoomed" : ""}`} ref={scrollRef}>
-        <div className="ss-timeline-col" ref={timeAreaRef} style={{ width: `${effectiveWidth}px` }} onClick={(e) => onSeek(getTimeFromEvent(e))}>
+        <div className="ss-timeline-col" ref={timeAreaRef} style={{ width: `${zoomScale * 100}%` }} onClick={(e) => onSeek(getTimeFromEvent(e))}>
+          <div className="timeline-ruler">
+            {duration > 0 ? Array.from({ length: 11 }, (_, index) => <span key={index} style={{ left: `${index * 10}%` }}>{duration < 10 ? formatTimecode(duration * index / 10) : formatTimecode(duration * index / 10).replace(/\.\d+$/, "")}</span>) : <span className="timeline-loading-label">Loading video duration…</span>}
+          </div>
           {/* Video layer */}
           <div className="ss-track-row video-track">
             <div
               className="amber-clip-block"
               style={{
-                left: x(config.trimStart),
-                width: `${w((config.trimEnd || duration) - config.trimStart)}px`,
+                left: `${duration > 0 ? config.trimStart / duration * 100 : 0}%`,
+                width: `${duration > 0 ? ((config.trimEnd || duration) - config.trimStart) / duration * 100 : 100}%`,
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -724,7 +729,7 @@ export default function Timeline({
               <div className="clip-tag-content">
                 <Film size={12} />
                 <span>Clip</span>
-                <span className="clip-info">{Math.round(duration / Math.max(.5, config.playbackRate || 1))}s · {(config.playbackRate || 1).toFixed(2).replace(/\.00$/, "")}×</span>
+                <span className="clip-info">{duration > 0 ? Math.round(duration / Math.max(.5, config.playbackRate || 1)) + "s" : "Loading…"} · {(config.playbackRate || 1).toFixed(2).replace(/\.00$/, "")}×</span>
               </div>
             </div>
 
@@ -838,13 +843,16 @@ export default function Timeline({
             </div>
           ))}
 
-          {/* Trim handles + playhead overlay (span all layers) */}
+          {/* Trim controls belong to the clip, not the audio/zoom tracks. */}
+          {duration > 0 && <>
           <div
+            title="Trim start"
             className={`ss-trim-handle in-handle ${dragging === "trim-start" ? "dragging" : ""}`}
             style={{ left: x(config.trimStart) }}
             onMouseDown={handleMouseDown("trim-start")}
           />
           <div
+            title="Trim end"
             className={`ss-trim-handle out-handle ${dragging === "trim-end" ? "dragging" : ""}`}
             style={{ left: x(config.trimEnd || duration) }}
             onMouseDown={handleMouseDown("trim-end")}
@@ -857,6 +865,7 @@ export default function Timeline({
             <div className="playhead-purple-cap" />
             <div className="playhead-line" />
           </div>
+          </>}
         </div>
         </div>
       </div>

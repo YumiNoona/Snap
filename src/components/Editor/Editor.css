@@ -11,10 +11,10 @@
   --text-primary: #ededed;
   --text-secondary: #a1a1aa;
   --text-tertiary: #71717a;
-  --accent: #3ecf8e;
-  --accent-hover: #4ade80;
+  --accent: #ededed;
+  --accent-hover: #ffffff;
   --accent-glow: rgba(62, 207, 142, .2);
-  --accent-soft: rgba(62, 207, 142, .11);
+  --accent-soft: rgba(255, 255, 255, .07);
   --success: #3ecf8e;
   --danger: #f87171;
   display: flex;
@@ -41,10 +41,10 @@
   --text-primary: #171717;
   --text-secondary: #52525b;
   --text-tertiary: #71717a;
-  --accent: #059669;
-  --accent-hover: #047857;
+  --accent: #171717;
+  --accent-hover: #404040;
   --accent-glow: rgba(5, 150, 105, .18);
-  --accent-soft: rgba(5, 150, 105, .1);
+  --accent-soft: rgba(0, 0, 0, .05);
   --success: #059669;
   --danger: #dc2626;
   color-scheme: light;
@@ -56,8 +56,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 48px;
-  padding: 0 var(--space-4);
+  min-height: 64px;
+  gap: 20px;
+  padding: 10px 20px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
@@ -175,9 +176,8 @@
 }
 
 .ss-topbar-center {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  margin-inline: auto;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -444,3 +444,41 @@
   position: relative;
   overflow: hidden;
 }
+
+/* Workspace sizing is intrinsic: long project names never cover actions. */
+.ss-topbar-left { min-width: 0; flex: 0 1 360px; }
+.ss-file-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: inherit; font-size: 13px; }
+.ss-topbar-right { flex-shrink: 0; }
+.ss-editor-body, .ss-preview-center-area { min-height: 0; min-width: 0; }
+.ss-vertical-tool-palette { width: 88px; padding: 16px 8px; gap: 8px; overflow-y: auto; }
+.ss-tool-icon-btn { width: 70px; min-height: 64px; height: auto; flex-shrink: 0; flex-direction: column; gap: 7px; border-radius: 8px; }
+.ss-tool-label { font-size: 11px; font-weight: 500; line-height: 1.2; }
+.ss-tool-icon-btn.active { background: var(--accent-soft); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--border-default); }
+.ss-preview-center-area { background: var(--bg-surface-sunken); }
+.screenstudio-editor-layout button:focus-visible,
+.screenstudio-editor-layout input:focus-visible,
+.screenstudio-editor-layout select:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 3px; }
+.screenstudio-editor-layout button:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+.screenstudio-editor-layout button:not(:disabled):active { filter: brightness(.92); }
+.preset-delete-btn:focus-visible, .preset-row:focus-within .preset-delete-btn { opacity: 1; }
+.ss-file-menu, .presets-popover { max-width: calc(100vw - 40px); }
+@media (max-width: 1100px) {
+  .ss-topbar { gap: 10px; padding-inline: 12px; }
+  .ss-topbar-left { flex-basis: 220px; gap: 8px; }
+  .ss-vertical-tool-palette { width: 72px; padding-inline: 4px; }
+  .ss-tool-icon-btn { width: 62px; }
+  .screenstudio-editor-layout .ss-panels-drawer { width: 300px; }
+}
+@media (max-height: 700px) {
+  .ss-topbar { min-height: 52px; padding-block: 4px; }
+  .ss-vertical-tool-palette { gap: 4px; padding-block: 8px; }
+  .ss-tool-icon-btn { min-height: 52px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .screenstudio-editor-layout *, .screenstudio-editor-layout *::before, .screenstudio-editor-layout *::after {
+    animation: none !important; transition: none !important; scroll-behavior: auto !important;
+  }
+}
+
+.ss-project-status { white-space: nowrap; flex-shrink: 0; font-size: 12px; }
+.ss-topbar-left { flex-basis: 440px; }

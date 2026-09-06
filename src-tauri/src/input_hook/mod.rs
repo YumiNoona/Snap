@@ -107,8 +107,9 @@ enum WriterMessage {
     },
 }
 
-fn key_name(key: &rdev::Key) -> String {
-    format!("{key:?}")
+fn key_name(_key: &rdev::Key) -> String {
+    // Auto-zoom needs typing timing, never the password or text being typed.
+    "Typing".to_string()
 }
 
 fn button_name(btn: &rdev::Button) -> String {
@@ -391,17 +392,7 @@ pub async fn start_input_logging(
     Ok(())
 }
 
-/// Timestamp the moment the video capture produces its first frame (video time 0).
-/// Called by the capture module; writes a `meta` line the editor uses to align
-/// input-event timestamps with video time.
-pub fn mark_capture_start() {
-    mark_capture_start_with_lead(Duration::ZERO);
-}
-
-/// Desktop Duplication begins producing frames immediately after FFmpeg is
-/// spawned, before its short health check completes. Backdate time zero by
-/// that measured startup interval so input and delayed audio startup remain
-/// aligned to the actual first video segment.
+/// Anchor input and audio to the encoder's first reported media timestamp.
 pub fn mark_capture_start_with_lead(startup_lead: Duration) {
     if !IS_ACTIVE.load(Ordering::Relaxed) {
         return;

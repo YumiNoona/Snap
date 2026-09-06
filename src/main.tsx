@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
@@ -51,7 +52,7 @@ window.addEventListener("unhandledrejection", (e) => showError("Unhandled Promis
 
 try {
   ReactDOM.createRoot(rootEl).render(
-    <App />,
+    <Suspense fallback={<div role="status" style={{ padding: 24 }}>Loading workspace...</div>}><App /></Suspense>,
   );
 } catch (err) {
   showError("React Mount Failed", err);

@@ -12,18 +12,9 @@ use crate::process::{background_command, recording_command, spawn_recording_chil
 
 use serde::{Deserialize, Serialize};
 use windows::core::*;
-use windows::Graphics::Capture::*;
-use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
-use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct3D::*;
-use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Com::*;
-use windows::Win32::System::WinRT::Direct3D11::*;
-use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-use windows::Win32::System::WinRT::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 macro_rules! eprintln {
@@ -72,7 +63,7 @@ impl Default for RecordingOptions {
             bitrate_mbps: 8,
             max_width: Some(1920),
             max_height: Some(1080),
-            allow_software_encoder: true,
+            allow_software_encoder: false,
         }
     }
 }
@@ -192,6 +183,16 @@ pub fn get_videos_dir() -> std::result::Result<String, String> {
 }
 
 pub fn get_videos_root() -> std::path::PathBuf {
+    use windows::Win32::UI::Shell::{FOLDERID_Videos, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    unsafe {
+        if let Ok(path) = SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, None) {
+            let text = path.to_string().ok();
+            windows::Win32::System::Com::CoTaskMemFree(Some(path.0 as *const c_void));
+            if let Some(text) = text {
+                return std::path::PathBuf::from(text);
+            }
+        }
+    }
     let userprofile = std::env::var("USERPROFILE").unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(userprofile).join("Videos")
 }
@@ -230,8 +231,24 @@ fn recording_preflight_blocking(
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("Cannot create recording folder: {error}"))?;
-    let probe = parent.join(".snap-write-test.tmp");
-    let writable = std::fs::write(&probe, b"snap").is_ok();
+    let probe = parent.join(format!(
+        ".snap-write-test-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let mut probe_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|error| format!("Recording folder is not writable: {error}"))?;
+    let writable = probe_file
+        .write_all(b"snap")
+        .and_then(|_| probe_file.sync_all())
+        .is_ok();
+    drop(probe_file);
     let _ = std::fs::remove_file(&probe);
     if !writable {
         return Err(format!(
@@ -286,7 +303,7 @@ fn recording_preflight_blocking(
         String::from_utf8_lossy(&filters.stdout),
         String::from_utf8_lossy(&filters.stderr)
     );
-    if !filter_text.contains("gfxcapture") && !filter_text.contains("ddagrab") {
+    if !filter_text.contains("gfxcapture") {
         return Err("The installed FFmpeg build has no Windows GPU capture filter. Install a current Gyan Essentials or Full build.".to_string());
     }
     let encoders = crate::process::background_command("ffmpeg")
@@ -363,59 +380,19 @@ fn recommend_recording_options_blocking(
     let working_hardware = candidates
         .into_iter()
         .find(|(_, encoder)| probe_h264_encoder(encoder));
-    let logical_cores = std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(2);
-
-    let (options, encoder, hardware_encoding, summary) = if let Some((label, _)) = working_hardware
-    {
-        let dedicated = capability.dedicated_video_memory >= 2 * 1024 * 1024 * 1024;
-        let (fps, max_width, max_height, bitrate_mbps) = if dedicated {
-            // Automatic means "stay out of the user's way", even on a fast
-            // GPU. A 720p encode touches less than half as many pixels as
-            // 1080p and leaves substantially more copy/VRAM bandwidth for
-            // browsers, Unreal Engine, games, and video calls.
-            (30, 1280, 720, 4)
-        } else {
-            (24, 1280, 720, 3)
-        };
-        (
-            RecordingOptions {
-                fps,
-                bitrate_mbps,
-                max_width: Some(max_width),
-                max_height: Some(max_height),
-                allow_software_encoder: true,
-            },
-            label.to_string(),
-            true,
-            format!(
-                "{max_width}x{max_height} at {fps} FPS using {label}; low-impact capture protects other apps"
-            ),
-        )
-    } else {
-        let (fps, max_width, max_height, bitrate_mbps) = if logical_cores >= 8 {
-            (30, 1280, 720, 4)
-        } else if logical_cores >= 4 {
-            (24, 1280, 720, 3)
-        } else {
-            (24, 960, 540, 2)
-        };
-        (
-            RecordingOptions {
-                fps,
-                bitrate_mbps,
-                max_width: Some(max_width),
-                max_height: Some(max_height),
-                allow_software_encoder: true,
-            },
-            "low-priority CPU compatibility encoder".to_string(),
-            false,
-            format!(
-                "{max_width}x{max_height} at {fps} FPS using a bounded CPU encoder ({logical_cores} logical cores detected)"
-            ),
-        )
+    let Some((label, _)) = working_hardware else {
+        return Err("No working hardware H.264 encoder was detected. Update your graphics driver, or explicitly choose manual CPU compatibility recording in Settings.".to_string());
     };
+    let options = RecordingOptions {
+        fps: 30,
+        bitrate_mbps: 4,
+        max_width: Some(1280),
+        max_height: Some(720),
+        allow_software_encoder: false,
+    };
+    let encoder = label.to_string();
+    let hardware_encoding = true;
+    let summary = format!("1280x720 at 30 FPS using {label}; hardware-only low-impact capture");
     let recommendation = RecordingRecommendation {
         options,
         encoder,
@@ -638,16 +615,6 @@ fn gfxcapture_region_source(
     format!("gfxcapture=hmonitor={monitor}:crop_left={}:crop_top={}:crop_right={right}:crop_bottom={bottom}:{common}", crop.x, crop.y)
 }
 
-fn desktop_duplication_source(output_index: u32, options: RecordingOptions) -> String {
-    // Keep duplicate frames enabled. Omitting unchanged frames makes the MP4
-    // end at the last visual update rather than at Stop, while independently
-    // clocked WAV tracks correctly continue to the real recording end.
-    format!(
-        "ddagrab=output_idx={output_index}:framerate={}:draw_mouse=0:dup_frames=1:output_fmt=8bit",
-        options.fps
-    )
-}
-
 // ── Enumerate targets (runs fine on any thread) ──────────────────────────────
 
 #[tauri::command]
@@ -694,32 +661,6 @@ fn enumerate_monitors(targets: &mut Vec<DisplayTarget>) -> Result<()> {
 /// FFmpeg's `ddagrab=output_idx=` is relative to the adapter backing its D3D11
 /// device. Without an explicit FFmpeg adapter selection that is adapter zero,
 /// so never pass a global cross-adapter index here.
-fn desktop_duplication_output_index(hmonitor: HMONITOR) -> Result<Option<u32>> {
-    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
-    for adapter_idx in 0u32.. {
-        let adapter: IDXGIAdapter1 = match unsafe { factory.EnumAdapters1(adapter_idx) } {
-            Ok(value) => value,
-            Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-            Err(_) => continue,
-        };
-        for output_idx in 0u32.. {
-            let output: IDXGIOutput = match unsafe { adapter.EnumOutputs(output_idx) } {
-                Ok(value) => value,
-                Err(error) if error.code() == DXGI_ERROR_NOT_FOUND => break,
-                Err(_) => continue,
-            };
-            let description = unsafe { output.GetDesc()? };
-            if description.Monitor == hmonitor {
-                return Ok((adapter_idx == 0).then_some(output_idx));
-            }
-        }
-    }
-    Err(Error::new(
-        E_FAIL,
-        "Selected display is unavailable to Desktop Duplication",
-    ))
-}
-
 fn target_gpu_capability(target_id: &str) -> GpuCapability {
     let monitor = hmonitor_from_id(target_id).or_else(|| {
         hwnd_from_id(target_id)
@@ -817,6 +758,9 @@ pub async fn start_recording(
     region: Option<CaptureRegion>,
     options: Option<RecordingOptions>,
 ) -> std::result::Result<(), String> {
+    if !Path::new(&output_path).is_absolute() || Path::new(&output_path).exists() {
+        return Err("Recording requires a new absolute output path; existing recordings will not be overwritten".into());
+    }
     let gpu_vendor = target_gpu_vendor(&target_id);
     let options = options.unwrap_or_default().sanitized();
     if let Some(selected) = region {
@@ -977,255 +921,7 @@ fn run_capture_thread(
             );
         }
     }
-    // Older FFmpeg builds may not expose gfxcapture. Keep Desktop Duplication
-    // as a full-display-only hardware fallback rather than silently changing a
-    // monitor recording into whichever foreground window happens to be active.
-    if crop.is_none() {
-        if let Some(monitor) = hmonitor_from_id(target_id) {
-            if let Some(output_index) =
-                desktop_duplication_output_index(monitor).map_err(|error| error.to_string())?
-            {
-                let source = desktop_duplication_source(output_index, options);
-                return run_segmented_gpu_capture(
-                    &source,
-                    "full display fallback",
-                    &abs_path,
-                    options,
-                    gpu_vendor,
-                    runtime,
-                );
-            }
-            eprintln!("[Snap] Selected monitor is on a non-default adapter; using the adapter-safe Windows.Graphics.Capture fallback");
-        }
-    }
-
-    let CaptureRuntime {
-        is_recording,
-        is_paused,
-        resume_ready,
-        startup_tx,
-    } = runtime;
-    let result = (|| -> Result<()> {
-        // ── Step 1: COM initialization ──
-        eprintln!("[Snap] Step 1/7: COM initializing (COINIT_MULTITHREADED)...");
-        unsafe {
-            CoInitializeEx(None, COINIT_MULTITHREADED)
-                .ok()
-                .map_err(|e| Error::new(E_FAIL, format!("CoInitializeEx failed: {e}")))?;
-        }
-        eprintln!("[Snap] Step 1/7: COM initialized OK");
-
-        // ── Step 2: D3D11 device ──
-        eprintln!("[Snap] Step 2/7: Creating D3D11 device...");
-        let (device, context) = create_d3d11_device()?;
-        eprintln!("[Snap] Step 2/7: D3D11 device created OK");
-
-        // ── Step 3: Capture item ──
-        eprintln!("[Snap] Step 3/7: Creating capture item for target...");
-        let dxgi_device: IDXGIDevice = device.cast()?;
-        let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?;
-        let d3d_device: IDirect3DDevice = inspectable.cast()?;
-        let item = create_capture_item(target_id)?;
-        let size = item.Size()?;
-        let width = size.Width as u32;
-        let height = size.Height as u32;
-        let active_crop = crop.map(|c| CropRect {
-            x: c.x.min(width.saturating_sub(2)),
-            y: c.y.min(height.saturating_sub(2)),
-            w: c.w.min(width.saturating_sub(c.x)).max(2) & !1,
-            h: c.h.min(height.saturating_sub(c.y)).max(2) & !1,
-        });
-        let encode_w = active_crop.map(|c| c.w).unwrap_or(width);
-        let encode_h = active_crop.map(|c| c.h).unwrap_or(height);
-        eprintln!("[Snap] Step 3/7: Capture item created OK ({width}x{height})");
-
-        // ── Step 4: FFmpeg subprocess ──
-        let abs_path_str = abs_path.to_string_lossy().to_string();
-        let (mut ffmpeg_child, ffmpeg_stdin, hardware_encoder) =
-            spawn_ffmpeg(&abs_path_str, encode_w, encode_h, options, gpu_vendor)?;
-        // FFmpeg continuously writes progress and diagnostics. Leaving stderr
-        // attached to an unread pipe eventually fills its OS buffer and blocks
-        // the encoder, producing a video that appears frozen on one frame.
-        let ffmpeg_stderr = ffmpeg_child.stderr.take();
-        let stderr_reader = thread::spawn(move || {
-            let mut text = String::new();
-            if let Some(mut stderr) = ffmpeg_stderr {
-                let _ = stderr.read_to_string(&mut text);
-            }
-            text
-        });
-        eprintln!("[Snap] Step 4/7: FFmpeg spawned OK ({hardware_encoder} hardware encoder)");
-
-        // ── Step 5: Frame pool + capture session ──
-        eprintln!("[Snap] Step 5/7: Creating Direct3D11 frame pool...");
-        let frame_pool = Direct3D11CaptureFramePool::Create(
-            &d3d_device,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            2,
-            size,
-        )?;
-        let session = frame_pool.CreateCaptureSession(&item)?;
-        // Never bake the OS cursor into the raw video — the editor draws its own
-        // custom cursor overlay from the input-hook log. Must be set before
-        // StartCapture. Only affects NEW recordings.
-        session.SetIsCursorCaptureEnabled(false)?;
-        eprintln!("[Snap] Step 5/7: Frame pool and capture session created OK (OS cursor capture disabled)");
-
-        // ── Step 6: Start capture (polling — no DispatcherQueue needed) ──
-        eprintln!("[Snap] Step 6/7: Starting capture session (polling mode)...");
-        let stdin = Arc::new(Mutex::new(ffmpeg_stdin));
-        session.StartCapture()?;
-        eprintln!("[Snap] Step 6/7: Capture session armed; waiting for first encoded frame");
-
-        // ── Step 7: Poll for frames ──
-        eprintln!("[Snap] Step 7/7: polling for frames (first frame 3s timeout)...");
-        let mut frame_count: u64 = 0;
-        let mut frames_sent: u64 = 0;
-        let first_frame_deadline = Instant::now() + Duration::from_secs(3);
-        let mut log_interval = Instant::now();
-        let frame_interval = Duration::from_secs_f64(1.0 / options.fps as f64);
-        let mut next_target = Instant::now();
-        // Reusable staging texture — created once on first frame, reused for all
-        // subsequent frames to avoid per-frame GPU allocation overhead.
-        let mut staging_cache: Option<(ID3D11Texture2D, u32, u32)> = None;
-        let mut health_check = Instant::now();
-        let mut consecutive_write_errors = 0u8;
-        let mut capture_failure: Option<String> = None;
-        let mut last_frame_at = Instant::now();
-
-        while is_recording.load(Ordering::Relaxed) {
-            if health_check.elapsed() >= Duration::from_secs(5) {
-                health_check = Instant::now();
-                if let Some(parent) = abs_path.parent() {
-                    if let Ok(free) = fs2::available_space(parent) {
-                        if free < 268_435_456 {
-                            capture_failure = Some(format!("Recording stopped safely because disk space fell below 256 MB ({} MB remaining)", free / 1_048_576));
-                            break;
-                        }
-                    }
-                }
-                if let Ok(Some(status)) = ffmpeg_child.try_wait() {
-                    capture_failure =
-                        Some(format!("Hardware encoder stopped unexpectedly: {status}"));
-                    break;
-                }
-            }
-            // Pause gate: while paused, drain and drop frames so the paused
-            // segment is omitted from the video entirely. On resume, reset the
-            // pacing target to avoid a burst of catch-up frames.
-            if is_paused.load(Ordering::Relaxed) {
-                while is_paused.load(Ordering::Relaxed) && is_recording.load(Ordering::Relaxed) {
-                    let _ = frame_pool.TryGetNextFrame();
-                    thread::sleep(Duration::from_millis(10));
-                }
-                if !is_recording.load(Ordering::Relaxed) {
-                    break;
-                }
-                next_target = Instant::now() + frame_interval;
-                resume_ready.store(true, Ordering::Release);
-                continue;
-            }
-
-            let now = Instant::now();
-            match frame_pool.TryGetNextFrame() {
-                Ok(frame) => {
-                    last_frame_at = now;
-                    frame_count += 1;
-
-                    if now >= next_target || frame_count == 1 {
-                        if frame_count == 1 {
-                            eprintln!("[Snap] Step 7/7: first frame received via poll OK");
-                        }
-                        if let Err(e) = write_frame_to_ffmpeg(
-                            &frame,
-                            &device,
-                            &context,
-                            &stdin,
-                            &mut staging_cache,
-                            active_crop,
-                        ) {
-                            eprintln!("[Snap] frame write error: {e}");
-                            consecutive_write_errors = consecutive_write_errors.saturating_add(1);
-                            if consecutive_write_errors >= 3 {
-                                capture_failure =
-                                    Some(format!("Frame pipeline failed repeatedly: {e}"));
-                                break;
-                            }
-                        } else {
-                            consecutive_write_errors = 0;
-                            if frames_sent == 0 {
-                                // Do not release audio capture until video time
-                                // zero actually exists. A capture session can be
-                                // armed several frames before WGC delivers data.
-                                crate::input_hook::mark_capture_start();
-                                let _ = startup_tx.send(Ok(()));
-                                eprintln!("[Snap] Step 7/7: first encoded frame committed");
-                            }
-                            frames_sent += 1;
-                        }
-                        next_target += frame_interval;
-                        // Clamp next_target so we don't try to "catch up" if a frame
-                        // took longer than one interval to process.
-                        if next_target < now {
-                            next_target = now + frame_interval;
-                        }
-                    }
-
-                    if log_interval.elapsed() >= Duration::from_secs(2) {
-                        eprintln!(
-                            "[Snap] frame {frame_count} polled, {frames_sent} sent to FFmpeg"
-                        );
-                        log_interval = Instant::now();
-                    }
-                }
-                Err(_) => {
-                    if frame_count == 0 && now > first_frame_deadline {
-                        session.Close()?;
-                        return Err(Error::new(
-                            E_FAIL,
-                            "capture timed out waiting for first frame (3s)",
-                        ));
-                    }
-                    if frame_count > 0 && last_frame_at.elapsed() > Duration::from_secs(5) {
-                        capture_failure = Some("Capture target stopped producing frames for 5 seconds. The window may have closed, the display may have disconnected, or the graphics device may have reset.".to_string());
-                        break;
-                    }
-                }
-            }
-            thread::sleep(Duration::from_millis(2));
-        }
-
-        eprintln!("[Snap] Polled {frame_count} frames, sent {frames_sent} to FFmpeg");
-        crate::input_hook::mark_capture_end(frames_sent, options.fps);
-        drop(stdin);
-
-        // ── Cleanup ──
-        session.Close()?;
-        frame_pool.Close()?;
-        eprintln!("[Snap] Session & frame pool closed — finalizing FFmpeg...");
-
-        // Wait for FFmpeg with timeout, then read its stderr
-        let ffmpeg_status = wait_for_ffmpeg(&mut ffmpeg_child);
-        let stderr_text = stderr_reader
-            .join()
-            .unwrap_or_else(|_| "FFmpeg diagnostics reader crashed".to_string());
-
-        eprintln!("[Snap] FFmpeg stderr:\n{stderr_text}");
-
-        unsafe { CoUninitialize() };
-        eprintln!("[Snap] COM uninitialized");
-
-        // ── File verification ──
-        validate_output(&abs_path, ffmpeg_status, &stderr_text)?;
-
-        if let Some(failure) = capture_failure {
-            return Err(Error::new(E_FAIL, failure));
-        }
-
-        Ok(())
-    })();
-
-    result.map_err(|e| format!("{e}"))
+    Err("This FFmpeg build cannot provide GPU-resident Windows capture for the selected target. Update FFmpeg in Settings and select the target again. Snap will not silently switch to CPU frame readback or Desktop Duplication.".to_string())
 }
 
 fn run_segmented_gpu_capture(
@@ -1266,6 +962,7 @@ fn run_segmented_gpu_capture(
             encoded_timeline,
             progress,
             progress_reader,
+            stderr_reader,
         } = match spawn_gpu_capture(source, &part, options, gpu_vendor, &excluded_encoders) {
             Ok(value) => value,
             Err(error) if started => {
@@ -1276,14 +973,7 @@ fn run_segmented_gpu_capture(
             }
             Err(error) => return Err(error),
         };
-        let stderr = child.stderr.take();
-        let stderr_reader = thread::spawn(move || {
-            let mut diagnostics = String::new();
-            if let Some(mut stream) = stderr {
-                let _ = stream.read_to_string(&mut diagnostics);
-            }
-            diagnostics
-        });
+
         if !started {
             // FFmpeg normalizes the first encoded frame to media time zero.
             // Anchor the shared audio/input epoch to that frame, not process
@@ -1426,6 +1116,7 @@ struct SpawnedCapture {
     encoded_timeline: Duration,
     progress: Arc<CaptureProgress>,
     progress_reader: thread::JoinHandle<()>,
+    stderr_reader: thread::JoinHandle<String>,
 }
 
 fn spawn_gpu_capture(
@@ -1594,7 +1285,7 @@ fn spawn_gpu_capture(
             "error",
             "-nostats",
             "-stats_period",
-            "0.05",
+            "0.25",
             "-progress",
             "pipe:1",
             "-filter_threads",
@@ -1623,6 +1314,9 @@ fn spawn_gpu_capture(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Ok(mut child) = spawn_recording_child(&mut command) {
+            let stderr = child.stderr.take();
+            let stderr_reader =
+                thread::spawn(move || stderr.map(read_diagnostics).unwrap_or_default());
             let Some(stdout) = child.stdout.take() else {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1667,12 +1361,14 @@ fn spawn_gpu_capture(
                         encoded_timeline,
                         progress,
                         progress_reader,
+                        stderr_reader,
                     });
                 }
                 _ => {
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = progress_reader.join();
+                    let _ = stderr_reader.join();
                 }
             }
         }
@@ -1684,6 +1380,26 @@ fn spawn_gpu_capture(
 /// its `progress=` marker arrives, so `frame` and `out_time_us` always describe
 /// the same encoded point. The returned media duration lets the caller derive
 /// first-frame wall time even if FFmpeg reports progress slightly later.
+fn read_diagnostics(mut stream: impl Read) -> String {
+    // Keep draining even after the limit: a full stderr pipe stalls encoding.
+    const LIMIT: usize = 64 * 1024;
+    let mut tail = Vec::with_capacity(LIMIT);
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                let excess = (tail.len() + count).saturating_sub(LIMIT);
+                tail.drain(..excess);
+                tail.extend_from_slice(&chunk[..count]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&tail).into_owned()
+}
+
 fn parse_gpu_progress_line(line: &str, frame: &mut u64, out_time_us: &mut u64) -> Option<Duration> {
     let (key, value) = line.trim().split_once('=')?;
     match key {
@@ -2078,185 +1794,6 @@ pub(crate) fn recover_capture_parts(output_path: &Path) -> std::result::Result<b
     Ok(true)
 }
 
-// ── D3D11 device ─────────────────────────────────────────────────────────────
-
-fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    let mut feature_level = D3D_FEATURE_LEVEL::default();
-    let flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),
-            flags,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut feature_level),
-            Some(&mut context),
-        )?;
-    }
-
-    Ok((device.unwrap(), context.unwrap()))
-}
-
-// ── Capture item ─────────────────────────────────────────────────────────────
-
-fn create_capture_item(target_id: &str) -> Result<GraphicsCaptureItem> {
-    let class_name = HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureItem");
-    let interop: IGraphicsCaptureItemInterop = unsafe { RoGetActivationFactory(&class_name) }?;
-
-    if let Some(hmonitor) = hmonitor_from_id(target_id) {
-        unsafe { interop.CreateForMonitor(hmonitor) }
-    } else if let Some(hwnd) = hwnd_from_id(target_id) {
-        unsafe { interop.CreateForWindow(hwnd) }
-    } else {
-        Err(Error::from_hresult(E_INVALIDARG))
-    }
-}
-
-// ── FFmpeg subprocess ────────────────────────────────────────────────────────
-
-fn spawn_ffmpeg(
-    output_path: &str,
-    width: u32,
-    height: u32,
-    options: RecordingOptions,
-    gpu_vendor: GpuVendor,
-) -> Result<(Child, ChildStdin, String)> {
-    let size = format!("{width}x{height}");
-
-    fn try_ffmpeg(args: &[String]) -> std::result::Result<Child, std::io::Error> {
-        let mut command = recording_command("ffmpeg");
-        command
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        spawn_recording_child(&mut command)
-    }
-
-    let bitrate = format!("{}M", options.bitrate_mbps);
-    let mut candidates: Vec<(&str, Vec<String>)> = vec![
-        (
-            "NVENC",
-            vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", &bitrate]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        ),
-        (
-            "AMD AMF",
-            vec!["-c:v", "h264_amf", "-quality", "speed", "-b:v", &bitrate]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        ),
-        (
-            "Intel Quick Sync",
-            vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", &bitrate]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        ),
-        (
-            "Media Foundation",
-            vec!["-c:v", "h264_mf", "-hw_encoding", "1", "-b:v", &bitrate]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-        ),
-    ];
-    if options.allow_software_encoder {
-        candidates.push((
-            "x264 compatibility fallback",
-            vec![
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "zerolatency",
-                "-b:v",
-                &bitrate,
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        ));
-    }
-    candidates.sort_by_key(|(name, _)| gpu_vendor.encoder_rank(name));
-    for (name, codec_args) in candidates {
-        let test_src = format!("color=black:s={size}:r=1");
-        let mut probe_args = vec![
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            &test_src,
-            "-frames:v",
-            "1",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-        probe_args.extend(codec_args.iter().cloned());
-        probe_args.extend(["-f", "null", "-"].into_iter().map(str::to_string));
-        let probe_ok = background_command("ffmpeg")
-            .args(&probe_args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !probe_ok {
-            eprintln!("[Snap] {name} hardware probe failed; trying next GPU encoder");
-            continue;
-        }
-        let fps = options.fps.to_string();
-        let mut args = vec![
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-f",
-            "rawvideo",
-            "-pixel_format",
-            "bgra",
-            "-video_size",
-            &size,
-            "-framerate",
-            &fps,
-            "-i",
-            "pipe:0",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-        args.extend(codec_args);
-        args.extend(
-            ["-pix_fmt", "yuv420p", output_path]
-                .into_iter()
-                .map(str::to_string),
-        );
-        if let Ok(mut child) = try_ffmpeg(&args) {
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| Error::new(E_FAIL, "FFmpeg stdin unavailable"))?;
-            return Ok((child, stdin, name.to_string()));
-        }
-    }
-    Err(Error::new(E_FAIL, "No compatible H.264 encoder could start. Update the display driver or enable Snap's compatibility encoder fallback."))
-}
-
 // ── FFmpeg lifecycle ─────────────────────────────────────────────────────────
 
 fn wait_for_ffmpeg(child: &mut Child) -> bool {
@@ -2335,94 +1872,35 @@ fn validate_output(path: &std::path::Path, ffmpeg_ok: bool, stderr: &str) -> Res
     Ok(())
 }
 
-// ── Frame processing ─────────────────────────────────────────────────────────
-
-fn write_frame_to_ffmpeg(
-    frame: &Direct3D11CaptureFrame,
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    stdin: &Arc<Mutex<ChildStdin>>,
-    staging_cache: &mut Option<(ID3D11Texture2D, u32, u32)>,
-    crop: Option<CropRect>,
-) -> Result<()> {
-    let surface = frame.Surface()?;
-
-    let dxgi_access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
-    let texture: ID3D11Texture2D = unsafe { dxgi_access.GetInterface()? };
-
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
-
-    // Reuse the staging texture if dimensions match, otherwise create a new one.
-    let staging = match staging_cache {
-        Some((ref cached, w, h)) if *w == desc.Width && *h == desc.Height => cached.clone(),
-        _ => {
-            let mut staging_desc = desc;
-            staging_desc.Usage = D3D11_USAGE_STAGING;
-            staging_desc.BindFlags = 0;
-            staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-            staging_desc.MiscFlags = 0;
-
-            let mut new_staging: Option<ID3D11Texture2D> = None;
-            unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut new_staging))? };
-            let new_staging = new_staging.unwrap();
-            *staging_cache = Some((new_staging.clone(), desc.Width, desc.Height));
-            new_staging
-        }
-    };
-
-    unsafe { context.CopyResource(&staging, &texture) };
-
-    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-    unsafe {
-        context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-    }
-
-    let crop = crop.unwrap_or(CropRect {
-        x: 0,
-        y: 0,
-        w: desc.Width,
-        h: desc.Height,
-    });
-    let height = crop.h as usize;
-    let row_pitch = mapped.RowPitch as usize;
-    let packed_row = (crop.w * 4) as usize;
-
-    let mut buf = Vec::with_capacity(packed_row * height);
-    unsafe {
-        for row in 0..height {
-            let src = (mapped.pData as *const u8)
-                .add((row + crop.y as usize) * row_pitch + crop.x as usize * 4);
-            let slice = std::slice::from_raw_parts(src, packed_row);
-            buf.extend_from_slice(slice);
-        }
-    }
-
-    unsafe { context.Unmap(&staging, 0) };
-
-    let mut writer = stdin
-        .lock()
-        .map_err(|_| Error::new(E_FAIL, "FFmpeg input pipe lock was poisoned"))?;
-    writer.write_all(&buf).map_err(|error| {
-        Error::new(
-            E_FAIL,
-            format!("FFmpeg input pipe rejected a frame: {error}"),
-        )
-    })?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::{
-        constrained_size, desktop_duplication_source, editor_ready_fps_filter,
-        gfxcapture_region_source, gfxcapture_source, parse_gpu_progress_line,
-        validate_capture_segment, CropRect, RecordingOptions, EDITOR_READY_MOVFLAGS,
-        RESILIENT_MP4_MOVFLAGS,
+        constrained_size, editor_ready_fps_filter, gfxcapture_region_source, gfxcapture_source,
+        parse_gpu_progress_line, validate_capture_segment, CropRect, RecordingOptions,
+        EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
     };
+
+    #[test]
+    fn diagnostics_are_drained_and_memory_is_bounded() {
+        let mut bytes = vec![b'x'; 200_000];
+        bytes.extend_from_slice(b"last driver error");
+        let mut source = std::io::Cursor::new(bytes);
+        let result = super::read_diagnostics(&mut source);
+        assert_eq!(result.len(), 64 * 1024);
+        assert!(result.ends_with("last driver error"));
+        assert_eq!(source.position(), source.get_ref().len() as u64);
+    }
+
+    #[test]
+    fn default_capture_never_silently_uses_the_cpu_encoder() {
+        assert!(
+            !RecordingOptions::default()
+                .sanitized()
+                .allow_software_encoder
+        );
+    }
 
     fn quality_options() -> RecordingOptions {
         RecordingOptions {
@@ -2430,7 +1908,7 @@ mod tests {
             bitrate_mbps: 12,
             max_width: None,
             max_height: None,
-            allow_software_encoder: true,
+            allow_software_encoder: false,
         }
     }
 
@@ -2472,14 +1950,6 @@ mod tests {
         assert!(source.starts_with("gfxcapture=hmonitor=88:"));
         assert!(source.contains("max_framerate=60"));
         assert!(source.contains("capture_cursor=0"));
-    }
-
-    #[test]
-    fn full_display_fallback_keeps_a_continuous_audio_aligned_timeline() {
-        let source = desktop_duplication_source(2, quality_options());
-        assert!(source.contains("output_idx=2"));
-        assert!(source.contains("framerate=60"));
-        assert!(source.contains("dup_frames=1"));
     }
 
     #[test]
