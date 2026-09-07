@@ -104,9 +104,9 @@ Snap/
 │   ├── icons/              Snap application icons
 │   └── src/                Native capture, audio, input, export, and mobile
 ├── website/                Isolated Next.js product and download website
+│   └── vercel.json         Website deployment configuration
 ├── .github/workflows/      Signed release automation
 ├── RELEASING.md            Maintainer release instructions
-├── vercel.json             Website-only Vercel build configuration
 └── package.json
 ```
 
@@ -131,8 +131,9 @@ npm --prefix website ci
 npm run web:dev
 ```
 
-The root `vercel.json` installs and builds only `website/`. Desktop-only commits
-are skipped by Vercel, while the Tauri application continues to use the root
+For Vercel, set the project **Root Directory** to `website`. Vercel then reads
+`website/vercel.json`, detects Next.js from `website/package.json`, and deploys
+only the landing page. The Tauri application continues to use the repository-root
 `npm run build` command and `dist/` output.
 
 Run the frontend by itself when working only on editor UI:

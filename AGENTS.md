@@ -74,7 +74,7 @@ snap/
 │   ├── tauri.conf.json
 │   └── build.rs
 ├── website/               # Independent Next.js landing and download site
-├── vercel.json            # Builds and deploys only website/
+│   └── vercel.json        # Read with Vercel Root Directory set to website/
 ├── index.html
 ├── package.json
 ├── tsconfig.json
@@ -104,8 +104,9 @@ snap/
   heavy for background gaming. Media Foundation with hardware codecs is the
   primary path.
 - **Website isolation.** Desktop commands use the root Vite/Tauri project.
-  Website commands run through `npm --prefix website`; Vercel must not package
-  website code into the Windows application or deploy the desktop frontend.
+  Website commands run through `npm --prefix website`; the Vercel project Root
+  Directory is `website`, so it cannot package the Windows application or deploy
+  the desktop Vite frontend.
 
 ## Dependencies (planned)
 

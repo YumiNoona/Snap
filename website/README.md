@@ -29,14 +29,12 @@ npm run build
 
 ## Deploy to Vercel
 
-The Snap repository root contains `vercel.json`. It deliberately installs,
-builds, and serves this directory only, and skips deployments for commits that
-do not change `website/` or `vercel.json`.
-
 1. Import the `YumiNoona/Snap` repository in Vercel.
-2. Leave the project Root Directory at the repository root.
-3. Deploy. The checked-in configuration selects Next.js and this website's
-   `.next` output; no environment variables or dashboard command overrides are
-   required.
+2. Edit **Root Directory** and select `website`.
+3. Keep the detected framework as **Next.js** and deploy.
+
+Vercel now reads this directory's `package.json` and `vercel.json` directly, so
+the desktop Vite/Tauri project is never treated as the website. No environment
+variables or custom install, build, or output commands are required.
 
 The `/download` route queries the latest release from `YumiNoona/Snap` and redirects to the setup `.exe`. If GitHub's API is unavailable, it falls back to the releases page.
