@@ -103,14 +103,14 @@ Snap/
 ├── src-tauri/
 │   ├── icons/              Snap application icons
 │   └── src/                Native capture, audio, input, export, and mobile
-├── website/                Isolated Next.js product and download website
+├── web/                    Isolated Next.js product and download website
 │   └── vercel.json         Website deployment configuration
 ├── .github/workflows/      Signed release automation
 ├── RELEASING.md            Maintainer release instructions
 └── package.json
 ```
 
-Generated folders such as `node_modules`, `dist`, `website/.next`, and
+Generated folders such as `node_modules`, `dist`, `web/.next`, and
 `src-tauri/target` are intentionally excluded from Git. The desktop and website
 keep separate manifests and dependency trees, so building either one does not
 compile or package the other.
@@ -127,12 +127,12 @@ npm run tauri dev
 Run the product website independently:
 
 ```powershell
-npm --prefix website ci
+npm --prefix web ci
 npm run web:dev
 ```
 
-For Vercel, set the project **Root Directory** to `website`. Vercel then reads
-`website/vercel.json`, detects Next.js from `website/package.json`, and deploys
+For Vercel, set the project **Root Directory** to `web`. Vercel then reads
+`web/vercel.json`, detects Next.js from `web/package.json`, and deploys
 only the landing page. The Tauri application continues to use the repository-root
 `npm run build` command and `dist/` output.
 

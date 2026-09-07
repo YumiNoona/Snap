@@ -30,7 +30,7 @@ npm run build
 ## Deploy to Vercel
 
 1. Import the `YumiNoona/Snap` repository in Vercel.
-2. Edit **Root Directory** and select `website`.
+2. Edit **Root Directory** and select `web`.
 3. Keep the detected framework as **Next.js** and deploy.
 
 Vercel now reads this directory's `package.json` and `vercel.json` directly, so

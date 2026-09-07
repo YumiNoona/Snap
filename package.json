@@ -9,9 +9,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "web:dev": "npm --prefix website run dev",
-    "web:build": "npm --prefix website run build",
-    "web:lint": "npm --prefix website run lint",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
+    "web:lint": "npm --prefix web run lint",
     "tauri": "tauri"
   },
   "dependencies": {
