@@ -7,6 +7,8 @@ Tauri v2 (React + TypeScript frontend, Rust backend).
 ## High-Level Design
 
 Two-part architecture: a **lightweight native recorder** and a **heavier editor UI**.
+The product website is an isolated Next.js project under `website/`; it has its
+own manifest and is never included in the recorder or editor build.
 
 ### Recorder (Rust backend — runs during recording)
 
@@ -71,6 +73,8 @@ snap/
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
 │   └── build.rs
+├── website/               # Independent Next.js landing and download site
+├── vercel.json            # Builds and deploys only website/
 ├── index.html
 ├── package.json
 ├── tsconfig.json
@@ -99,6 +103,9 @@ snap/
 - **GPU encoding mandatory for recording.** Software encoding would be too
   heavy for background gaming. Media Foundation with hardware codecs is the
   primary path.
+- **Website isolation.** Desktop commands use the root Vite/Tauri project.
+  Website commands run through `npm --prefix website`; Vercel must not package
+  website code into the Windows application or deploy the desktop frontend.
 
 ## Dependencies (planned)
 

@@ -7,6 +7,9 @@ node_modules/
 dist/
 dist-ssr/
 .vite/
+website/.next/
+website/out/
+.vercel/
 *.tsbuildinfo
 *.local
 
