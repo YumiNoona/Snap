@@ -176,6 +176,12 @@ export default function Preview({
   // Cache resolved CSS variable colors ONCE — never call getComputedStyle inside rAF.
   const colorsRef = useRef({ shadow: "#0f172a", crop: "rgba(0,0,0,0.45)", border: "#ffffff", cursorWhite: "#ffffff" });
 
+  useEffect(() => () => {
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    if (context && context.state !== "closed") void context.close().catch(() => {});
+  }, []);
+
   useEffect(() => {
     setPlaybackPath(videoPath);
     setVideoReady(false);
@@ -720,6 +726,8 @@ export default function Preview({
     if (camera && cameraMedia) {
       const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
       if (cameraTime >= 0 && cameraTime <= camera.duration) {
+        camera.defaultPlaybackRate = video.playbackRate;
+        camera.playbackRate = video.playbackRate;
         if (Number.isFinite(cameraTime) && Math.abs(camera.currentTime - cameraTime) > 0.14 && !camera.seeking) {
           camera.currentTime = cameraTime;
         }

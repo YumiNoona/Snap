@@ -787,6 +787,42 @@ fn read_optional_text_file(app: tauri::AppHandle, path: String) -> Result<Option
 }
 
 #[tauri::command]
+fn read_input_log(app: tauri::AppHandle, path: String) -> Result<Vec<serde_json::Value>, String> {
+    use std::io::BufRead;
+    const MAX_BYTES: u64 = 512 * 1024 * 1024;
+    const MAX_EVENTS: usize = 5_000_000;
+    access::require(&app, Path::new(&path))?;
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Cannot read {path}: {error}")),
+    };
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+        return Err("Input log is not a regular file or exceeds 512 MiB".into());
+    }
+    let mut events = Vec::new();
+    let mut lines = std::io::BufReader::new(file).lines().peekable();
+    while let Some(line) = lines.next() {
+        let line = line.map_err(|error| format!("Cannot read input log: {error}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        // A recorder crash can leave only the final JSONL record incomplete.
+        // Corruption in the middle is still reported instead of hidden.
+        match serde_json::from_str(&line) {
+            Ok(value) => events.push(value),
+            Err(_) if lines.peek().is_none() => break,
+            Err(error) => return Err(format!("Input log contains invalid JSON: {error}")),
+        }
+        if events.len() > MAX_EVENTS {
+            return Err("Input log contains too many events".into());
+        }
+    }
+    Ok(events)
+}
+
+#[tauri::command]
 fn probe_media_duration(app: tauri::AppHandle, path: String) -> Result<f64, String> {
     let media_path = Path::new(&path);
     access::require(&app, media_path)?;
@@ -1570,6 +1606,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                export::discard_export_sink_for_window(window.label());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
             capture::get_target_bounds,
@@ -1583,6 +1624,8 @@ pub fn run() {
             audio::audio_waveform,
             transcription::transcription_environment,
             transcription::install_transcription_dependencies,
+            transcription::install_transcription_model,
+            transcription::cancel_transcription_install,
             transcription::transcribe_audio,
             mobile::mobile_environment,
             mobile::install_android_capture_support,
@@ -1601,6 +1644,7 @@ pub fn run() {
             export::open_export_sink,
             export::write_export_chunk,
             export::close_export_sink,
+            export::discard_canvas_export,
             export::finalize_canvas_export,
             open_editor_window,
             set_editor_suspended_for_recording,
@@ -1625,6 +1669,7 @@ pub fn run() {
             set_countdown,
             read_text_file,
             read_optional_text_file,
+            read_input_log,
             probe_media_duration,
             prepare_editor_preview,
             write_text_file_atomic,

@@ -1,5 +1,6 @@
 use crate::process::background_command;
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
@@ -9,6 +10,7 @@ pub struct TranscriptionEnvironment {
     available: bool,
     executable_path: Option<String>,
     model_path: Option<String>,
+    installed_models: Vec<String>,
     message: String,
 }
 
@@ -17,6 +19,12 @@ pub struct TranscriptionEnvironment {
 pub struct TranscriptionRequest {
     pub audio_path: String,
     pub language: String,
+    #[serde(default = "default_transcription_model")]
+    pub model: String,
+}
+
+fn default_transcription_model() -> String {
+    "auto".to_string()
 }
 
 #[derive(Serialize)]
@@ -90,26 +98,36 @@ fn resolve_executable() -> Option<PathBuf> {
     ])
 }
 
-fn resolve_model() -> Option<PathBuf> {
+fn resolve_model(preferred: &str) -> Option<PathBuf> {
     let root = bundled_root().join("transcription").join("models");
     let user = user_transcription_root().join("models");
-    existing_candidate([
-        user.join("ggml-base.bin"),
-        root.join("ggml-small.bin"),
-        root.join("ggml-base.bin"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("models")
-            .join("ggml-small.bin"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("models")
-            .join("ggml-base.bin"),
-    ])
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
+    let model_names: &[&str] = match preferred {
+        "tiny" => &["ggml-tiny.bin"],
+        "base" => &["ggml-base.bin"],
+        "small" => &["ggml-small.bin"],
+        "medium" => &["ggml-medium.bin"],
+        "large-v3-turbo" => &["ggml-large-v3-turbo.bin"],
+        _ => &[
+            "ggml-large-v3-turbo.bin",
+            "ggml-medium.bin",
+            "ggml-small.bin",
+            "ggml-base.bin",
+            "ggml-tiny.bin",
+        ],
+    };
+    existing_candidate(model_names.iter().flat_map(|name| [
+        user.join(name),
+        root.join(name),
+        development.join(name),
+    ]))
 }
 
 #[tauri::command]
 pub async fn install_transcription_dependencies(
     window: tauri::Window,
 ) -> Result<TranscriptionEnvironment, String> {
+    crate::caption_install::begin();
     tauri::async_runtime::spawn_blocking(move || {
         crate::caption_install::install(
             &user_transcription_root(),
@@ -124,9 +142,39 @@ pub async fn install_transcription_dependencies(
 }
 
 #[tauri::command]
+pub async fn install_transcription_model(
+    window: tauri::Window,
+    model: String,
+) -> Result<TranscriptionEnvironment, String> {
+    crate::caption_install::begin();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::caption_install::install_model(
+            &user_transcription_root(),
+            &model,
+            |percent, phase, downloaded, total| {
+                emit_install_progress(&window, percent, phase, downloaded, total);
+            },
+        )?;
+        Ok(transcription_environment())
+    })
+    .await
+    .map_err(|error| format!("Caption model installer failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn cancel_transcription_install() {
+    crate::caption_install::cancel();
+}
+
+#[tauri::command]
 pub fn transcription_environment() -> TranscriptionEnvironment {
     let executable = resolve_executable();
-    let model = resolve_model();
+    let model = resolve_model("auto");
+    let installed_models = ["tiny", "base", "small", "medium", "large-v3-turbo"]
+        .into_iter()
+        .filter(|name| resolve_model(name).is_some())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let available = executable.is_some() && model.is_some();
     TranscriptionEnvironment {
         available,
@@ -136,6 +184,7 @@ pub fn transcription_environment() -> TranscriptionEnvironment {
         model_path: model
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
+        installed_models,
         message: if available {
             "Offline transcription is ready".to_string()
         } else {
@@ -157,50 +206,74 @@ struct AudioActivityRange {
 }
 
 fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
-    let bytes = std::fs::read(path)
+    let mut file = std::fs::File::open(path)
         .map_err(|error| format!("Unable to inspect transcription audio: {error}"))?;
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header)
+        .map_err(|_| "Prepared transcription audio is not a valid WAV file".to_string())?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
         return Err("Prepared transcription audio is not a valid WAV file".to_string());
     }
-    let mut cursor = 12usize;
     let mut sample_rate = 16_000u32;
     let mut channels = 1u16;
     let mut bits_per_sample = 16u16;
-    let mut data = None;
-    while cursor + 8 <= bytes.len() {
-        let id = &bytes[cursor..cursor + 4];
-        let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap()) as usize;
-        let start = cursor + 8;
-        let end = start.saturating_add(size).min(bytes.len());
-        if id == b"fmt " && end >= start + 16 {
-            channels = u16::from_le_bytes(bytes[start + 2..start + 4].try_into().unwrap());
-            sample_rate = u32::from_le_bytes(bytes[start + 4..start + 8].try_into().unwrap());
-            bits_per_sample = u16::from_le_bytes(bytes[start + 14..start + 16].try_into().unwrap());
-        } else if id == b"data" {
-            data = Some(&bytes[start..end]);
+    let mut data_size = None;
+    loop {
+        let mut chunk = [0u8; 8];
+        if file.read_exact(&mut chunk).is_err() {
             break;
         }
-        cursor = start.saturating_add(size).saturating_add(size % 2);
+        let size = u32::from_le_bytes(chunk[4..8].try_into().unwrap()) as u64;
+        if &chunk[0..4] == b"fmt " {
+            if size < 16 {
+                return Err("Prepared transcription WAV has an invalid format chunk".into());
+            }
+            let mut format = [0u8; 16];
+            file.read_exact(&mut format)
+                .map_err(|error| error.to_string())?;
+            channels = u16::from_le_bytes(format[2..4].try_into().unwrap());
+            sample_rate = u32::from_le_bytes(format[4..8].try_into().unwrap());
+            bits_per_sample = u16::from_le_bytes(format[14..16].try_into().unwrap());
+            file.seek(SeekFrom::Current((size - 16 + size % 2) as i64))
+                .map_err(|error| error.to_string())?;
+        } else if &chunk[0..4] == b"data" {
+            data_size = Some(size);
+            break;
+        } else {
+            file.seek(SeekFrom::Current((size + size % 2) as i64))
+                .map_err(|error| error.to_string())?;
+        }
     }
     if channels != 1 || bits_per_sample != 16 || sample_rate == 0 {
         return Err("Transcription analysis expects 16-bit mono PCM audio".to_string());
     }
-    let data = data.ok_or_else(|| "Prepared transcription WAV has no audio data".to_string())?;
-    let samples = data
-        .chunks_exact(2)
-        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0)
-        .collect::<Vec<_>>();
-    if samples.is_empty() {
+    let total_samples =
+        data_size.ok_or_else(|| "Prepared transcription WAV has no audio data".to_string())? / 2;
+    if total_samples == 0 {
         return Ok(Vec::new());
     }
 
     let window_samples = (sample_rate as usize / 50).max(1); // 20 ms
-    let mut levels = Vec::with_capacity(samples.len().div_ceil(window_samples));
+    let window_bytes = window_samples * 2;
+    let mut buffer = vec![0u8; window_bytes];
+    let mut remaining = total_samples * 2;
+    let mut levels = Vec::with_capacity((total_samples as usize).div_ceil(window_samples));
     let mut peaks = Vec::with_capacity(levels.capacity());
-    for window in samples.chunks(window_samples) {
-        let sum_squares = window.iter().map(|sample| sample * sample).sum::<f64>();
-        levels.push((sum_squares / window.len().max(1) as f64).sqrt());
-        peaks.push(window.iter().map(|sample| sample.abs()).fold(0.0, f64::max));
+    while remaining > 0 {
+        let count = (remaining as usize).min(window_bytes);
+        file.read_exact(&mut buffer[..count])
+            .map_err(|error| format!("Unable to read transcription audio: {error}"))?;
+        let mut sum_squares = 0.0;
+        let mut peak: f64 = 0.0;
+        for sample in buffer[..count].chunks_exact(2) {
+            let value = i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0;
+            sum_squares += value * value;
+            peak = peak.max(value.abs());
+        }
+        let sample_count = (count / 2).max(1);
+        levels.push((sum_squares / sample_count as f64).sqrt());
+        peaks.push(peak);
+        remaining -= count as u64;
     }
     let mut sorted = levels.clone();
     sorted.sort_by(f64::total_cmp);
@@ -244,8 +317,7 @@ fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
         }
         if end - start >= 6 {
             let start_ms = (start as u64 * 20).saturating_sub(100);
-            let end_ms =
-                (end as u64 * 20 + 200).min(samples.len() as u64 * 1000 / sample_rate as u64);
+            let end_ms = (end as u64 * 20 + 200).min(total_samples * 1000 / sample_rate as u64);
             if let Some(previous) = ranges.last_mut() {
                 if start_ms <= previous.end_ms {
                     previous.end_ms = previous.end_ms.max(end_ms);
@@ -347,8 +419,13 @@ pub async fn transcribe_audio(
     tauri::async_runtime::spawn_blocking(move || {
         let executable =
             resolve_executable().ok_or_else(|| "whisper-cli.exe is not installed".to_string())?;
-        let model = resolve_model()
-            .ok_or_else(|| "A multilingual Whisper model is not installed".to_string())?;
+        let model = resolve_model(&request.model).ok_or_else(|| {
+            if request.model == "auto" {
+                "A compatible multilingual Whisper model is not installed".to_string()
+            } else {
+                format!("The selected Whisper {} model is not installed", request.model)
+            }
+        })?;
         let source = PathBuf::from(&request.audio_path);
         if !source.is_file() {
             return Err(format!("Audio track does not exist: {}", source.display()));

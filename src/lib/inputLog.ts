@@ -10,6 +10,16 @@ export interface LoadedInputLog {
   platform: string | null;
 }
 
+type RawInputEvent = InputEvent & {
+  source?: string;
+  platform?: string;
+  captureStartMs?: number;
+  captureElapsedMs?: number;
+  videoDurationMs?: number;
+  w?: number;
+  h?: number;
+};
+
 /**
  * Load and align the JSON sidecar written by the Rust input_hook module.
  * Parses `meta` lines (capture-start offset + recording region), aligns
@@ -19,17 +29,12 @@ export interface LoadedInputLog {
  * exact same cursor data the exact same way.
  */
 export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog> {
-  const text = await invoke<string | null>("read_optional_text_file", { path: inputLogPath });
-  if (!text) {
+  const raw = await invoke<RawInputEvent[]>("read_input_log", { path: inputLogPath });
+  if (raw.length === 0) {
     // Imported videos do not have Snap's input-event sidecar. The editor is
     // still fully usable for manual zooms, captions, styling, audio and export.
     return { allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null };
   }
-  const raw: any[] = text
-    .split("\n")
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l));
-
   let captureStartMs = 0;
   let captureElapsedMs = 0;
   let videoDurationMs = 0;
@@ -45,7 +50,7 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
       }
       if (typeof e.captureElapsedMs === "number" && e.captureElapsedMs > 0) captureElapsedMs = e.captureElapsedMs;
       if (typeof e.videoDurationMs === "number" && e.videoDurationMs > 0) videoDurationMs = e.videoDurationMs;
-      if (typeof e.w === "number" && e.w > 0) {
+      if (typeof e.x === "number" && typeof e.y === "number" && typeof e.w === "number" && typeof e.h === "number" && e.w > 0 && e.h > 0) {
         region = { x: e.x, y: e.y, w: e.w, h: e.h };
       }
     }

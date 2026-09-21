@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, ChevronDown, Upload, Minus, X, LayoutTemplate, MousePointer2, Type, Sparkles, AudioWaveform, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon } from "lucide-react";
+import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -133,6 +133,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (isBrowserPreview || duration > 0) return;
@@ -238,6 +239,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     const unlisten = appWindow.onCloseRequested(async (event) => {
       if (committingClose) return;
       event.preventDefault();
+      if (exportAbortRef.current) {
+        setFileActionStatus("Cancel the active export before closing the editor");
+        setShowExport(true);
+        return;
+      }
       committingClose = true;
       try {
         await saveProjectNow();
@@ -250,6 +256,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     });
     return () => { void unlisten.then((stop) => stop()); };
   }, [appWindow, projectReady, saveProjectNow]);
+
+  useEffect(() => () => exportAbortRef.current?.abort(), []);
 
   useEffect(() => {
     if (isBrowserPreview) return;
@@ -440,13 +448,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   };
 
   const handleExport = async (settings: ExportSettings) => {
-    setExportStatus("Exporting...");
-    setExportProgress(0);
+    if (exportAbortRef.current) return;
     try {
       const selected = await saveDialog({ title: "Export video", defaultPath: settings.outputPath, filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }] });
-      if (!selected) { setExportStatus(""); return; }
+      if (!selected) return;
       settings = { ...settings, outputPath: selected };
       if (selected.toLowerCase() === videoPath.toLowerCase()) throw new Error("Choose a different filename to preserve your source recording");
+      const abortController = new AbortController();
+      exportAbortRef.current = abortController;
+      setExportStatus("Exporting...");
+      setExportProgress(0);
       const result = await runCanvasExport(
         videoPath,
         inputLogPath,
@@ -466,15 +477,23 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             setExportStatus("Finalizing...");
             setExportProgress(0.98);
           }
-        }
+        },
+        abortController.signal
       );
       setExportStatus(`Done: ${settings.outputPath}`);
       setExportProgress(1);
       void result;
     } catch (e) {
-      setExportStatus(`Export failed: ${e}`);
+      setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${e}`);
+    } finally {
+      exportAbortRef.current = null;
     }
   };
+
+  const handleCancelExport = useCallback(() => {
+    exportAbortRef.current?.abort();
+    setExportStatus("Cancelling export...");
+  }, []);
 
   const getOccupiedZoomRanges = useCallback((frames: Keyframe[], timelineEndMs: number) => {
     return collectZoomRegions(frames, timelineEndMs).map(({ startMs, endMs }) => ({ startMs, endMs }));
@@ -752,11 +771,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
               onClick={() => setShowFileMenu((open) => !open)}
               aria-haspopup="menu"
               aria-expanded={showFileMenu}
+              aria-label="Project file menu"
+              title="Project file menu"
             >
               <File size={15} />
-              <span>File</span>
               {projectDirty && <i aria-label="Unsaved changes" />}
-              <ChevronDown size={13} />
             </button>
             {showFileMenu && (
               <div className="ss-file-menu" role="menu">
@@ -792,11 +811,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
               onClick={() => setShowPresets((open) => !open)}
               aria-expanded={showPresets}
               aria-haspopup="dialog"
+              aria-label="Editor presets"
+              title="Editor presets"
             >
               <Bookmark size={15} />
-              <span>Presets</span>
               {savedPresets.length > 0 && <span className="preset-count">{savedPresets.length}</span>}
-              <ChevronDown size={14} className={showPresets ? "rotate" : ""} />
             </button>
 
             {showPresets && (
@@ -864,7 +883,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           >
             {editorTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
           </button>
-          <DonateButton />
+          <DonateButton compact />
           <button
             className="ss-topbar-export-btn"
             onClick={() => setShowExport(true)}
@@ -901,7 +920,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             aria-pressed={activeTool === "canvas"}
             title="Canvas & Background"
           >
-            <LayoutTemplate size={21} /><span className="ss-tool-label">Canvas</span>
+            <Frame size={20} /><span className="ss-tool-label">Canvas</span>
           </button>
 
           <button
@@ -910,7 +929,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             aria-pressed={activeTool === "cursor"}
             title="Cursor & Pointer Styling"
           >
-            <MousePointer2 size={21} /><span className="ss-tool-label">Cursor</span>
+            <MousePointer2 size={20} /><span className="ss-tool-label">Cursor</span>
           </button>
 
           <button
@@ -919,7 +938,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             aria-pressed={activeTool === "annotations"}
             title="Annotations & Layers"
           >
-            <Type size={21} /><span className="ss-tool-label">Layers</span>
+            <Layers3 size={20} /><span className="ss-tool-label">Layers</span>
           </button>
 
           <button
@@ -928,7 +947,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             aria-pressed={activeTool === "motion"}
             title="Motion & Blur"
           >
-            <Sparkles size={21} /><span className="ss-tool-label">Motion</span>
+            <Focus size={20} /><span className="ss-tool-label">Motion</span>
           </button>
 
           <button
@@ -937,7 +956,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             aria-pressed={activeTool === "audio"}
             title="Audio"
           >
-            <AudioWaveform size={21} /><span className="ss-tool-label">Audio</span>
+            <AudioLines size={20} /><span className="ss-tool-label">Audio</span>
           </button>
 
           <button
@@ -947,7 +966,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             title="Captions & Subtitles"
             aria-label="Captions and subtitles"
           >
-            <Captions size={21} /><span className="ss-tool-label">Captions</span>
+            <Captions size={20} /><span className="ss-tool-label">Captions</span>
           </button>
 
         </aside>
@@ -1040,6 +1059,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
       <Timeline
+        editorTheme={editorTheme}
         audioTracks={audioTracks}
         duration={duration}
         currentTime={currentTime}
@@ -1158,6 +1178,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           status={exportStatus}
           progress={exportProgress}
           onClose={() => setShowExport(false)}
+          onCancel={handleCancelExport}
           onExport={handleExport}
         />
       )}

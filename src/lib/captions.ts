@@ -3,11 +3,13 @@ import type { AudioTrack, AudioTrackKind, CaptionSegment, CaptionTrack } from ".
 import { recordingDataPaths } from "./recordingPaths";
 
 export type TranscriptionLanguage = "auto" | "en" | "hi";
+export type TranscriptionModel = "auto" | "tiny" | "base" | "small" | "medium" | "large-v3-turbo";
 
 export interface TranscriptionEnvironment {
   available: boolean;
   executablePath: string | null;
   modelPath: string | null;
+  installedModels: TranscriptionModel[];
   message: string;
 }
 
@@ -258,9 +260,9 @@ export async function getTranscriptionEnvironment(): Promise<TranscriptionEnviro
   return invoke("transcription_environment");
 }
 
-export async function transcribeTrack(track: AudioTrack, language: TranscriptionLanguage): Promise<CaptionTrack> {
+export async function transcribeTrack(track: AudioTrack, language: TranscriptionLanguage, model: TranscriptionModel = "auto"): Promise<CaptionTrack> {
   const result = await invoke<NativeTranscriptionResult>("transcribe_audio", {
-    request: { audioPath: track.path, language },
+    request: { audioPath: track.path, language, model },
   });
   const sourceTrackIds = [track.id];
   const segments: CaptionSegment[] = chunkCaptionSegments(result.segments).map((segment, index) => ({

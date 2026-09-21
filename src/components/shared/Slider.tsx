@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Pipette } from "lucide-react";
 import "./Slider.css";
 
 interface SliderProps {
@@ -74,6 +75,18 @@ interface ColorInputProps {
 }
 
 export function ColorInput({ label, value, onChange }: ColorInputProps) {
+  const pickFromScreen = async () => {
+    const EyeDropperCtor = (window as unknown as { EyeDropper?: new () => { open: () => Promise<{ sRGBHex: string }> } }).EyeDropper;
+    if (!EyeDropperCtor) return;
+    try {
+      const result = await new EyeDropperCtor().open();
+      onChange(result.sRGBHex);
+    } catch {
+      // Cancelling the system picker leaves the current color unchanged.
+    }
+  };
+  const eyeDropperAvailable = "EyeDropper" in window;
+
   return (
     <div className="color-row">
       {label && <label>{label}</label>}
@@ -91,6 +104,16 @@ export function ColorInput({ label, value, onChange }: ColorInputProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
+        <button
+          type="button"
+          className="color-eyedropper"
+          onClick={() => void pickFromScreen()}
+          disabled={!eyeDropperAvailable}
+          title={eyeDropperAvailable ? "Pick a color from anywhere on screen" : "Screen color picker is unavailable"}
+          aria-label="Pick color from screen"
+        >
+          <Pipette size={15} />
+        </button>
       </div>
     </div>
   );

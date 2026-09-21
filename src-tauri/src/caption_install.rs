@@ -1,10 +1,35 @@
 use sha2::Digest;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 pub const ENGINE_HASH: &str = "7d8be46ecd31828e1eb7a2ecdd0d6b314feafd82163038ab6092594b0a063539";
 pub const MODEL_HASH: &str = "465707469ff3a37a2b9b8d8f89f2f99de7299dac";
+
+struct ModelDownload {
+    id: &'static str,
+    filename: &'static str,
+    sha1: &'static str,
+}
+
+const MODELS: &[ModelDownload] = &[
+    ModelDownload { id: "tiny", filename: "ggml-tiny.bin", sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f" },
+    ModelDownload { id: "base", filename: "ggml-base.bin", sha1: MODEL_HASH },
+    ModelDownload { id: "small", filename: "ggml-small.bin", sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5" },
+    ModelDownload { id: "medium", filename: "ggml-medium.bin", sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4" },
+    ModelDownload { id: "large-v3-turbo", filename: "ggml-large-v3-turbo.bin", sha1: "4af2b29d7ec73d781377bfd1758ca957a807e941" },
+];
+
+static CANCEL_INSTALL: AtomicBool = AtomicBool::new(false);
+
+pub fn begin() {
+    CANCEL_INSTALL.store(false, Ordering::SeqCst);
+}
+
+pub fn cancel() {
+    CANCEL_INSTALL.store(true, Ordering::SeqCst);
+}
 
 pub fn checksum(path: &Path, sha256: bool) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
@@ -58,6 +83,11 @@ fn download(
     let mut downloaded = 0u64;
     let mut last = Instant::now();
     loop {
+        if CANCEL_INSTALL.load(Ordering::SeqCst) {
+            drop(file);
+            let _ = std::fs::remove_file(&partial);
+            return Err("Caption model download cancelled".into());
+        }
         let count = response
             .read(&mut bytes)
             .map_err(|e| format!("Download interrupted. Retry installation: {e}"))?;
@@ -96,6 +126,14 @@ fn download(
 
 pub fn install(
     root: &Path,
+    progress: impl Fn(u8, &str, Option<u64>, Option<u64>),
+) -> Result<(), String> {
+    install_model(root, "base", progress)
+}
+
+pub fn install_model(
+    root: &Path,
+    model_id: &str,
     progress: impl Fn(u8, &str, Option<u64>, Option<u64>),
 ) -> Result<(), String> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -143,15 +181,17 @@ pub fn install(
         }
         std::fs::write(marker, ENGINE_HASH).map_err(|e| e.to_string())?;
     }
+    let model = MODELS.iter().find(|model| model.id == model_id)
+        .ok_or_else(|| format!("Unsupported transcription model: {model_id}"))?;
     download(
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true",
-        &models.join("ggml-base.bin"),
-        MODEL_HASH,
+        &format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}?download=true", model.filename),
+        &models.join(model.filename),
+        model.sha1,
         21,
         99,
         &progress,
     )?;
-    progress(100, "Offline captions ready on this PC", None, None);
+    progress(100, &format!("{} model ready on this PC", model_id), None, None);
     Ok(())
 }
 

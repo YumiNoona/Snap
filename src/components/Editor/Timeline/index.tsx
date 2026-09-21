@@ -1,9 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { Play, Pause, ChevronDown, ChevronUp } from "lucide";
-import { MorphIcon } from "morphicons/react";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Plus, Music2 } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Plus, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
@@ -12,6 +10,7 @@ import { timelineHeightBounds } from "../../../lib/timelineLayout";
 import "./Timeline.css";
 
 interface Props {
+  editorTheme: "dark" | "light";
   audioTracks: AudioTrack[];
   duration: number;
   currentTime: number;
@@ -68,6 +67,7 @@ interface ZoomSegment {
 }
 
 export default function Timeline({
+  editorTheme,
   audioTracks,
   duration,
   currentTime,
@@ -157,6 +157,22 @@ export default function Timeline({
   useEffect(() => {
     if (!contextMenu) return;
     requestAnimationFrame(() => contextMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus());
+  }, [contextMenu]);
+
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current;
+    if (!contextMenu || !menu) return;
+    const frame = requestAnimationFrame(() => {
+      const padding = 10;
+      menu.style.maxHeight = `${Math.max(180, window.innerHeight - padding * 2)}px`;
+      const rect = menu.getBoundingClientRect();
+      const left = Math.max(padding, Math.min(contextMenu.x, window.innerWidth - rect.width - padding));
+      const top = Math.max(padding, Math.min(contextMenu.y, window.innerHeight - rect.height - padding));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      menu.dataset.opensUpward = top < contextMenu.y ? "true" : "false";
+    });
+    return () => cancelAnimationFrame(frame);
   }, [contextMenu]);
   const deviceTrack = audioTracks.find((track) => track.kind === "device");
   const systemTrack = deviceTrack ?? audioTracks.find((track) => track.kind === "system");
@@ -558,8 +574,8 @@ export default function Timeline({
   )?.label || "Wide 16:9";
 
   const menuPosition = (event: React.MouseEvent) => ({
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 216)),
-    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 210)),
+    x: event.clientX,
+    y: event.clientY,
   });
 
   const handleContextMenuKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -585,10 +601,12 @@ export default function Timeline({
             <button
               className="ss-tb-btn aspect-btn"
               onClick={() => setShowAspectMenu(!showAspectMenu)}
+              title={`Aspect ratio: ${currentAspectLabel}`}
+              aria-label={`Aspect ratio: ${currentAspectLabel}`}
             >
               <RectangleHorizontal size={16} />
-              <span>{currentAspectLabel}</span>
-              <MorphIcon icon={showAspectMenu ? ChevronUp : ChevronDown} spring="snappy" size={14} />
+              <span className="aspect-current-label">{currentAspectLabel}</span>
+              {showAspectMenu ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
 
             {showAspectMenu && (
@@ -630,7 +648,7 @@ export default function Timeline({
 
           <div className="tb-transport-buttons">
             <button className="tb-transport-btn" disabled={duration <= 0} onClick={() => onSeek(config.trimStart)} title="Jump to Start">
-              <SkipBack size={16} fill="currentColor" />
+              <SkipBack size={17} strokeWidth={1.9} />
             </button>
 
             <button
@@ -642,11 +660,11 @@ export default function Timeline({
             >
               {["starting", "buffering", "seeking", "recovering"].includes(playbackStatus)
                 ? <LoaderCircle className="tb-play-loading-icon" size={18} aria-hidden="true" />
-                : <span className="tb-play-morph-icon" aria-hidden="true"><MorphIcon icon={playing ? Pause : Play} spring="snappy" size={19} /></span>}
+                : <span className="tb-play-morph-icon" aria-hidden="true">{playing ? <Pause size={20} strokeWidth={2} /> : <Play size={20} strokeWidth={2} />}</span>}
             </button>
 
             <button className="tb-transport-btn" disabled={duration <= 0} onClick={() => onSeek(config.trimEnd || duration)} title="Jump to End">
-              <SkipForward size={16} fill="currentColor" />
+              <SkipForward size={17} strokeWidth={1.9} />
             </button>
           </div>
 
@@ -655,7 +673,7 @@ export default function Timeline({
 
         {/* Right Tools (Scissor cut & Zoom scale) */}
         <div className="tb-right-group">
-          <button className="ss-tb-btn primary-scissor-btn" onClick={handleScissorCut} title="Split Clip at Playhead (C)">
+          <button className="ss-tb-btn primary-scissor-btn" onClick={handleScissorCut} title="Add timeline marker (C)" aria-label="Add timeline marker">
             <Scissors size={16} />
           </button>
 
@@ -685,23 +703,23 @@ export default function Timeline({
       <div className="ss-tracks-wrapper">
         {/* Left label rail */}
         <div className="ss-labels-col">
-          <div className="timeline-ruler-label">Time</div>
-          <div className="track-label video-label">Video</div>
+          <div className="timeline-ruler-label" title="Time"><Clock3 size={13} /></div>
+          <div className="track-label video-label" title="Video"><Film size={15} /></div>
           {timelineAudioTracks.map((track) => {
             const muted = audioTrackMuted(track);
             const label = audioTrackLabel(track);
             return <div className="track-label audio-label" key={track.id}>
               <button className={`track-label-button ${muted ? "muted" : ""}`} onClick={() => setAudioTrackMuted(track, !muted)} title={`${muted ? "Unmute" : "Mute"} ${label}`}>
+                {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                 <span className="track-label-name">{label}</span>
-                <span className="audio-state-dot" aria-hidden="true" />
               </button>
             </div>;
           })}
-          {zoomSegments.length > 0 && <div className="track-label zoom-label">Zoom</div>}
-          {visibleCaptionTracks.map((track) => <div className="track-label caption-label" key={track.id}>Captions</div>)}
+          {zoomSegments.length > 0 && <div className="track-label zoom-label" title="Zoom"><Sparkles size={14} /></div>}
+          {visibleCaptionTracks.map((track) => <div className="track-label caption-label" title="Captions" key={track.id}><Captions size={14} /></div>)}
           {visibleLayerTypes.map((type) => (
-            <div key={type} className={`track-label layer-label ${type}-label`}>
-              {type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}
+            <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}>
+              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : <Type size={14} />}
             </div>
           ))}
         </div>
@@ -862,7 +880,7 @@ export default function Timeline({
             style={{ left: x(currentTime) }}
             onMouseDown={handleMouseDown("playhead")}
           >
-            <div className="playhead-purple-cap" />
+            <div className="playhead-cap" />
             <div className="playhead-line" />
           </div>
           </>}
@@ -872,7 +890,7 @@ export default function Timeline({
       {contextMenu && createPortal(
         <div
           ref={contextMenuRef}
-          className="timeline-context-menu"
+          className={`timeline-context-menu theme-${editorTheme}`}
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
           aria-label={`${contextMenu.kind} actions`}
@@ -955,8 +973,21 @@ export default function Timeline({
               </div>
             </div>
             <div className="timeline-context-separator" />
+            <button role="menuitem" onClick={() => { onSeek(config.trimStart); setContextMenu(null); }}>
+              <SkipBack size={15} /> Go to clip start
+            </button>
+            <button role="menuitem" onClick={() => { onSeek(config.trimEnd || duration); setContextMenu(null); }}>
+              <SkipForward size={15} /> Go to clip end
+            </button>
+            <div className="timeline-context-separator" />
             <button role="menuitem" onClick={() => { handleScissorCut(); setContextMenu(null); }}>
               <Scissors size={15} /> Split at playhead
+            </button>
+            <button role="menuitem" disabled={currentTime <= 0 || currentTime >= (config.trimEnd || duration)} onClick={() => { onTrimStartChange(currentTime); setContextMenu(null); }}>
+              <Clock3 size={15} /> Set trim start here
+            </button>
+            <button role="menuitem" disabled={currentTime <= config.trimStart || currentTime >= duration} onClick={() => { onTrimEndChange(currentTime); setContextMenu(null); }}>
+              <Clock3 size={15} /> Set trim end here
             </button>
             <button role="menuitem" onClick={() => {
               onTrimStartChange(0);
@@ -965,8 +996,11 @@ export default function Timeline({
             }}>
               <RotateCcw size={15} /> Reset trim
             </button>
+            {Math.abs((config.playbackRate || 1) - 1) > .001 && <button role="menuitem" onClick={() => { onPlaybackRateChange(1); setContextMenu(null); }}>
+              <RotateCcw size={15} /> Reset speed
+            </button>}
             {config.cuts.length > 0 && <button role="menuitem" onClick={() => { onCutsChange([]); setContextMenu(null); }}>
-              <Trash2 size={15} /> Remove all splits
+              <Trash2 size={15} /> Remove all markers
             </button>}
           </>}
         </div>,

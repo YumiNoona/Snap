@@ -1,4 +1,4 @@
-use crate::process::background_command;
+use crate::process::{background_command, spawn_recording_child};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -110,6 +110,21 @@ enum WorkerCommand {
 struct MobileManager {
     status: MobileRecordingStatus,
     control: Option<Sender<WorkerCommand>>,
+    starting: bool,
+}
+
+struct MobileStartReservation {
+    active: bool,
+}
+
+impl Drop for MobileStartReservation {
+    fn drop(&mut self) {
+        if self.active {
+            if let Ok(mut guard) = manager().lock() {
+                guard.starting = false;
+            }
+        }
+    }
 }
 
 struct MobileWorkerContext {
@@ -126,6 +141,7 @@ fn manager() -> &'static Mutex<MobileManager> {
         Mutex::new(MobileManager {
             status: MobileRecordingStatus::default(),
             control: None,
+            starting: false,
         })
     })
 }
@@ -652,7 +668,8 @@ fn spawn_android_touch_logger(
     events_path: PathBuf,
     capabilities: AndroidTouchCapabilities,
 ) -> Result<Child, String> {
-    let mut child = background_command(adb)
+    let mut command = background_command(adb);
+    command
         .args([
             "-s",
             serial,
@@ -663,8 +680,8 @@ fn spawn_android_touch_logger(
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    let mut child = spawn_recording_child(&mut command)
         .map_err(|error| format!("Unable to start Android touch telemetry: {error}"))?;
     let stdout = child
         .stdout
@@ -893,7 +910,11 @@ fn worker_loop(
                     break child.wait().unwrap_or_else(|_| failure_exit_status());
                 }
             }
-            Err(_) => break failure_exit_status(),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break failure_exit_status();
+            }
         }
         thread::sleep(Duration::from_millis(120));
     };
@@ -986,11 +1007,13 @@ pub fn start_mobile_recording(
     request: StartMobileRecordingRequest,
 ) -> Result<MobileRecordingStatus, String> {
     {
-        let guard = manager().lock().map_err(|error| error.to_string())?;
-        if guard.control.is_some() {
+        let mut guard = manager().lock().map_err(|error| error.to_string())?;
+        if guard.control.is_some() || guard.starting {
             return Err("A mobile recording is already active.".into());
         }
+        guard.starting = true;
     }
+    let mut reservation = MobileStartReservation { active: true };
 
     let output_path = PathBuf::from(&request.output_path);
     if output_path.exists() {
@@ -1091,8 +1114,8 @@ pub fn start_mobile_recording(
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        spawn_recording_child(&mut command)
             .map_err(|error| format!("Unable to start Android capture: {error}"))?
     } else if request.transport == "capture_input" {
         let ffmpeg = resolve_tool("ffmpeg")
@@ -1156,8 +1179,8 @@ pub fn start_mobile_recording(
             .arg(&partial_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        spawn_recording_child(&mut command)
             .map_err(|error| format!("Unable to start capture-input recording: {error}"))?
     } else {
         return Err("Unsupported mobile capture transport.".into());
@@ -1196,7 +1219,9 @@ pub fn start_mobile_recording(
         let mut guard = manager().lock().map_err(|error| error.to_string())?;
         guard.status = status.clone();
         guard.control = Some(sender);
+        guard.starting = false;
     }
+    reservation.active = false;
     let context = MobileWorkerContext {
         manifest_path,
         partial_path,

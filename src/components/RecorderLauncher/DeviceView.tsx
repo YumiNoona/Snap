@@ -95,6 +95,7 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
   const [status, setStatus] = useState<RecordingStatus>(idleStatus);
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState("");
   const [recoveredPaths, setRecoveredPaths] = useState<string[]>([]);
   const [elapsed, setElapsed] = useState(0);
@@ -188,6 +189,8 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
   };
 
   const startRecording = async () => {
+    if (starting || recordingActive) return;
+    setStarting(true);
     setActionError("");
     try {
       if (platform === "android") {
@@ -220,6 +223,8 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
       setStatus(nextStatus);
     } catch (error) {
       setActionError(String(error));
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -242,13 +247,13 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
   return (
     <div className="mobile-view">
       <header className="mobile-header" data-tauri-drag-region>
-        <button className="mobile-back-button" onClick={platform === "none" ? onBack : () => setPlatform("none")} disabled={recordingActive}>
+        <button className="mobile-back-button" onClick={platform === "none" ? onBack : () => setPlatform("none")} disabled={recordingActive || starting}>
           <ChevronLeft size={17} /> {platform === "none" ? "Back" : "Platforms"}
         </button>
         <div className="mobile-heading-copy" data-tauri-drag-region>
           <h2 data-tauri-drag-region>Device capture</h2>
         </div>
-        <button className="mobile-refresh-button" onClick={() => void refreshConnections(true)} disabled={loading || recordingActive} title="Refresh connected devices">
+        <button className="mobile-refresh-button" onClick={() => void refreshConnections(true)} disabled={loading || recordingActive || starting} title="Refresh connected devices">
           <RefreshCw size={16} className={loading ? "mobile-spin" : ""} /> Refresh
         </button>
       </header>
@@ -382,9 +387,9 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
                 <button type="button" role="switch" aria-checked={includeAudio} className={`mobile-switch ${includeAudio ? "on" : ""}`} onClick={() => setIncludeAudio((value) => !value)} disabled={recordingActive}><span /></button>
               </label>
               <div className="mobile-record-row">
-                <button className={`mobile-record-button ${recordingActive ? "stop" : "start"}`} onClick={() => void (recordingActive ? stopRecording() : startRecording())} disabled={status.state === "stopping" || status.state === "finalizing" || installing}>
+                <button className={`mobile-record-button ${recordingActive ? "stop" : "start"}`} onClick={() => void (recordingActive ? stopRecording() : startRecording())} disabled={starting || status.state === "stopping" || status.state === "finalizing" || installing}>
                   {recordingActive ? <Square size={15} fill="currentColor" /> : <span className="mobile-record-dot" />}
-                  {status.state === "stopping" ? "Stopping…" : status.state === "finalizing" ? "Saving…" : recordingActive ? "Stop and save" : "Start recording"}
+                  {starting ? "Starting…" : status.state === "stopping" ? "Stopping…" : status.state === "finalizing" ? "Saving…" : recordingActive ? "Stop and save" : "Start recording"}
                 </button>
                 {recordingActive && <span className="mobile-elapsed"><i /> {formatElapsed(elapsed)}</span>}
                 <span className="mobile-record-meta"><HardDrive size={14} /> Saves to Videos\Snap with continuous recovery</span>

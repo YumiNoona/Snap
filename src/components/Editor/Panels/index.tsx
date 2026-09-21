@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, type LucideIcon } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
-import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss } from "../../../lib/wallpapers";
+import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
-import { getTranscriptionEnvironment, transcribeTrack, updateCaptionTiming, type TranscriptionEnvironment, type TranscriptionLanguage } from "../../../lib/captions";
+import { getTranscriptionEnvironment, transcribeTrack, updateCaptionTiming, type TranscriptionEnvironment, type TranscriptionLanguage, type TranscriptionModel } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
 import "./Panels.css";
@@ -37,7 +38,6 @@ interface Props {
   selectedCaption: CaptionSegmentSelection | null;
   onSelectCaption: (selection: CaptionSegmentSelection | null) => void;
 }
-
 const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
   { value: "none", label: "None" },
   { value: "default", label: "Default" },
@@ -49,6 +49,23 @@ const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
   { value: "firework", label: "Firework" },
   { value: "christmas", label: "Christmas" },
 ];
+
+const TRANSCRIPTION_MODEL_LABELS: Record<TranscriptionModel, string> = {
+  auto: "Automatic",
+  tiny: "Tiny",
+  base: "Base",
+  small: "Small",
+  medium: "Medium",
+  "large-v3-turbo": "Large v3 Turbo",
+};
+
+const TRANSCRIPTION_MODEL_SIZES: Record<Exclude<TranscriptionModel, "auto">, string> = {
+  tiny: "75 MB",
+  base: "142 MB",
+  small: "466 MB",
+  medium: "1.5 GB",
+  "large-v3-turbo": "1.5 GB",
+};
 
 const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
   none: Slash,
@@ -72,13 +89,16 @@ export default function Panels({
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
+  const [customGradient, setCustomGradient] = useState({ start: "#7c3aed", middle: "#ec4899", end: "#f59e0b", angle: 135 });
   const annotationDrawerRef = useRef<HTMLDivElement>(null);
   const [captionSource, setCaptionSource] = useState("");
   const [captionLanguage, setCaptionLanguage] = useState<TranscriptionLanguage>("auto");
+  const [captionModel, setCaptionModel] = useState<TranscriptionModel>("auto");
   const [transcriptionEnv, setTranscriptionEnv] = useState<TranscriptionEnvironment | null>(null);
   const [captionStatus, setCaptionStatus] = useState("");
   const [transcribing, setTranscribing] = useState(false);
   const [installingTranscription, setInstallingTranscription] = useState(false);
+  const [cancellingTranscription, setCancellingTranscription] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
   const [installPhase, setInstallPhase] = useState("");
 
@@ -101,6 +121,16 @@ export default function Panels({
   };
   const updateAudio = (patch: Partial<EditorConfig["audio"]>) =>
     onConfigChange({ ...config, audio: { ...config.audio, ...patch } });
+
+  const applyAudioPreset = (preset: "balanced" | "voice" | "system" | "reset") => {
+    const mix = preset === "voice"
+      ? { systemVolume: 55, micVolume: 115, systemMuted: false, micMuted: false }
+      : preset === "system"
+        ? { systemVolume: 115, micVolume: 55, systemMuted: false, micMuted: false }
+        : { systemVolume: 100, micVolume: 100, systemMuted: false, micMuted: false };
+    onConfigChange({ ...config, audio: { ...config.audio, ...mix } });
+    if (preset === "reset") onAudioTracksChange(audioTracks.map((track) => ({ ...track, muted: false, volume: 1 })));
+  };
 
   useEffect(() => {
     let alive = true;
@@ -125,13 +155,20 @@ export default function Panels({
   }, [audioTracks, captionSource]);
 
   const generateCaptions = async () => {
+    const modelReady = !transcriptionEnv || (captionModel === "auto"
+      ? transcriptionEnv.available
+      : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel));
+    if (!modelReady) {
+      setCaptionStatus("Install the selected model before generating captions.");
+      return;
+    }
     setTranscribing(true);
     const selectedSource = audioTracks.find((track) => track.id === captionSource);
     setCaptionStatus(`Transcribing ${selectedSource?.label ?? "audio"}…`);
     try {
       const sourceTrack = audioTracks.find((track) => track.id === captionSource);
       if (!sourceTrack) throw new Error("Choose an audio track to transcribe");
-      const track = await transcribeTrack(sourceTrack, captionLanguage);
+      const track = await transcribeTrack(sourceTrack, captionLanguage, captionModel);
       if (track.segments.length === 0) {
         setCaptionStatus("No audible speech was found on this track. No caption layer was added.");
         return;
@@ -159,23 +196,40 @@ export default function Panels({
     }
   };
 
-  const installTranscription = async () => {
+  const installTranscription = async (model: TranscriptionModel = "base") => {
     setInstallingTranscription(true);
     setInstallProgress(0);
-    setCaptionStatus("Downloading the offline engine and multilingual model…");
+    const requestedModel = model === "auto" ? "base" : model;
+    setCaptionStatus(`Downloading the offline engine and ${requestedModel} model…`);
     const unlisten = await listen<{ percent: number; phase: string }>("transcription-install-progress", ({ payload }) => {
       setInstallProgress(payload.percent);
       setInstallPhase(payload.phase);
     });
     try {
-      const environment = await invoke<TranscriptionEnvironment>("install_transcription_dependencies");
+      const environment = model === "auto"
+        ? await invoke<TranscriptionEnvironment>("install_transcription_dependencies")
+        : await invoke<TranscriptionEnvironment>("install_transcription_model", { model: requestedModel });
       setTranscriptionEnv(environment);
-      setCaptionStatus("Offline captions are ready");
+      setCaptionStatus(`${TRANSCRIPTION_MODEL_LABELS[requestedModel]} model installed and ready`);
     } catch (error) {
-      setCaptionStatus(`Installation failed: ${error}`);
+      setCaptionStatus(String(error).toLowerCase().includes("cancel")
+        ? "Model download cancelled. You can restart it whenever you are ready."
+        : `Installation failed: ${error}`);
     } finally {
       unlisten();
       setInstallingTranscription(false);
+      setCancellingTranscription(false);
+    }
+  };
+
+  const cancelTranscriptionInstall = async () => {
+    setCancellingTranscription(true);
+    setCaptionStatus("Cancelling model download…");
+    try {
+      await invoke("cancel_transcription_install");
+    } catch (error) {
+      setCancellingTranscription(false);
+      setCaptionStatus(`Unable to cancel download: ${error}`);
     }
   };
 
@@ -208,6 +262,24 @@ export default function Panels({
       cursorStyle: { ...config.cursorStyle, pack: { id: pack.name, label: pack.label, imageUrl: pack.pointer_url } },
       cursorHotspots: { ...config.cursorHotspots, [pack.name]: packHotspotOrDefault(pack.name) },
     });
+  };
+
+  const applyCustomGradient = (patch: Partial<typeof customGradient> = {}) => {
+    const next = { ...customGradient, ...patch };
+    setCustomGradient(next);
+    const encoded = `custom-gradient|linear|${next.angle}|${next.start}|${next.middle}|${next.end}`;
+    update({ bgType: "gradient", wallpaperUrl: encoded });
+  };
+
+  const importBackgroundImage = async () => {
+    const selected = await openDialog({
+      multiple: false,
+      directory: false,
+      title: "Choose a background image",
+      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    });
+    if (!selected || Array.isArray(selected)) return;
+    update({ bgType: "image", wallpaperUrl: selected });
   };
 
   const clearPack = () => updateCursor({ pack: null });
@@ -270,6 +342,18 @@ export default function Panels({
     if (selectedLayerId && annotationDrawerRef.current) annotationDrawerRef.current.scrollTop = 0;
   }, [selectedLayerId]);
 
+  const customGradientPreset: GradientPreset = {
+    id: "custom-gradient-preview",
+    name: "Custom gradient",
+    type: "linear",
+    angle: customGradient.angle,
+    colors: [
+      { color: customGradient.start, offset: 0 },
+      { color: customGradient.middle, offset: 50 },
+      { color: customGradient.end, offset: 100 },
+    ],
+  };
+
   return (
     <aside className="ss-panels-drawer">
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
@@ -277,17 +361,10 @@ export default function Panels({
         <div className="ss-drawer-content">
           <Section title="Canvas Styling">
             <Slider label="Padding" value={config.padding} min={0} max={160} step={4} unit="px" onChange={(v) => update({ padding: v })} defaultValue={48} onReset={() => update({ padding: 48 })} />
-            <div className="field-row">
-              <label>Inset</label>
-              <div className="inset-control-row">
-                <div className="inset-slider-wrap">
-                  <Slider value={config.inset} min={0} max={40} step={1} unit="px" onChange={(v) => update({ inset: v })} defaultValue={0} onReset={() => update({ inset: 0 })} compact />
-                </div>
-                <input type="color" value={config.insetColor} onChange={(e) => update({ insetColor: e.target.value })} className="color-swatch inset-color-swatch" aria-label="Inset color" />
-              </div>
-            </div>
             <Slider label="Roundness" value={config.borderRadius} min={0} max={60} step={1} unit="px" onChange={(v) => update({ borderRadius: v })} defaultValue={14} onReset={() => update({ borderRadius: 14 })} />
             <Slider label="Shadow" value={config.shadow.blur} min={0} max={100} step={2} unit="px" onChange={(v) => updateShadow({ blur: v })} defaultValue={40} onReset={() => updateShadow({ blur: 40 })} />
+            <Slider label="Inset" value={config.inset} min={0} max={40} step={1} unit="px" onChange={(v) => update({ inset: v })} defaultValue={0} onReset={() => update({ inset: 0 })} />
+            <ColorInput label="Inset color" value={config.insetColor} onChange={(insetColor) => update({ insetColor })} />
           </Section>
 
           <Section title="Background">
@@ -299,36 +376,52 @@ export default function Panels({
               ))}
             </div>
             {bgCategory === "gradient" && (
-              <div className="ss-wallpaper-grid swatch-grid">
-                {GRADIENT_PRESETS.map((preset) => (
-                  <button
-                    type="button"
-                    key={preset.id}
-                    className={`ss-wallpaper-card background-swatch ${config.bgType === "gradient" && config.wallpaperUrl === preset.id ? "active" : ""}`}
-                    style={{ background: gradientToCss(preset) }}
-                    onClick={() => update({ bgType: "gradient", wallpaperUrl: preset.id })}
-                    title={preset.name}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="ss-wallpaper-grid swatch-grid">
+                  {GRADIENT_PRESETS.map((preset) => (
+                    <button
+                      type="button"
+                      key={preset.id}
+                      className={`ss-wallpaper-card background-swatch ${config.bgType === "gradient" && config.wallpaperUrl === preset.id ? "active" : ""}`}
+                      style={{ background: gradientToCss(preset) }}
+                      onClick={() => update({ bgType: "gradient", wallpaperUrl: preset.id })}
+                      title={preset.name}
+                    />
+                  ))}
+                </div>
+                <div className="custom-gradient-builder">
+                  <div className="custom-gradient-preview" style={{ background: gradientToCss(customGradientPreset) }}><span>Custom</span></div>
+                  <div className="custom-gradient-stops">
+                    {(["start", "middle", "end"] as const).map((stop) => <input key={stop} type="color" value={customGradient[stop]} onChange={(event) => applyCustomGradient({ [stop]: event.target.value })} aria-label={`${stop} gradient color`} />)}
+                  </div>
+                  <Slider label="Angle" value={customGradient.angle} min={0} max={360} step={5} unit="°" onChange={(angle) => applyCustomGradient({ angle })} />
+                  <button type="button" className="apply-gradient-button" onClick={() => applyCustomGradient()}>Apply custom gradient</button>
+                </div>
+              </>
             )}
             {bgCategory === "color" && (
-              <div className="ss-wallpaper-grid swatch-grid">
-                {COLOR_PRESETS.map((preset) => (
-                  <button
-                    type="button"
-                    key={preset.id}
-                    className={`ss-wallpaper-card background-swatch color-swatch-card ${config.bgType === "color" && config.backgroundColor === preset.color ? "active" : ""}`}
-                    style={{ background: preset.color }}
-                    onClick={() => update({ bgType: "color", backgroundColor: preset.color })}
-                    title={preset.name}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="ss-wallpaper-grid swatch-grid">
+                  {COLOR_PRESETS.map((preset) => (
+                    <button
+                      type="button"
+                      key={preset.id}
+                      className={`ss-wallpaper-card background-swatch color-swatch-card ${config.bgType === "color" && config.backgroundColor === preset.color ? "active" : ""}`}
+                      style={{ background: preset.color }}
+                      onClick={() => update({ bgType: "color", backgroundColor: preset.color })}
+                      title={preset.name}
+                    />
+                  ))}
+                </div>
+                <div className="custom-background-color">
+                  <ColorInput label="Custom color" value={config.backgroundColor} onChange={(backgroundColor) => update({ bgType: "color", backgroundColor })} />
+                </div>
+              </>
             )}
             {bgCategory === "image" && (
               <>
                 <div className="ss-wallpaper-grid image-grid">
+                  <button type="button" className="ss-wallpaper-card custom-image-card" onClick={() => void importBackgroundImage()} title="Add your own image"><ImagePlus size={22} /><span>Add image</span></button>
                   {WALLPAPER_PRESETS.map((preset) => (
                     <button
                       type="button"
@@ -352,7 +445,6 @@ export default function Panels({
       {activeTab === "cursor" && (
         <div className="ss-drawer-content">
           <Section title="Cursor">
-            <CheckRow label="Show Cursor" checked={config.showCursor} onChange={(v) => update({ showCursor: v })} />
             <Slider label="Cursor Size" value={config.cursorStyle.size} min={8} max={40} step={1} unit="px" onChange={(v) => updateCursor({ size: v })} defaultValue={16} onReset={() => updateCursor({ size: 16 })} />
 
             <div className="cursor-pack-grid">
@@ -397,6 +489,7 @@ export default function Panels({
           </Section>
 
           <Section title="Cursor Behavior">
+            <CheckRow label="Show Cursor" checked={config.showCursor} onChange={(v) => update({ showCursor: v })} />
             <CheckRow label="Click Sound" checked={config.cursorStyle.clickSound} onChange={(v) => updateCursor({ clickSound: v })} />
             <CheckRow label="Hide When Idle" checked={config.cursorStyle.hideWhenIdle} onChange={(v) => updateCursor({ hideWhenIdle: v })} />
           </Section>
@@ -422,20 +515,20 @@ export default function Panels({
           <Section title="Shape">
             <div className="annotation-card-grid">
               {([
-                { shape: "triangle" as const, label: "Triangle", color: "#a78bfa", icon: <Triangle size={18} /> },
-                { shape: "diamond" as const, label: "Diamond", color: "#38bdf8", icon: <Diamond size={18} /> },
-                { shape: "star" as const, label: "Star", color: "#fbbf24", icon: <Star size={18} /> },
-                { shape: "line" as const, label: "Line", color: "#ef4444", icon: <Minus size={16} color="#ef4444" /> },
-                { shape: "dashedLine" as const, label: "Dashed", color: "#ef4444", icon: <PenLine size={16} color="#ef4444" /> },
-                { shape: "arrow" as const, label: "Arrow", color: "#ef4444", icon: <ArrowRight size={16} color="#ef4444" /> },
-                { shape: "rectangle" as const, label: "Rectangle", color: "#ef4444", icon: <Square size={16} color="#ef4444" /> },
-                { shape: "roundedRect" as const, label: "Rounded", color: "#eab308", icon: <Square size={16} color="#eab308" /> },
-                { shape: "circle" as const, label: "Circle", color: "#c58a4c", icon: <Circle size={16} color="#c58a4c" /> },
-                { shape: "blob" as const, label: "Ellipse", color: "#ef4444", icon: <Circle size={16} color="#ef4444" /> },
-                { shape: "downArrow" as const, label: "Down", color: "#c75f4c", icon: <ArrowRight size={16} color="#c75f4c" style={{ transform: "rotate(90deg)" }} /> },
-                { shape: "pointer" as const, label: "Pointer", color: "#c75f4c", icon: <Hand size={16} color="#c75f4c" /> },
-              ]).map(({ shape, label, color, icon }) => (
-                <button type="button" key={shape} className="annotation-card icon-choice" onClick={() => addLayer(makeShapeLayer(shape, color))} aria-label={`Add ${label}`} data-tooltip={label}>
+                { shape: "triangle" as const, label: "Triangle", icon: <Triangle size={18} /> },
+                { shape: "diamond" as const, label: "Diamond", icon: <Diamond size={18} /> },
+                { shape: "star" as const, label: "Star", icon: <Star size={18} /> },
+                { shape: "line" as const, label: "Line", icon: <Minus size={17} /> },
+                { shape: "dashedLine" as const, label: "Dashed", icon: <PenLine size={17} /> },
+                { shape: "arrow" as const, label: "Arrow", icon: <ArrowRight size={17} /> },
+                { shape: "rectangle" as const, label: "Rectangle", icon: <Square size={17} /> },
+                { shape: "roundedRect" as const, label: "Rounded", icon: <Square size={17} /> },
+                { shape: "circle" as const, label: "Circle", icon: <Circle size={17} /> },
+                { shape: "blob" as const, label: "Ellipse", icon: <Circle size={17} /> },
+                { shape: "downArrow" as const, label: "Down", icon: <ArrowRight size={17} style={{ transform: "rotate(90deg)" }} /> },
+                { shape: "pointer" as const, label: "Pointer", icon: <Hand size={17} /> },
+              ]).map(({ shape, label, icon }) => (
+                <button type="button" key={shape} className="annotation-card icon-choice" onClick={() => addLayer(makeShapeLayer(shape, "#e8e8e4"))} aria-label={`Add ${label}`} data-tooltip={label}>
                   <div className="annotation-preview">{icon}</div>
                 </button>
               ))}
@@ -554,17 +647,20 @@ export default function Panels({
           </> : <>
           <Section title="Motion Blur">
             <CheckRow label="Motion Blur" checked={config.motionBlur.enabled} onChange={(v) => updateBlur({ enabled: v })} />
-            <Slider label="Zoom-in Blur" value={config.motionBlur.zoomAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ zoomAmount: v })} defaultValue={0} onReset={() => updateBlur({ zoomAmount: 0 })} disabled={!config.motionBlur.enabled} />
-            <Slider label="Screen Blur" value={config.motionBlur.panAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ panAmount: v })} defaultValue={0} onReset={() => updateBlur({ panAmount: 0 })} disabled={!config.motionBlur.enabled} />
-            <Slider label="Cursor Blur" value={config.motionBlur.cursorAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ cursorAmount: v })} defaultValue={0} onReset={() => updateBlur({ cursorAmount: 0 })} disabled={!config.motionBlur.enabled} />
+            {config.motionBlur.enabled && <div className="conditional-control-group">
+              <Slider label="Zoom-in Blur" value={config.motionBlur.zoomAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ zoomAmount: v })} defaultValue={0} onReset={() => updateBlur({ zoomAmount: 0 })} />
+              <Slider label="Screen Blur" value={config.motionBlur.panAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ panAmount: v })} defaultValue={0} onReset={() => updateBlur({ panAmount: 0 })} />
+              <Slider label="Cursor Blur" value={config.motionBlur.cursorAmount} min={0} max={100} step={5} unit="%" onChange={(v) => updateBlur({ cursorAmount: v })} defaultValue={0} onReset={() => updateBlur({ cursorAmount: 0 })} />
+            </div>}
           </Section>
 
           <Section title="Cursor Movement">
             <CheckRow label="Cursor Movement" checked={config.cursorMovement.enabled} onChange={(v) => updateCursorMov({ enabled: v })} />
-            <SpeedPills speed={config.cursorMovement.speed} onChange={(speed) => updateCursorMov({ speed })} />
-            {config.cursorMovement.speed === "custom" && (
-              <Slider label="Duration" value={config.cursorMovement.durationMs} min={100} max={2000} step={50} unit="ms" onChange={(v) => updateCursorMov({ durationMs: v })} />
-            )}
+            {config.cursorMovement.enabled && <div className="conditional-control-group">
+              <SelectRow label="Response" value={config.cursorMovement.speed} options={["slow", "medium", "fast", "rapid", "custom"]} optionLabels={{ slow: "Fluid", medium: "Balanced", fast: "Responsive", rapid: "Snappy", custom: "Custom" }} onChange={(speed) => updateCursorMov({ speed: speed as MovementSpeed })} />
+              <Slider label="Smoothing" value={config.cursorMovement.durationMs} min={80} max={2000} step={20} unit="ms" onChange={(durationMs) => updateCursorMov({ durationMs, speed: "custom" })} />
+              <p className="panel-help-text">Higher smoothing creates a softer cursor glide; lower values follow input more closely.</p>
+            </div>}
           </Section>
 
           <Section title="Zoom & Pan">
@@ -583,11 +679,11 @@ export default function Panels({
               </>
             )}
             <CheckRow label="Zoom Movement" checked={config.zoomMovement.enabled} onChange={(v) => updateZoomMov({ enabled: v })} />
-            <SelectRow label="Camera Curve" value={config.zoomMovement.curve ?? "keyframes"} options={["keyframes", "linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ keyframes: "Per region", linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(curve) => updateZoomMov({ curve: curve as EditorConfig["zoomMovement"]["curve"] })} />
-            <SpeedPills speed={config.zoomMovement.speed} onChange={(speed) => updateZoomMov({ speed })} />
-            {config.zoomMovement.speed === "custom" && (
-              <Slider label="Duration" value={config.zoomMovement.durationMs} min={100} max={3000} step={100} unit="ms" onChange={(v) => updateZoomMov({ durationMs: v })} />
-            )}
+            {config.zoomMovement.enabled && <div className="conditional-control-group">
+              <SelectRow label="Camera Curve" value={config.zoomMovement.curve ?? "keyframes"} options={["keyframes", "linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ keyframes: "Per region", linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(curve) => updateZoomMov({ curve: curve as EditorConfig["zoomMovement"]["curve"] })} />
+              <SelectRow label="Transition" value={config.zoomMovement.speed} options={["slow", "medium", "fast", "rapid", "custom"]} optionLabels={{ slow: "Slow drift", medium: "Balanced", fast: "Quick", rapid: "Snap", custom: "Custom" }} onChange={(speed) => updateZoomMov({ speed: speed as MovementSpeed })} />
+              <Slider label="Duration" value={config.zoomMovement.durationMs} min={100} max={3000} step={50} unit="ms" onChange={(durationMs) => updateZoomMov({ durationMs, speed: "custom" })} />
+            </div>}
             <p className="panel-help-text">
               {config.zoomMode === "auto"
                 ? "Regenerate Auto-Zoom analyzes the recording again and refreshes the automatic zoom regions in the timeline."
@@ -612,6 +708,14 @@ export default function Panels({
         <div className="ss-drawer-content">
           <button type="button" className="audio-import-button" onClick={onAddAudio}><Plus size={15} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
           {audioError && <div className="audio-inline-error" role="alert">{audioError}</div>}
+          <Section title="Quick mix">
+            <div className="audio-preset-grid" aria-label="Audio mix presets">
+              <button type="button" onClick={() => applyAudioPreset("balanced")}><strong>Balanced</strong><small>Even levels</small></button>
+              <button type="button" onClick={() => applyAudioPreset("voice")}><strong>Voice focus</strong><small>Lift microphone</small></button>
+              <button type="button" onClick={() => applyAudioPreset("system")}><strong>Screen focus</strong><small>Lift system audio</small></button>
+              <button type="button" onClick={() => applyAudioPreset("reset")}><strong>Reset</strong><small>Restore 100%</small></button>
+            </div>
+          </Section>
           {audioTracks.some((track) => track.kind === "system" || track.kind === "device") && <Section title={audioTracks.some((track) => track.kind === "device") ? "Device Audio" : "System Audio"}>
             <CheckRow label={audioTracks.some((track) => track.kind === "device") ? "Mute Device Audio" : "Mute System Audio"} checked={config.audio.systemMuted} onChange={(v) => updateAudio({ systemMuted: v })} />
             <Slider label="Volume" value={config.audio.systemVolume} min={0} max={200} step={5} unit="%" onChange={(v) => updateAudio({ systemVolume: v })} disabled={config.audio.systemMuted} />
@@ -680,15 +784,28 @@ export default function Panels({
           <Section title="Automatic Captions">
             <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
             <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />
+            <SelectRow
+              label="Model"
+              value={captionModel}
+              options={["auto", "tiny", "base", "small", "medium", "large-v3-turbo"]}
+              optionLabels={{ auto: "Automatic · installed best", tiny: "Tiny · 75 MB · fastest", base: "Base · 142 MB · balanced", small: "Small · 466 MB · accurate", medium: "Medium · 1.5 GB · higher accuracy", "large-v3-turbo": "Large v3 Turbo · 1.5 GB · best" }}
+              onChange={(model) => { setCaptionModel(model as TranscriptionModel); setCaptionStatus(""); }}
+            />
+            <p className="caption-model-note">Automatic chooses the best compatible Whisper model installed on this PC.</p>
             <p className="panel-help-text">Choose the track containing speech. Captions stay editable on the timeline.</p>
             {transcriptionEnv?.available === false && <p className="panel-help-text panel-warning">{transcriptionEnv.message}</p>}
-            {transcriptionEnv?.available === false && <>
-              <button className="ss-drawer-action-btn" disabled={installingTranscription} onClick={() => void installTranscription()}>{installingTranscription ? `${installPhase || "Installing offline captions"} — ${installProgress}%` : "Install Offline Captions"}</button>
-              {installingTranscription && <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>}
+            {transcriptionEnv?.available && captionModel !== "auto" && !transcriptionEnv.installedModels?.includes(captionModel) && <p className="panel-help-text panel-warning">This model is not downloaded yet. Install it once to keep transcription fully offline.</p>}
+            {transcriptionEnv && !(captionModel === "auto" ? transcriptionEnv.available : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)) && <>
+              <button className="ss-drawer-action-btn model-install-action" disabled={installingTranscription} onClick={() => void installTranscription(captionModel)}>{installingTranscription ? `${installPhase || "Installing model"} — ${installProgress}%` : `Install ${captionModel === "auto" ? "Offline Captions · 142 MB" : `${TRANSCRIPTION_MODEL_LABELS[captionModel]} · ${TRANSCRIPTION_MODEL_SIZES[captionModel]}`}`}</button>
+              {installingTranscription && <div className="caption-install-state">
+                <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>
+                <button type="button" className="caption-install-cancel" disabled={cancellingTranscription} onClick={() => void cancelTranscriptionInstall()}><X size={13} />{cancellingTranscription ? "Cancelling…" : "Cancel download"}</button>
+              </div>}
             </>}
-            <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0 || transcriptionEnv?.available === false} onClick={() => void generateCaptions()}>
+            {!transcriptionEnv && <button className="ss-drawer-action-btn primary" disabled>Checking installed models…</button>}
+            {transcriptionEnv && (captionModel === "auto" ? transcriptionEnv.available : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)) && <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0} onClick={() => void generateCaptions()}>
               {transcribing ? "Transcribing…" : captionTracks.some((track) => track.sourceTrackIds.includes(captionSource)) ? "Regenerate Synced Captions" : "Generate Captions"}
-            </button>
+            </button>}
             {captionStatus && <p className="panel-help-text" role="status">{captionStatus}</p>}
           </Section>
           {captionTracks.map((track) => (
@@ -710,11 +827,41 @@ export default function Panels({
 /* ── Helpers ────────────────────────────────────────────────────────── */
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <div className="ss-section"><h4 className="ss-section-heading">{title}</h4><div className="ss-section-body">{children}</div></div>;
+  return <section className="ss-section"><h4 className="ss-section-heading">{title}</h4><div className="ss-section-body">{children}</div></section>;
 }
 
 function SelectRow({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
-  return <label className="field-row select-row"><span className="field-label">{label}</span><select className="layer-select-input" value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option} value={option}>{optionLabels?.[option] ?? option.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase())}</option>)}</select></label>;
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const optionLabel = (option: string) => optionLabels?.[option] ?? option.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase());
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="field-row select-row custom-select-row" ref={rootRef}>
+      <span className="field-label">{label}</span>
+      <div className="custom-select">
+        <button type="button" className={`custom-select-trigger ${open ? "open" : ""}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+          <span>{optionLabel(value)}</span><ChevronDown size={14} />
+        </button>
+        {open && <div className="custom-select-menu" role="listbox" aria-label={label}>
+          {options.map((option) => <button type="button" role="option" aria-selected={option === value} key={option} onClick={() => { onChange(option); setOpen(false); }}><span>{optionLabel(option)}</span>{option === value && <Check size={14} />}</button>)}
+        </div>}
+      </div>
+    </div>
+  );
 }
 
 const CAPTION_LANGUAGES: Array<{ value: TranscriptionLanguage; label: string; description: string }> = [
@@ -842,18 +989,6 @@ function EffectThumbnail({ effect }: { effect: ClickEffect }) {
     <div className={`effect-icon effect-${effect}`}>
       <span className="effect-orbit" />
       <Icon size={18} strokeWidth={1.8} />
-    </div>
-  );
-}
-
-function SpeedPills({ speed, onChange }: { speed: MovementSpeed; onChange: (v: MovementSpeed) => void }) {
-  return (
-    <div className="toggle-segmented speed-pills animated-pills" style={{ "--pill-count": 4, "--pill-index": Math.max(0, ["slow", "medium", "fast", "custom"].indexOf(speed)) } as CSSProperties}>
-      {(["slow", "medium", "fast", "custom"] as MovementSpeed[]).map((s) => (
-        <button key={s} className={`seg-btn ${speed === s ? "active" : ""}`} onClick={() => onChange(s)}>
-          {s.charAt(0).toUpperCase() + s.slice(1)}
-        </button>
-      ))}
     </div>
   );
 }

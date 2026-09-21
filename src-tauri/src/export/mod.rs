@@ -5,7 +5,20 @@ use std::process::Stdio;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use tauri::Manager;
 
-use crate::process::background_command;
+use crate::process::{background_command, spawn_recording_child};
+
+fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, String> {
+    let mut command = background_command("ffmpeg");
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    spawn_recording_child(&mut command)
+        .map_err(|error| format!("Failed to start FFmpeg: {error}"))?
+        .wait_with_output()
+        .map_err(|error| format!("Failed while waiting for FFmpeg: {error}"))
+}
 
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
@@ -65,6 +78,15 @@ pub struct ExportRequest {
 /// encodes the exact frames the canvas preview draws — true WYSIWYG.
 #[tauri::command]
 pub async fn export_video(
+    app: tauri::AppHandle,
+    request: ExportRequest,
+) -> std::result::Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_video_blocking(app, request))
+        .await
+        .map_err(|error| format!("Export worker failed: {error}"))?
+}
+
+fn export_video_blocking(
     app: tauri::AppHandle,
     request: ExportRequest,
 ) -> std::result::Result<String, String> {
@@ -204,13 +226,11 @@ pub async fn export_video(
 
     eprintln!("[Snap Export] FFmpeg command: ffmpeg {}", args.join(" "));
 
-    let output = background_command("ffmpeg")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
+    let mut incomplete_output = IncompleteExportOutput {
+        path: std::path::PathBuf::from(&settings.output_path),
+        armed: !std::path::Path::new(&settings.output_path).exists(),
+    };
+    let output = run_ffmpeg(&args)?;
     let status = output.status;
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -221,6 +241,7 @@ pub async fn export_video(
 
     let output = request.export_settings.output_path.clone();
     let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
+    incomplete_output.armed = false;
 
     eprintln!(
         "[Snap Export] Done — {} bytes written to {}",
@@ -311,9 +332,15 @@ fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) ->
 // adding one), then muxed with the original audio and transcoded to the
 // user's chosen format by `finalize_canvas_export`.
 
-static EXPORT_SINK: OnceLock<StdMutex<Option<BufWriter<File>>>> = OnceLock::new();
+struct ExportSink {
+    writer: BufWriter<File>,
+    owner: String,
+    path: std::path::PathBuf,
+}
 
-fn export_sink() -> &'static StdMutex<Option<BufWriter<File>>> {
+static EXPORT_SINK: OnceLock<StdMutex<Option<ExportSink>>> = OnceLock::new();
+
+fn export_sink() -> &'static StdMutex<Option<ExportSink>> {
     EXPORT_SINK.get_or_init(|| StdMutex::new(None))
 }
 
@@ -322,6 +349,7 @@ fn export_sink() -> &'static StdMutex<Option<BufWriter<File>>> {
 #[tauri::command]
 pub fn open_export_sink(
     app: tauri::AppHandle,
+    window: tauri::Window,
     path: String,
     output_path: String,
 ) -> std::result::Result<(), String> {
@@ -345,7 +373,11 @@ pub fn open_export_sink(
         return Err("Another export is already running".into());
     }
     let file = File::create(&path).map_err(|e| format!("Cannot create export temp file: {e}"))?;
-    *guard = Some(BufWriter::new(file));
+    *guard = Some(ExportSink {
+        writer: BufWriter::new(file),
+        owner: window.label().to_string(),
+        path: std::path::PathBuf::from(path),
+    });
     Ok(())
 }
 
@@ -353,22 +385,76 @@ pub fn open_export_sink(
 /// Callers must await each call before sending the next chunk — chunks
 /// are written in the order they arrive with no reordering.
 #[tauri::command]
-pub fn write_export_chunk(bytes: Vec<u8>) -> std::result::Result<(), String> {
+pub fn write_export_chunk(
+    window: tauri::Window,
+    bytes: Vec<u8>,
+) -> std::result::Result<(), String> {
     let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
     match guard.as_mut() {
-        Some(w) => w
+        Some(sink) if sink.owner == window.label() => sink
+            .writer
             .write_all(&bytes)
             .map_err(|e| format!("Export write failed: {e}")),
+        Some(_) => Err("Export sink belongs to another window".to_string()),
         None => Err("Export sink not open".to_string()),
     }
 }
 
 /// Flush and close the sink once recording has finished.
 #[tauri::command]
-pub fn close_export_sink() -> std::result::Result<(), String> {
+pub fn close_export_sink(window: tauri::Window) -> std::result::Result<(), String> {
     let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
-    if let Some(mut w) = guard.take() {
-        w.flush().map_err(|e| format!("Export flush failed: {e}"))?;
+    if guard
+        .as_ref()
+        .is_some_and(|sink| sink.owner != window.label())
+    {
+        return Err("Export sink belongs to another window".into());
+    }
+    if let Some(mut sink) = guard.take() {
+        sink.writer
+            .flush()
+            .map_err(|e| format!("Export flush failed: {e}"))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn discard_export_sink_for_window(owner: &str) {
+    let Ok(mut guard) = export_sink().lock() else {
+        return;
+    };
+    if guard.as_ref().is_none_or(|sink| sink.owner != owner) {
+        return;
+    }
+    if let Some(mut sink) = guard.take() {
+        let _ = sink.writer.flush();
+        drop(sink.writer);
+        let _ = std::fs::remove_file(sink.path);
+    }
+}
+
+#[tauri::command]
+pub fn discard_canvas_export(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    temp_webm_path: String,
+    output_path: String,
+) -> std::result::Result<(), String> {
+    crate::access::require(&app, std::path::Path::new(&output_path))?;
+    let expected = std::path::Path::new(&output_path).with_extension("snapexport.webm");
+    if std::path::Path::new(&temp_webm_path) != expected {
+        return Err("Invalid export staging path".into());
+    }
+    discard_export_sink_for_window(window.label());
+    for path in [
+        expected.clone(),
+        std::path::PathBuf::from(format!("{}.clicks.wav", expected.display())),
+        std::path::PathBuf::from(format!("{}.captions.srt", expected.display())),
+    ] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Could not remove export staging file: {error}")),
+        }
     }
     Ok(())
 }
@@ -433,36 +519,57 @@ impl Default for CanvasAudioMix {
     }
 }
 
+struct ExportTempFiles(Vec<std::path::PathBuf>);
+
+impl Drop for ExportTempFiles {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+struct IncompleteExportOutput {
+    path: std::path::PathBuf,
+    armed: bool,
+}
+
+impl Drop for IncompleteExportOutput {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 fn write_click_track(
     path: &std::path::Path,
     click_times_ms: &[f64],
     duration_seconds: f64,
 ) -> std::result::Result<(), String> {
     const RATE: u32 = 44_100;
-    let end_ms = (duration_seconds * 1000.0)
-        .max(click_times_ms.iter().copied().fold(0.0_f64, f64::max) + 180.0);
-    let samples = ((end_ms / 1000.0) * RATE as f64).ceil() as usize;
-    let mut pcm = vec![0i16; samples.max(1)];
-    for (click_index, click_ms) in click_times_ms.iter().enumerate() {
-        let start = ((*click_ms / 1000.0) * RATE as f64).round() as usize;
-        let click_len = (RATE as f64 * 0.095) as usize;
-        for i in 0..click_len {
-            let dst = start + i;
-            if dst >= pcm.len() {
-                break;
-            }
-            let t = i as f64 / RATE as f64;
-            let envelope = (-48.0 * t).exp();
-            let tone = (std::f64::consts::TAU * (1050.0 - 4200.0 * t) * t).sin();
-            let noise_seed = ((i as u64 * 1_103_515_245 + click_index as u64 * 12_345) & 0xffff)
-                as f64
-                / 32768.0
-                - 1.0;
-            let value = ((tone * 0.8 + noise_seed * 0.2) * envelope * 7000.0) as i32;
-            pcm[dst] = (pcm[dst] as i32 + value).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        }
+    const CLICK_SAMPLES: usize = (RATE as usize * 95) / 1000;
+    const CHUNK_SAMPLES: usize = 4096;
+    if !duration_seconds.is_finite() || !(0.0..=43_200.0).contains(&duration_seconds) {
+        return Err("Invalid click-track duration".into());
     }
-    let data_size = (pcm.len() * 2) as u32;
+    let duration_ms = duration_seconds * 1000.0;
+    if click_times_ms
+        .iter()
+        .any(|time| !time.is_finite() || *time < 0.0 || *time > duration_ms)
+    {
+        return Err("Click timestamp falls outside the exported duration".into());
+    }
+    let mut clicks = click_times_ms
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, time)| (((time / 1000.0) * RATE as f64).round() as usize, index))
+        .collect::<Vec<_>>();
+    clicks.sort_unstable_by_key(|(start, _)| *start);
+    let samples = ((duration_seconds * RATE as f64).ceil() as usize).max(1);
+    let data_size = u32::try_from(samples.saturating_mul(2))
+        .map_err(|_| "Click track is too long for PCM WAV".to_string())?;
     let mut out =
         BufWriter::new(File::create(path).map_err(|e| format!("Cannot create click track: {e}"))?);
     out.write_all(b"RIFF").map_err(|e| e.to_string())?;
@@ -486,9 +593,42 @@ fn write_click_track(
     out.write_all(b"data").map_err(|e| e.to_string())?;
     out.write_all(&data_size.to_le_bytes())
         .map_err(|e| e.to_string())?;
-    for sample in pcm {
-        out.write_all(&sample.to_le_bytes())
-            .map_err(|e| e.to_string())?;
+    let mut chunk_start = 0usize;
+    let mut first_possible = 0usize;
+    while chunk_start < samples {
+        let chunk_len = CHUNK_SAMPLES.min(samples - chunk_start);
+        let chunk_end = chunk_start + chunk_len;
+        let mut pcm = vec![0i16; chunk_len];
+        while first_possible < clicks.len()
+            && clicks[first_possible].0.saturating_add(CLICK_SAMPLES) <= chunk_start
+        {
+            first_possible += 1;
+        }
+        for &(start, click_index) in &clicks[first_possible..] {
+            if start >= chunk_end {
+                break;
+            }
+            let overlap_start = start.max(chunk_start);
+            let overlap_end = start.saturating_add(CLICK_SAMPLES).min(chunk_end);
+            for dst in overlap_start..overlap_end {
+                let i = dst - start;
+                let t = i as f64 / RATE as f64;
+                let envelope = (-48.0 * t).exp();
+                let tone = (std::f64::consts::TAU * (1050.0 - 4200.0 * t) * t).sin();
+                let noise_seed = ((i as u64 * 1_103_515_245 + click_index as u64 * 12_345) & 0xffff)
+                    as f64
+                    / 32768.0
+                    - 1.0;
+                let value = ((tone * 0.8 + noise_seed * 0.2) * envelope * 7000.0) as i32;
+                let slot = &mut pcm[dst - chunk_start];
+                *slot = (*slot as i32 + value).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            }
+        }
+        for sample in pcm {
+            out.write_all(&sample.to_le_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        chunk_start = chunk_end;
     }
     out.flush().map_err(|e| e.to_string())
 }
@@ -498,6 +638,15 @@ fn write_click_track(
 /// audio and transcode to the user's chosen output format.
 #[tauri::command]
 pub async fn finalize_canvas_export(
+    app: tauri::AppHandle,
+    request: CanvasExportRequest,
+) -> std::result::Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || finalize_canvas_export_blocking(app, request))
+        .await
+        .map_err(|error| format!("Export worker failed: {error}"))?
+}
+
+fn finalize_canvas_export_blocking(
     app: tauri::AppHandle,
     request: CanvasExportRequest,
 ) -> std::result::Result<String, String> {
@@ -553,6 +702,8 @@ pub async fn finalize_canvas_export(
             .unwrap_or(false);
     let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
     let caption_srt = std::path::PathBuf::from(format!("{}.captions.srt", request.temp_webm_path));
+    let mut temporary_files =
+        ExportTempFiles(vec![std::path::PathBuf::from(&request.temp_webm_path)]);
     let has_embedded_captions = request
         .caption_srt
         .as_ref()
@@ -564,6 +715,7 @@ pub async fn finalize_canvas_export(
     {
         std::fs::write(&caption_srt, contents)
             .map_err(|error| format!("Unable to prepare embedded captions: {error}"))?;
+        temporary_files.0.push(caption_srt.clone());
     }
     let has_clicks = !request.click_times_ms.is_empty();
     if has_clicks {
@@ -572,6 +724,7 @@ pub async fn finalize_canvas_export(
             &request.click_times_ms,
             request.export_duration_seconds,
         )?;
+        temporary_files.0.push(click_wav.clone());
     }
 
     let crf = match settings.quality.as_str() {
@@ -805,13 +958,11 @@ pub async fn finalize_canvas_export(
         args.join(" ")
     );
 
-    let output = background_command("ffmpeg")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("Failed to start FFmpeg: {e}"))?;
+    let mut incomplete_output = IncompleteExportOutput {
+        path: std::path::PathBuf::from(&settings.output_path),
+        armed: !std::path::Path::new(&settings.output_path).exists(),
+    };
+    let output = run_ffmpeg(&args)?;
     let status = output.status;
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -820,17 +971,9 @@ pub async fn finalize_canvas_export(
         return Err(format!("FFmpeg exited with error: {status}\n{stderr}"));
     }
 
-    // Clean up the intermediate WebM now that the final file is encoded.
-    let _ = std::fs::remove_file(&request.temp_webm_path);
-    if has_clicks {
-        let _ = std::fs::remove_file(&click_wav);
-    }
-    if has_embedded_captions {
-        let _ = std::fs::remove_file(&caption_srt);
-    }
-
     let output = request.export_settings.output_path.clone();
     let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
+    incomplete_output.armed = false;
 
     eprintln!(
         "[Snap Export] Canvas export done — {} bytes written to {}",
@@ -859,6 +1002,17 @@ mod tests {
         assert_eq!(&bytes[8..12], b"WAVE");
         assert!(bytes.len() >= 44 + 44_100 * 2);
         assert!(bytes[44..].iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn click_track_rejects_invalid_timestamps() {
+        let path = std::env::temp_dir().join(format!(
+            "snap_click_invalid_test_{}.wav",
+            std::process::id()
+        ));
+        assert!(write_click_track(&path, &[f64::NAN], 1.0).is_err());
+        assert!(write_click_track(&path, &[1_001.0], 1.0).is_err());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

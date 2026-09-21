@@ -34,7 +34,8 @@ export async function createExportCompositor(
   captionTracks: CaptionTrack[],
   cameraMedia: { path: string; startOffsetMs: number } | null,
   outputW: number,
-  outputH: number
+  outputH: number,
+  signal?: AbortSignal
 ): Promise<ExportCompositor> {
   const video = document.createElement("video");
   video.src = convertFileSrc(videoPath);
@@ -66,10 +67,25 @@ export async function createExportCompositor(
   canvas.style.top = "0px";
   document.body.appendChild(canvas);
 
-  const ctx2d = canvas.getContext("2d", { alpha: false });
-  if (!ctx2d) {
+  let destroyed = false;
+  let rafId = 0;
+  const cleanup = () => {
+    destroyed = true;
+    if (rafId) cancelAnimationFrame(rafId);
+    video.pause();
+    camera?.pause();
+    video.removeAttribute("src");
+    camera?.removeAttribute("src");
+    video.load();
+    camera?.load();
+    camera?.remove();
     video.remove();
     canvas.remove();
+  };
+
+  const ctx2d = canvas.getContext("2d", { alpha: false });
+  if (!ctx2d) {
+    cleanup();
     throw new Error("Could not get a 2D canvas context for export");
   }
   // Re-bind to a definitely-non-null const — TS doesn't retain the null
@@ -80,12 +96,35 @@ export async function createExportCompositor(
   maskSource.height = outputH;
   const maskSourceCtx = maskSource.getContext("2d");
 
-  const { mouseMoveEvents, clickEvents, region } = await loadInputLog(inputLogPath);
-
-  await new Promise<void>((resolve, reject) => {
-    video.addEventListener("loadedmetadata", () => resolve(), { once: true });
-    video.addEventListener("error", () => reject(new Error("Failed to load the recording for export")), { once: true });
-  });
+  let inputLog: Awaited<ReturnType<typeof loadInputLog>>;
+  try {
+    inputLog = await loadInputLog(inputLogPath);
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+    await new Promise<void>((resolve, reject) => {
+      if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        resolve();
+        return;
+      }
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        video.removeEventListener("loadedmetadata", loaded);
+        video.removeEventListener("error", failed);
+        signal?.removeEventListener("abort", aborted);
+        if (error) reject(error); else resolve();
+      };
+      const loaded = () => finish();
+      const failed = () => finish(new Error("Failed to load the recording for export"));
+      const aborted = () => finish(new DOMException("Export cancelled", "AbortError"));
+      const timeout = window.setTimeout(() => finish(new Error("Timed out loading recording metadata for export")), 15_000);
+      video.addEventListener("loadedmetadata", loaded, { once: true });
+      video.addEventListener("error", failed, { once: true });
+      signal?.addEventListener("abort", aborted, { once: true });
+    });
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  const { mouseMoveEvents, clickEvents, region } = inputLog;
   if (camera) {
     await Promise.race([
       new Promise<void>((resolve) => {
@@ -129,9 +168,6 @@ export async function createExportCompositor(
     }
     clickIdx = i;
   }
-
-  let destroyed = false;
-  let rafId = 0;
 
   function drawFrame() {
     if (destroyed) return;
@@ -351,9 +387,13 @@ export async function createExportCompositor(
     if (camera && cameraMedia) {
       const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
       if (cameraTime >= 0 && Number.isFinite(camera.duration) && cameraTime <= camera.duration) {
+        camera.defaultPlaybackRate = video.playbackRate;
+        camera.playbackRate = video.playbackRate;
         if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
         if (!video.paused && camera.paused) void camera.play().catch(() => {});
         drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+      } else if (!camera.paused) {
+        camera.pause();
       }
     }
 
@@ -414,14 +454,6 @@ export async function createExportCompositor(
     video,
     canvas,
     clickTimesMs: clickEvents.map((event) => event.ts),
-    destroy() {
-      destroyed = true;
-      cancelAnimationFrame(rafId);
-      video.pause();
-      camera?.pause();
-      camera?.remove();
-      video.remove();
-      canvas.remove();
-    },
+    destroy: cleanup,
   };
 }

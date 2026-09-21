@@ -80,7 +80,11 @@ export const GRADIENT_PRESETS: GradientPreset[] = [{"id": "gradient-new-arctic",
   {"id": "gradient-new-cobalt", "name": "Cobalt Peach", "type": "linear", "angle": 35, "colors": [{"color": "#1d4ed8", "offset": 0}, {"color": "#a5b4fc", "offset": 50}, {"color": "#fed7aa", "offset": 100}]},
   {"id": "gradient-new-forest", "name": "Forest Mist", "type": "radial", "angle": 0, "colors": [{"color": "#f7fee7", "offset": 0}, {"color": "#65a30d", "offset": 50}, {"color": "#134e4a", "offset": 100}]},
   {"id": "gradient-new-candy", "name": "Candy Shop", "type": "linear", "angle": 145, "colors": [{"color": "#f9a8d4", "offset": 0}, {"color": "#c084fc", "offset": 50}, {"color": "#67e8f9", "offset": 100}]},
-  {"id": "gradient-new-copper", "name": "Copper & Teal", "type": "linear", "angle": 105, "colors": [{"color": "#9a3412", "offset": 0}, {"color": "#fdba74", "offset": 50}, {"color": "#115e59", "offset": 100}]}];
+  {"id": "gradient-new-copper", "name": "Copper & Teal", "type": "linear", "angle": 105, "colors": [{"color": "#9a3412", "offset": 0}, {"color": "#fdba74", "offset": 50}, {"color": "#115e59", "offset": 100}]},
+  {"id": "gradient-new-ultraviolet", "name": "Ultraviolet", "type": "radial", "angle": 0, "colors": [{"color": "#f5d0fe", "offset": 0}, {"color": "#a855f7", "offset": 48}, {"color": "#312e81", "offset": 100}]},
+  {"id": "gradient-new-pacific", "name": "Pacific", "type": "linear", "angle": 140, "colors": [{"color": "#a7f3d0", "offset": 0}, {"color": "#0891b2", "offset": 52}, {"color": "#172554", "offset": 100}]},
+  {"id": "gradient-new-mango", "name": "Mango Punch", "type": "linear", "angle": 115, "colors": [{"color": "#fef3c7", "offset": 0}, {"color": "#f59e0b", "offset": 50}, {"color": "#e11d48", "offset": 100}]},
+  {"id": "gradient-new-moonstone", "name": "Moonstone", "type": "radial", "angle": 0, "colors": [{"color": "#f8fafc", "offset": 0}, {"color": "#94a3b8", "offset": 54}, {"color": "#1e293b", "offset": 100}]}];
 
 export const COLOR_PRESETS: ColorPreset[] = [
   { id: "color-slate", name: "Espresso", color: "#1b1714" },
@@ -98,6 +102,15 @@ export const COLOR_PRESETS: ColorPreset[] = [
   { id: "color-cyan", name: "Olive", color: "#8c8d4f" },
   { id: "color-sand", name: "Warm Sand", color: "#d6a85f" },
   { id: "color-parchment", name: "Parchment", color: "#e9dec9" },
+  { id: "color-crimson", name: "Crimson", color: "#be123c" },
+  { id: "color-orchid", name: "Orchid", color: "#a855f7" },
+  { id: "color-cobalt", name: "Cobalt", color: "#2563eb" },
+  { id: "color-pacific", name: "Pacific", color: "#0891b2" },
+  { id: "color-mint", name: "Mint", color: "#10b981" },
+  { id: "color-lime", name: "Lime", color: "#84cc16" },
+  { id: "color-peach", name: "Peach", color: "#fb923c" },
+  { id: "color-silver", name: "Silver", color: "#a1a1aa" },
+  { id: "color-aubergine", name: "Aubergine", color: "#6d2848" },
 ];
 
 export const WALLPAPER_PRESETS: WallpaperPreset[] = [
@@ -119,6 +132,23 @@ export function getWallpaperPreset(idOrUrl: string): WallpaperPreset | undefined
 }
 
 export function getGradientPreset(id: string): GradientPreset | undefined {
+  if (id.startsWith("custom-gradient|")) {
+    const [, type, rawAngle, start, middle, end] = id.split("|");
+    const angle = Number(rawAngle);
+    if ((type === "linear" || type === "radial") && Number.isFinite(angle) && start && middle && end) {
+      return {
+        id,
+        name: "Custom gradient",
+        type,
+        angle,
+        colors: [
+          { color: start, offset: 0 },
+          { color: middle, offset: 50 },
+          { color: end, offset: 100 },
+        ],
+      };
+    }
+  }
   return [...GRADIENT_PRESETS, ...LEGACY_GRADIENT_PRESETS].find((p) => p.id === id);
 }
 

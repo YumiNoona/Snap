@@ -37,8 +37,13 @@ export async function runCanvasExport(
   exportSettings: ExportSettings,
   trimStart: number,
   trimEnd: number,
-  onProgress: (p: ExportProgress) => void
+  onProgress: (p: ExportProgress) => void,
+  signal?: AbortSignal
 ): Promise<string> {
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+  };
+  throwIfAborted();
   onProgress({ phase: "preparing", progress: 0, message: "Preparing export…" });
 
   const compositor = await createExportCompositor(
@@ -49,15 +54,20 @@ export async function runCanvasExport(
     exportSettings.captions === "burned" || exportSettings.captions === "burned-srt" ? captionTracks : [],
     cameraMedia,
     exportSettings.width,
-    exportSettings.height
+    exportSettings.height,
+    signal
   );
 
   const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.webm";
 
   let sinkOpen = false;
+  let completed = false;
   let recorder: MediaRecorder | null = null;
   let stream: MediaStream | null = null;
+  let writeQueue: Promise<void> = Promise.resolve();
+  let waitForRecorderStop: Promise<void> | null = null;
   try {
+    throwIfAborted();
     await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
     sinkOpen = true;
 
@@ -69,7 +79,6 @@ export async function runCanvasExport(
 
     // Chunks must land on disk in the order they were produced — chain
     // each write onto the previous one instead of firing them in parallel.
-    let writeQueue: Promise<void> = Promise.resolve();
     let writeError: string | null = null;
     const CHUNK_BYTES = 256 * 1024;
 
@@ -90,13 +99,16 @@ export async function runCanvasExport(
     };
 
     const activeRecorder = recorder;
-    const stopped = new Promise<void>((resolve, reject) => {
+    let recorderError: Error | null = null;
+    const stopped = new Promise<void>((resolve) => {
       activeRecorder.addEventListener("stop", () => resolve(), { once: true });
       activeRecorder.addEventListener("error", (e: Event) => {
         const err = (e as unknown as { error?: Error }).error;
-        reject(err ?? new Error("MediaRecorder error"));
+        recorderError = err ?? new Error("MediaRecorder error");
+        resolve();
       }, { once: true });
     });
+    waitForRecorderStop = stopped;
 
     const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
 
@@ -122,6 +134,14 @@ export async function runCanvasExport(
       let lastTime = compositor.video.currentTime;
       let lastAdvance = performance.now();
       const check = () => {
+        if (signal?.aborted) {
+          reject(new DOMException("Export cancelled", "AbortError"));
+          return;
+        }
+        if (recorderError) {
+          reject(recorderError);
+          return;
+        }
         if (compositor.video.currentTime !== lastTime) { lastTime = compositor.video.currentTime; lastAdvance = performance.now(); }
         if (compositor.video.error || performance.now() - lastAdvance > 15000) {
           reject(new Error("Export stopped because video playback stalled. Check that the source file is readable."));
@@ -151,12 +171,14 @@ export async function runCanvasExport(
     await stopped;
     await writeQueue;
 
+    if (recorderError) throw recorderError;
     if (writeError) throw new Error(`Export write failed: ${writeError}`);
 
     await invoke("close_export_sink");
     sinkOpen = false;
 
     onProgress({ phase: "finalizing", progress: 0.98, message: "Muxing audio & encoding final video…" });
+    throwIfAborted();
 
     const result = await invoke<string>("finalize_canvas_export", {
       request: {
@@ -183,11 +205,20 @@ export async function runCanvasExport(
     }
 
     onProgress({ phase: "done", progress: 1, message: result });
+    completed = true;
     return result;
   } finally {
     if (recorder && recorder.state !== "inactive") recorder.stop();
+    if (waitForRecorderStop) await waitForRecorderStop.catch(() => {});
+    await writeQueue.catch(() => {});
     stream?.getTracks().forEach((track) => track.stop());
     if (sinkOpen) await invoke("close_export_sink").catch(() => {});
+    if (!completed) {
+      await invoke("discard_canvas_export", {
+        tempWebmPath,
+        outputPath: exportSettings.outputPath,
+      }).catch(() => {});
+    }
     compositor.destroy();
   }
 }

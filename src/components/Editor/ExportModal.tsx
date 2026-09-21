@@ -11,6 +11,7 @@ interface Props {
   status: string;
   progress: number;
   onClose: () => void;
+  onCancel: () => void;
   onExport: (settings: ExportSettings) => Promise<void>;
 }
 
@@ -32,7 +33,7 @@ function formatEstimate(seconds: number) {
   return `about ${Math.ceil(seconds / 60)} min`;
 }
 
-export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, onClose, onExport }: Props) {
+export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, onClose, onCancel, onExport }: Props) {
   const defaultPath = videoPath.replace(/\.[^\\/.]+$/i, "_edited.mp4");
   const [settings, setSettings] = useState<ExportSettings>({
     format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false,
@@ -48,7 +49,8 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   // Canvas export runs in real time, followed by FFmpeg finalization.
   const encodeFactor = Math.max(0.2, Math.min(2.2, pixelFactor * (settings.fps / 60) * 0.45));
   const estimatedSeconds = activeDuration * (1 + encodeFactor) + 3;
-  const exporting = status.startsWith("Exporting") || status === "Finalizing...";
+  const exporting = status.startsWith("Exporting") || status === "Finalizing..." || status.startsWith("Cancelling");
+  const cancellable = status.startsWith("Exporting");
   const done = status.startsWith("Done");
 
   const selectPreset = (preset: typeof PRESETS[number]) => {
@@ -120,6 +122,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
 
         <footer className="export-modal-footer">
           <span>{settings.width} × {settings.height} · {settings.fps} FPS · {settings.quality}</span>
+          {cancellable && <button type="button" onClick={onCancel}>Cancel export</button>}
           <button className="export-start-button" disabled={exporting || !settings.outputPath.trim()} onClick={() => onExport(settings)}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>
         </footer>
       </section>
