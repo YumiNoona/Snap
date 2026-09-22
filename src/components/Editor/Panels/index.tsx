@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, FileAudio, FileImage, FileVideo, UploadCloud, Captions, type LucideIcon } from "lucide-react";
@@ -441,14 +441,21 @@ export default function Panels({
             {mediaLibrary.folders.map((folder) => <button className={activeMediaFolder === folder.id ? "active" : ""} key={folder.id} onClick={() => setActiveMediaFolder(folder.id)}><Folder size={12} />{folder.name}</button>)}
           </div>
           <div className="media-asset-list">
-            {visibleMedia.map((asset) => {
+            {visibleMedia.map((asset, index) => {
               const Icon = asset.kind === "image" ? FileImage : asset.kind === "audio" ? FileAudio : FileVideo;
-              return <article className="media-asset-card" key={asset.id}>
-                <span className={`media-kind-icon ${asset.kind}`}><Icon size={17} /></span>
-                <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong><small>{asset.kind}</small></span>
-                {asset.kind === "audio" && <button title="Add to timeline" onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
-                {asset.kind === "image" && <button title="Use as background" onClick={() => update({ bgType: "image", wallpaperUrl: asset.path })}><ImagePlus size={14} /></button>}
-                <button className="danger" title="Remove from library" onClick={() => setMediaLibrary((current) => ({ ...current, assets: current.assets.filter((item) => item.id !== asset.id) }))}><X size={14} /></button>
+              return <article className="media-asset-card" key={asset.id} style={{ "--media-index": index } as CSSProperties}>
+                <div className={`media-asset-preview ${asset.kind}`}>
+                  {asset.kind === "image" && <img src={convertFileSrc(asset.path)} alt="" draggable={false} />}
+                  {asset.kind === "video" && <video src={convertFileSrc(asset.path)} muted playsInline preload="metadata" onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }} onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }} onPointerLeave={(event) => event.currentTarget.pause()} />}
+                  {asset.kind === "audio" && <div className="media-audio-art"><Music2 size={23} /> <span>{Array.from({ length: 13 }, (_, bar) => <i key={bar} />)}</span></div>}
+                  <span className={`media-kind-badge ${asset.kind}`}><Icon size={12} />{asset.kind}</span>
+                  <div className="media-card-actions">
+                    {asset.kind === "audio" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
+                    {asset.kind === "image" && <button title="Use as background" aria-label={`Use ${asset.name} as background`} onClick={() => update({ bgType: "image", wallpaperUrl: asset.path })}><ImagePlus size={14} /></button>}
+                    <button className="danger" title="Remove from library" aria-label={`Remove ${asset.name}`} onClick={() => setMediaLibrary((current) => ({ ...current, assets: current.assets.filter((item) => item.id !== asset.id) }))}><X size={14} /></button>
+                  </div>
+                </div>
+                <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong></span>
                 <select aria-label={`Folder for ${asset.name}`} value={asset.folderId ?? ""} onChange={(event) => setMediaLibrary((current) => ({ ...current, assets: current.assets.map((item) => item.id === asset.id ? { ...item, folderId: event.target.value || null } : item) }))}>
                   <option value="">Unfiled</option>
                   {mediaLibrary.folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}

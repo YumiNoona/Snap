@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Film, FolderOpen, Search, Upload, X } from "lucide-react";
+import { ArrowUpRight, Film, FolderOpen, Play, Search, Upload, X } from "lucide-react";
 import "./ModuleWindows.css";
 
 interface MediaFile { name: string; path: string; is_dir: boolean; size: number }
@@ -38,9 +38,28 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
       <button onClick={() => getCurrentWindow().close()}><X size={16} /></button>
     </header>
     <main className="library-body">
-      <section className="import-card"><div><Upload size={19} /><span><strong>Import video</strong></span></div><button onClick={() => void browse()}>Browse</button></section>
+      <section className="import-card">
+        <div className="import-card-icon"><Upload size={21} /></div>
+        <div className="import-card-copy"><strong>Bring in a video</strong><small>Drop into your next edit</small></div>
+        <button onClick={() => void browse()}>Choose file <ArrowUpRight size={15} /></button>
+      </section>
       <label className="module-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search recent recordings" /></label>
-      <div className="media-list">{shown.map((file) => <button key={file.path} onClick={() => void open(file.path)}><span className="media-icon"><Film size={17} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span><i>Open</i></button>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No videos found</strong></div>}</div>
+      <div className="media-list">{shown.map((file, index) => <article className="library-media-card" key={file.path} style={{ "--media-index": index } as CSSProperties}>
+        <button className="library-media-preview" onClick={() => void open(file.path)} aria-label={`Open ${file.name}`}>
+          <video
+            src={convertFileSrc(file.path)}
+            muted
+            playsInline
+            preload="metadata"
+            onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }}
+            onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }}
+            onPointerLeave={(event) => { event.currentTarget.pause(); }}
+          />
+          <span className="library-media-play"><Play size={17} fill="currentColor" /></span>
+          <span className="library-media-open">Open <ArrowUpRight size={13} /></span>
+        </button>
+        <div className="library-media-info"><span className="media-icon"><Film size={15} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span></div>
+      </article>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No videos found</strong></div>}</div>
       {error && <p className="module-error">{error}</p>}
     </main>
   </div>;
