@@ -934,6 +934,7 @@
 .ss-timeline-container.is-media-drag-over { border-color: rgba(99,102,241,.7); box-shadow: inset 0 0 0 2px rgba(99,102,241,.22), 0 0 28px rgba(79,70,229,.16); }
 .ss-timeline-container.is-media-drag-over::after { content: "Drop on the timeline"; position: absolute; z-index: 90; right: 18px; bottom: 14px; padding: 8px 11px; color: #f8fafc; background: rgba(37,37,42,.88); border: 1px solid rgba(255,255,255,.16); border-radius: 9px; box-shadow: 0 10px 28px rgba(0,0,0,.32); backdrop-filter: blur(12px); font-size: 11px; font-weight: 700; pointer-events: none; }
 .layer-clip-bar.image { color: #f5f3ff; background: linear-gradient(135deg,#7c3aed,#4f46e5); border-color: rgba(196,181,253,.55); }
+.layer-clip-bar.video { color: #ecfeff; background: linear-gradient(135deg,#0891b2,#2563eb); border-color: rgba(125,211,252,.55); }
 .tb-play-morph-icon { width: 22px; height: 22px; }
 .tb-play-icon-btn.is-paused .tb-play-morph-icon { transform: translateX(1px); }
 

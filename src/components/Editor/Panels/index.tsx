@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, UploadCloud, Captions, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, Plus, X, Palette, WandSparkles, FolderPlus, Folder, ArrowUpFromLine, Captions, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -196,6 +197,19 @@ export default function Panels({
     window.addEventListener("snap-import-media", receive);
     return () => window.removeEventListener("snap-import-media", receive);
   }, [addMediaPaths]);
+
+  useEffect(() => {
+    if (activeTab !== "uploads") return;
+    const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter" || payload.type === "over") setMediaDragOver(true);
+      if (payload.type === "leave") setMediaDragOver(false);
+      if (payload.type === "drop") {
+        setMediaDragOver(false);
+        addMediaPaths(payload.paths);
+      }
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [activeTab, addMediaPaths]);
 
   const createMediaFolder = () => {
     const name = newFolderName.trim();
@@ -452,7 +466,7 @@ export default function Panels({
           }}
         >
           <div className="media-library-actions">
-            <button type="button" className="media-upload-primary" onClick={() => void importMedia()}><UploadCloud size={16} /> Upload media</button>
+            <button type="button" className="media-upload-primary" onClick={() => void importMedia()}><ArrowUpFromLine size={15} strokeWidth={2.2} /> Upload media</button>
             <button type="button" className="media-folder-button" title="Create folder" aria-label="Create media folder" onClick={() => setCreatingFolder((value) => !value)}><FolderPlus size={16} /></button>
           </div>
           {creatingFolder && <div className="media-new-folder"><input autoFocus value={newFolderName} placeholder="Folder name" onChange={(event) => setNewFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") createMediaFolder(); if (event.key === "Escape") setCreatingFolder(false); }} /><button type="button" onClick={createMediaFolder}><Check size={14} /></button></div>}
@@ -468,27 +482,29 @@ export default function Panels({
                 className="media-asset-card"
                 key={asset.id}
                 style={{ "--media-index": index } as CSSProperties}
-                draggable={asset.kind !== "video"}
+                draggable
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "copy";
                   event.dataTransfer.setData("application/x-snap-media", JSON.stringify({ path: asset.path, kind: asset.kind }));
                   event.dataTransfer.setData("text/plain", asset.path);
+                  event.dataTransfer.setDragImage(event.currentTarget, Math.min(72, event.currentTarget.clientWidth / 2), 42);
                 }}
               >
                 <div className={`media-asset-preview ${asset.kind}`}>
                   {asset.kind === "image" && <img src={convertFileSrc(asset.path)} alt="" draggable={false} />}
-                  {asset.kind === "video" && <video src={convertFileSrc(asset.path)} muted playsInline preload="metadata" onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }} onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }} onPointerLeave={(event) => event.currentTarget.pause()} />}
+                  {asset.kind === "video" && <video src={convertFileSrc(asset.path)} muted playsInline preload="metadata" draggable={false} onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }} onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }} onPointerLeave={(event) => event.currentTarget.pause()} />}
                   {asset.kind === "audio" && <div className="media-audio-art"><Music2 size={23} /> <span>{Array.from({ length: 13 }, (_, bar) => <i key={bar} />)}</span></div>}
                   <div className="media-card-actions">
                     {asset.kind === "audio" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
                     {asset.kind === "image" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><ImagePlus size={14} /></button>}
+                    {asset.kind === "video" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><Plus size={14} /></button>}
                     <button className="danger" title="Remove from library" aria-label={`Remove ${asset.name}`} onClick={() => setMediaLibrary((current) => ({ ...current, assets: current.assets.filter((item) => item.id !== asset.id) }))}><X size={14} /></button>
                   </div>
                 </div>
                 <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong></span>
               </article>;
             })}
-            {visibleMedia.length === 0 && <div className="media-library-empty"><UploadCloud size={22} /><strong>No media here</strong><span>Upload files or choose another folder.</span></div>}
+            {visibleMedia.length === 0 && <div className="media-library-empty"><ArrowUpFromLine size={22} /><strong>No media here</strong><span>Upload files or choose another folder.</span></div>}
           </div>
         </div>
       )}
@@ -733,7 +749,7 @@ export default function Panels({
                     {selectedLayer.mask !== "blur" && <Slider label={selectedLayer.mask === "magnifier" ? "Lens Shadow" : "Edge Feather"} value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
                   </>
                 )}
-                {selectedLayer.type === "image" && (
+                {(selectedLayer.type === "image" || selectedLayer.type === "video") && (
                   <>
                     <SelectRow label="Fit" value={selectedLayer.fit ?? "contain"} options={["contain", "cover"]} onChange={(fit) => updateSelectedLayer({ fit: fit as ImageLayer["fit"] })} />
                     <Slider label="Roundness" value={selectedLayer.cornerRadius ?? 10} min={0} max={80} step={1} unit="px" onChange={(cornerRadius) => updateSelectedLayer({ cornerRadius })} />

@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
+import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
 export function drawCaptionTrack(
@@ -164,6 +164,55 @@ export function drawImageLayer(
     ctx.drawImage(image, crop.x, crop.y, crop.w, crop.h, x, y, w, h);
   } else {
     ctx.drawImage(image, dx, dy, dw, dh);
+  }
+  ctx.restore();
+}
+
+export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>): HTMLVideoElement {
+  const src = assetSrc(path);
+  const cached = cache.get(src);
+  if (cached) return cached;
+  const video = document.createElement("video");
+  video.src = src;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  cache.set(src, video);
+  return video;
+}
+
+export function drawVideoLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: VideoLayer,
+  timeSeconds: number,
+  playing: boolean,
+  cache: Map<string, HTMLVideoElement>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const video = loadCachedVideo(layer.path, cache);
+  if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+  const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), timeSeconds - layer.start));
+  if (Math.abs(video.currentTime - localTime) > (playing ? .18 : .035) && !video.seeking) video.currentTime = localTime;
+  if (playing && video.paused) void video.play().catch(() => undefined);
+  if (!playing && !video.paused) video.pause();
+  ctx.save();
+  ctx.beginPath();
+  roundRect(ctx, x, y, w, h, Math.max(0, Math.min(layer.cornerRadius ?? 10, w / 2, h / 2)));
+  ctx.clip();
+  const fit = layer.fit ?? "contain";
+  if (fit === "cover") {
+    const crop = computeCoverRect(0, 0, video.videoWidth, video.videoHeight, w, h);
+    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, x, y, w, h);
+  } else {
+    const sourceRatio = video.videoWidth / video.videoHeight;
+    const targetRatio = w / Math.max(1, h);
+    let dx = x, dy = y, dw = w, dh = h;
+    if (sourceRatio > targetRatio) { dh = w / sourceRatio; dy += (h - dh) / 2; }
+    else { dw = h * sourceRatio; dx += (w - dw) / 2; }
+    ctx.drawImage(video, dx, dy, dw, dh);
   }
   ctx.restore();
 }

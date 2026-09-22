@@ -259,18 +259,20 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const addMediaToTimeline = useCallback((paths: string[], atTime = currentTime) => {
     const audio = paths.filter((path) => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
     if (audio.length) void addAudioSources(audio);
-    const images = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(path));
-    if (!images.length) return;
+    const visuals = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm)$/i.test(path));
+    if (!visuals.length) return;
     const projectEnd = config.trimEnd || duration || atTime + 3;
     const start = Math.max(config.trimStart, Math.min(atTime, Math.max(config.trimStart, projectEnd - .2)));
     const end = Math.min(projectEnd, start + 3);
-    const additions: Layer[] = images.map((path, index) => ({
-      id: `image-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-      type: "image", path, fit: "contain", cornerRadius: 10,
+    const additions: Layer[] = visuals.map((path, index) => {
+      const type = /\.(mp4|mov|mkv|webm)$/i.test(path) ? "video" as const : "image" as const;
+      return {
+      id: `${type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+      type, path, fit: "contain", cornerRadius: 10,
       start, end: Math.max(start + .2, end),
       x: .25 + (index % 3) * .035, y: .2 + (index % 3) * .035, w: .5, h: .5,
       opacity: 1, rotation: 0, flipX: false, flipY: false,
-    }));
+    }; });
     setConfig((current) => ({ ...current, layers: [...current.layers, ...additions] }));
     setSelectedLayerId(additions[additions.length - 1].id);
     setSelectedCaption(null);

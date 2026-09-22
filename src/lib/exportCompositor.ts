@@ -4,9 +4,9 @@ import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import {
-  loadCachedImage, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
+  loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
-  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawImageLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
+  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawImageLayer, drawVideoLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
   drawCameraBubble,
 } from "./canvasDraw";
@@ -43,6 +43,15 @@ export async function createExportCompositor(
     if (image.complete && image.naturalWidth > 0) return;
     try { await image.decode(); } catch { /* draw loop leaves an unreadable image empty */ }
   }));
+  const layerVideoCache = new Map<string, HTMLVideoElement>();
+  await Promise.all(config.layers.filter((layer) => layer.type === "video").map((layer) => new Promise<void>((resolve) => {
+    const media = loadCachedVideo(layer.path, layerVideoCache);
+    if (media.readyState >= 2) { resolve(); return; }
+    const finish = () => { media.removeEventListener("canplay", finish); media.removeEventListener("error", finish); resolve(); };
+    media.addEventListener("canplay", finish, { once: true });
+    media.addEventListener("error", finish, { once: true });
+    window.setTimeout(finish, 2500);
+  })));
   const video = document.createElement("video");
   video.src = convertFileSrc(videoPath);
   video.muted = true; // audio is muxed from the original sidecar wav files, not captured here
@@ -82,6 +91,8 @@ export async function createExportCompositor(
     camera?.pause();
     video.removeAttribute("src");
     camera?.removeAttribute("src");
+    for (const media of layerVideoCache.values()) { media.pause(); media.removeAttribute("src"); media.load(); }
+    layerVideoCache.clear();
     video.load();
     camera?.load();
     camera?.remove();
@@ -446,7 +457,8 @@ export async function createExportCompositor(
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
       else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
-      else drawImageLayer(ctx, layer, lx, ly, lw, lh);
+      else if (layer.type === "image") drawImageLayer(ctx, layer, lx, ly, lw, lh);
+      else drawVideoLayer(ctx, layer, videoTs, true, layerVideoCache, lx, ly, lw, lh);
       ctx.restore();
     }
     for (const track of captionTracks) {

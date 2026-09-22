@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowUpRight, CloudUpload, Film, FolderOpen, Play, Search, X } from "lucide-react";
+import { ArrowUpFromLine, ArrowUpRight, Film, FolderOpen, Search, X } from "lucide-react";
 import "./ModuleWindows.css";
 
 interface MediaFile { name: string; path: string; is_dir: boolean; size: number }
@@ -52,7 +52,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
     </header>
     <main className="library-body">
       <section className="import-card">
-        <div className="import-card-icon"><CloudUpload size={21} /></div>
+        <div className="import-card-icon"><ArrowUpFromLine size={18} strokeWidth={2.1} /></div>
         <div className="import-card-copy"><strong>Bring in a video</strong><small>Drop into your next edit</small></div>
         <button onClick={() => void browse()}>Choose file <ArrowUpRight size={15} /></button>
       </section>
@@ -68,7 +68,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
             onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }}
             onPointerLeave={(event) => { event.currentTarget.pause(); }}
           />
-          <span className="library-media-play"><Play size={17} fill="currentColor" /></span>
+          <span className="library-media-play" aria-hidden="true"><i /></span>
           <span className="library-media-open">Open <ArrowUpRight size={13} /></span>
         </button>
         <div className="library-media-info"><span className="media-icon"><Film size={15} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span></div>

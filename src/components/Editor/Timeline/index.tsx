@@ -238,7 +238,7 @@ export default function Timeline({
   }, [keyframes, config.trimEnd, duration]);
 
   const visibleLayerTypes = useMemo(
-    () => (["text", "shape", "mask", "image"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
+    () => (["text", "shape", "mask", "image", "video"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
     [layers]
   );
   const visibleCaptionTracks = captionTracks.filter((track) => track.segments.length > 0);
@@ -740,8 +740,8 @@ export default function Timeline({
           {zoomSegments.length > 0 && <div className="track-label zoom-label" title="Zoom"><Sparkles size={14} /></div>}
           {visibleCaptionTracks.map((track) => <div className="track-label caption-label" title="Captions" key={track.id}><Captions size={14} /></div>)}
           {visibleLayerTypes.map((type) => (
-            <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : "Text"}>
-              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : type === "image" ? <ImageIcon size={14} /> : <Type size={14} />}
+            <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : type === "video" ? "Video overlays" : "Text"}>
+              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : type === "image" ? <ImageIcon size={14} /> : type === "video" ? <Film size={14} /> : <Type size={14} />}
             </div>
           ))}
         </div>

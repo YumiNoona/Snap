@@ -77,7 +77,7 @@ export interface ShadowConfig {
   offsetY: number;
 }
 
-export type LayerType = "text" | "shape" | "mask" | "image";
+export type LayerType = "text" | "shape" | "mask" | "image" | "video";
 
 export interface BaseLayer {
   id: string;
@@ -140,7 +140,14 @@ export interface ImageLayer extends BaseLayer {
   cornerRadius?: number;
 }
 
-export type Layer = TextLayer | ShapeLayer | MaskLayer | ImageLayer;
+export interface VideoLayer extends BaseLayer {
+  type: "video";
+  path: string;
+  fit?: "cover" | "contain";
+  cornerRadius?: number;
+}
+
+export type Layer = TextLayer | ShapeLayer | MaskLayer | ImageLayer | VideoLayer;
 
 export interface MotionBlurConfig {
   enabled: boolean;

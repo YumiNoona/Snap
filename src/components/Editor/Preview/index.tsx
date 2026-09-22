@@ -10,7 +10,7 @@ import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
   clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
-  drawImageLayer, drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
+  drawImageLayer, drawVideoLayer, drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
   drawCaptionTrack,
   drawCameraBubble,
 } from "../../../lib/canvasDraw";
@@ -164,6 +164,7 @@ export default function Preview({
   const previousCursorDrawRef = useRef<{ x: number; y: number } | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const maskSourceRef = useRef<HTMLCanvasElement | null>(null);
+  const layerVideoCacheRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   const layerDrag = useRef<{
     mode: "move" | "resize" | "rotate";
     handle?: "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -182,6 +183,13 @@ export default function Preview({
     const context = audioContextRef.current;
     audioContextRef.current = null;
     if (context && context.state !== "closed") void context.close().catch(() => {});
+  }, []);
+
+  useEffect(() => () => {
+    for (const video of layerVideoCacheRef.current.values()) {
+      video.pause(); video.removeAttribute("src"); video.load();
+    }
+    layerVideoCacheRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -796,7 +804,8 @@ export default function Preview({
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
       else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
-      else drawImageLayer(ctx, layer, lx, ly, lw, lh);
+      else if (layer.type === "image") drawImageLayer(ctx, layer, lx, ly, lw, lh);
+      else drawVideoLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh);
       ctx.restore();
     }
 
