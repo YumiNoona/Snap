@@ -1,6 +1,6 @@
 [package]
 name = "snap"
-version = "7.0.4"
+version = "7.0.5"
 description = "A native Windows screen recorder with an automatic motion editor"
 authors = ["Snap contributors"]
 edition = "2021"
