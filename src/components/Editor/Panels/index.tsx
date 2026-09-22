@@ -854,10 +854,14 @@ export default function Panels({
               <div className="caption-compact-section">
               <SelectRow label="Typeface" value={selectedCaptionTrack.style.fontFamily} options={["Segoe UI Variable", "Arial", "Calibri", "Verdana", "Tahoma", "Trebuchet MS", "Georgia", "Times New Roman", "Courier New", "Impact"]} onChange={(fontFamily) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontFamily } }))} />
               <SelectRow label="Weight" value={String(selectedCaptionTrack.style.fontWeight)} options={["400", "500", "600", "700", "800"]} optionLabels={{"400":"Regular","500":"Medium","600":"Semibold","700":"Bold","800":"Extra bold"}} onChange={(fontWeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: Number(fontWeight) as CaptionTrack["style"]["fontWeight"] } }))} />
-              <div className="caption-format-pills" role="toolbar" aria-label="Caption text formatting">
-                <button title="Bold" aria-label="Bold" className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong></button>
-                <button title="Italic" aria-label="Italic" className={(selectedCaptionTrack.style.fontStyle ?? "normal") === "italic" ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontStyle: track.style.fontStyle === "italic" ? "normal" : "italic" } }))}><em>I</em></button>
-                {(["left", "center", "right"] as const).map((align) => { const Icon = align === "left" ? AlignLeft : align === "right" ? AlignRight : AlignCenter; return <button type="button" title={`Align ${align}`} aria-label={`Align ${align}`} key={align} className={(selectedCaptionTrack.style.align ?? "center") === align ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, align } }))}><Icon size={15} /></button>; })}
+              <div className="caption-format-groups" role="toolbar" aria-label="Caption text formatting">
+                <div className="caption-style-group">
+                  <button title="Bold" aria-label="Bold" className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong></button>
+                  <button title="Italic" aria-label="Italic" className={(selectedCaptionTrack.style.fontStyle ?? "normal") === "italic" ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontStyle: track.style.fontStyle === "italic" ? "normal" : "italic" } }))}><em>I</em></button>
+                </div>
+                <div className="caption-align-group">
+                  {(["left", "center", "right"] as const).map((align) => { const Icon = align === "left" ? AlignLeft : align === "right" ? AlignRight : AlignCenter; return <button type="button" title={`Align ${align}`} aria-label={`Align ${align}`} key={align} className={(selectedCaptionTrack.style.align ?? "center") === align ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, align } }))}><Icon size={15} /></button>; })}
+                </div>
               </div>
               <Slider label="Font size" value={selectedCaptionTrack.style.fontSize} min={14} max={120} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontSize } }))} />
               <Slider label="Letter spacing" value={selectedCaptionTrack.style.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, letterSpacing } }))} />
@@ -895,7 +899,6 @@ export default function Panels({
               <button className="ss-drawer-action-btn danger" onClick={() => { updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.filter((segment) => segment.id !== selectedCaptionSegment.id) })); onSelectCaption(null); }}><Trash2 size={14} /> Delete Caption</button>
             </Section>
           </> : <>
-          <button type="button" className="ss-drawer-action-btn manual-caption-action" onClick={onAddManualCaption}><Captions size={15} /> Add caption manually</button>
           <Section title="Automatic Captions">
             <div className="caption-picker-stack">
               <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
@@ -912,6 +915,7 @@ export default function Panels({
             {captionModelReady && <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0} onClick={() => void generateCaptions()}>
               {transcribing ? "Transcribing…" : captionTracks.some((track) => track.sourceTrackIds.includes(captionSource)) ? "Regenerate Synced Captions" : "Generate Captions"}
             </button>}
+            <button type="button" className="ss-drawer-action-btn manual-caption-action" onClick={onAddManualCaption}><Captions size={15} /> Add caption manually</button>
             {captionStatus && <p className="caption-status-message" role="status">{captionStatus}</p>}
           </Section>
           {captionTracks.map((track) => (

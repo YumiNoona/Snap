@@ -1322,3 +1322,44 @@
 .screenstudio-editor-layout[data-theme="light"] .media-folder-button,
 .screenstudio-editor-layout[data-theme="light"] .media-new-folder button,
 .screenstudio-editor-layout[data-theme="light"] .media-asset-card > button { background: #fff; border-color: rgba(0,0,0,.11); }
+
+.ss-preview-focus-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 45;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  box-shadow: 0 8px 22px rgba(0,0,0,.26);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+}
+.ss-preview-focus-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
+
+.screenstudio-editor-layout.preview-focus-mode {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding: 8px;
+}
+.screenstudio-editor-layout.preview-focus-mode .ss-topbar,
+.screenstudio-editor-layout.preview-focus-mode .ss-vertical-tool-palette,
+.screenstudio-editor-layout.preview-focus-mode .ss-panels-drawer,
+.screenstudio-editor-layout.preview-focus-mode .ss-timeline-container { display: none; }
+.screenstudio-editor-layout.preview-focus-mode .ss-preview-center-area {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+}
+
+.screenstudio-editor-layout[data-theme="light"] .caption-style-group,
+.screenstudio-editor-layout[data-theme="light"] .caption-align-group { background: #ecebe7; border-color: rgba(0,0,0,.1); }
+.screenstudio-editor-layout[data-theme="light"] .caption-format-groups button { color: #5f5f5a; }
+.screenstudio-editor-layout[data-theme="light"] .caption-format-groups button:hover { color: #242422; background: #deddd8; }
+.screenstudio-editor-layout[data-theme="light"] .caption-format-groups button.active { color: #fff; background: #292927; }

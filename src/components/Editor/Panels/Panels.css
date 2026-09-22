@@ -38,9 +38,8 @@
   scrollbar-color: rgba(148, 163, 184, .28) transparent;
 }
 
-.ss-drawer-content::-webkit-scrollbar { width: 6px; }
-.ss-drawer-content::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .24); border-radius: 99px; }
-.ss-drawer-content::-webkit-scrollbar-track { background: transparent; }
+.ss-drawer-content { scrollbar-width: none; }
+.ss-drawer-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .canvas-drawer-content,
 .motion-drawer-content {
@@ -728,10 +727,14 @@
 @keyframes caption-demo-blur { from { opacity: 0; filter: blur(5px); } }
 @keyframes caption-demo-bounce { 0% { opacity: 0; transform: translateY(7px) scale(.82); } 65% { transform: translateY(-2px) scale(1.05); } }
 
-.caption-format-pills { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 3px; background: var(--bg-surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px; }
-.caption-format-pills button { min-height: 34px; color: var(--text-secondary); background: var(--bg-surface-sunken); border: 1px solid var(--border-subtle); border-radius: 8px; }
-.caption-format-pills button:hover { color: var(--text-primary); border-color: var(--border-default); }
-.caption-format-pills button.active { color: var(--bg-app); background: var(--accent); border-color: var(--accent); }
+.caption-format-groups { display: grid; grid-template-columns: 2fr 3fr; gap: 8px; }
+.caption-style-group,
+.caption-align-group { display: grid; gap: 3px; padding: 3px; background: var(--bg-surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px; }
+.caption-style-group { grid-template-columns: repeat(2, 1fr); }
+.caption-align-group { grid-template-columns: repeat(3, 1fr); }
+.caption-format-groups button { min-height: 34px; color: var(--text-secondary); background: transparent; border: 0; border-radius: 7px; }
+.caption-format-groups button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.caption-format-groups button.active { color: var(--bg-app); background: var(--accent); }
 .caption-copy-editor { min-height: 72px; max-height: 132px; }
 .caption-copy-edit { display: grid; gap: 9px; margin: 2px 1px 7px; }
 .caption-timing-heading { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--text-secondary); font-size: 11px; font-weight: 650; }

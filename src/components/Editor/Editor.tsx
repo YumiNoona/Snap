@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon, Library } from "lucide-react";
+import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon, Library, Maximize2, Minimize2 } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -113,7 +113,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const metadataDurationRef = useRef(0);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [exportStatus, setExportStatus] = useState("");
-  const [activeTool, setActiveTool] = useState<SidebarToolTab>("canvas");
+  const [activeTool, setActiveTool] = useState<SidebarToolTab | null>("canvas");
+  const [previewFocusMode, setPreviewFocusMode] = useState(false);
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
@@ -796,8 +797,17 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setZoomTargetMode(false);
   }, [activeTool, zoomTargetMode]);
 
+  useEffect(() => {
+    if (!previewFocusMode) return;
+    const exitPreview = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewFocusMode(false);
+    };
+    window.addEventListener("keydown", exitPreview);
+    return () => window.removeEventListener("keydown", exitPreview);
+  }, [previewFocusMode]);
+
   return (
-    <div className="screenstudio-editor-layout" data-theme={editorTheme}>
+    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""}`} data-theme={editorTheme}>
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
         <div className="ss-drag-area" data-tauri-drag-region />
@@ -960,6 +970,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "uploads" ? "active" : ""}`}
             onClick={() => setActiveTool("uploads")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "uploads"}
             title="Uploads and media"
           >
@@ -968,6 +979,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
             onClick={() => setActiveTool("canvas")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "canvas"}
             title="Canvas & Background"
           >
@@ -977,6 +989,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "cursor" ? "active" : ""}`}
             onClick={() => setActiveTool("cursor")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "cursor"}
             title="Cursor & Pointer Styling"
           >
@@ -986,6 +999,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "annotations" ? "active" : ""}`}
             onClick={() => setActiveTool("annotations")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "annotations"}
             title="Annotations & Layers"
           >
@@ -995,6 +1009,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "motion" ? "active" : ""}`}
             onClick={() => setActiveTool("motion")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "motion"}
             title="Motion & Blur"
           >
@@ -1004,6 +1019,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "audio" ? "active" : ""}`}
             onClick={() => setActiveTool("audio")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "audio"}
             title="Audio"
           >
@@ -1013,6 +1029,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button
             className={`ss-tool-icon-btn ${activeTool === "captions" ? "active" : ""}`}
             onClick={() => setActiveTool("captions")}
+            onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "captions"}
             title="Captions & Subtitles"
             aria-label="Captions and subtitles"
@@ -1024,6 +1041,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
         {/* Center Preview Workspace */}
         <div className="ss-preview-center-area">
+          <button
+            type="button"
+            className="ss-preview-focus-toggle"
+            title={previewFocusMode ? "Exit preview focus (Esc)" : "Maximize preview"}
+            aria-label={previewFocusMode ? "Exit preview focus" : "Maximize preview"}
+            aria-pressed={previewFocusMode}
+            onClick={() => setPreviewFocusMode((value) => !value)}
+          >
+            {previewFocusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+          </button>
           <Preview
             videoPath={videoPath}
             inputLogPath={isBrowserPreview ? "" : inputLogPath}
@@ -1072,7 +1099,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         {/* Right Tool Settings Panel Drawer */}
-        <Panels
+        {activeTool && <Panels
           config={config}
           onConfigChange={setConfig}
           duration={duration}
@@ -1107,7 +1134,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onCaptionTracksChange={setCaptionTracks}
           selectedCaption={selectedCaption}
           onSelectCaption={setSelectedCaption}
-        />
+        />}
       </div>
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
