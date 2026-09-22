@@ -852,3 +852,24 @@
 @keyframes processing-track { from { transform: translateX(-115%); } to { transform: translateX(340%); } }
 @keyframes processing-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes processing-card-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+
+/* V7 recorder: compact dark glass surfaces shared with the editor. */
+.app-layout { background: radial-gradient(circle at 45% -20%, #25262a 0, #111216 35%, #090a0d 72%); }
+.titlebar { height: 52px; padding-inline: 14px; background: rgba(16,17,21,.68); border-bottom-color: rgba(255,255,255,.07); backdrop-filter: blur(24px) saturate(140%); }
+.brand-logo-area { gap: 9px; }.brand-logo-icon { width: 24px; height: 24px; }.app-name { font-size: 14px; }
+.menu-item { color: #a5a5aa; background: transparent; }.menu-item:hover,.menu-item.open { background: rgba(255,255,255,.065); }
+.dropdown-menu { background: rgba(25,25,29,.86); border-color: rgba(255,255,255,.13); backdrop-filter: blur(28px) saturate(145%); }
+.main-content { gap: 10px; padding: 10px; }
+.recording-modes-area { padding: 22px; background: transparent; }
+.focusee-mode-cards-grid { max-width: 900px; gap: 12px; }
+.focusee-card { background: rgba(27,28,32,.7); border-color: rgba(255,255,255,.1); border-radius: 15px; box-shadow: inset 0 1px rgba(255,255,255,.035); backdrop-filter: blur(16px); }
+.focusee-card:hover { border-color: rgba(255,255,255,.24); transform: translateY(-3px); box-shadow: 0 18px 42px rgba(0,0,0,.32), inset 0 1px rgba(255,255,255,.08); }
+.wallpaper-preview { filter: saturate(.45) brightness(.64); transition: filter 180ms ease, transform 180ms ease; }
+.focusee-card:hover .wallpaper-preview { filter: saturate(.72) brightness(.78); transform: scale(1.018); }
+.cyan-crop-box { border-color: rgba(255,255,255,.82); box-shadow: 0 0 0 999px rgba(0,0,0,.32); }
+.card-title-text { min-height: 42px; padding: 8px 12px; color: #e7e7e5; background: rgba(12,12,14,.62); border-top-color: rgba(255,255,255,.07); }
+.focusee-sidebar { width: 282px; margin: 0; padding: 14px; gap: 10px; background: rgba(24,25,29,.72); border: 1px solid rgba(255,255,255,.1); border-radius: 15px; box-shadow: 0 18px 46px rgba(0,0,0,.24), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(26px) saturate(140%); }
+.setup-field { grid-template-columns: 36px minmax(0,1fr); gap: 8px; }.setup-field-icon { width: 36px; height: 36px; color: #d5d5d8; background: rgba(255,255,255,.055); border-color: rgba(255,255,255,.08); border-radius: 10px; }
+.focusee-sidebar .dd-trigger { height: 40px; color: #ececea; background: rgba(3,3,5,.52); border-color: rgba(255,255,255,.08); }
+.teleprompter-sidebar-btn { min-height: 40px; color: #dedede; background: rgba(3,3,5,.5); border-color: rgba(255,255,255,.09); border-radius: 10px; }
+.teleprompter-sidebar-btn:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.16); }

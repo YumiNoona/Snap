@@ -12,3 +12,16 @@
 .window-picker-empty { min-height: 150px; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--text-tertiary); text-align: center; }.window-picker-empty strong { color: var(--text-secondary); font-size: 12px; }.window-picker-empty small { max-width: 430px; font-size: 9.5px; line-height: 1.45; }.window-picker-empty.error { color: #fca5a5; }
 .window-picker-footer { min-height: 28px; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: var(--text-tertiary); font-size: 9px; }.window-picker-footer span { display: flex; align-items: center; gap: 6px; }.window-picker-footer i { width: 6px; height: 6px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px rgba(34,197,94,.55); }.window-picker-footer small { font-size: 9px; }
 .spin { animation: window-picker-spin 800ms linear infinite; } @keyframes window-picker-spin { to { transform: rotate(360deg); } }
+
+/* V7 compact window picker */
+.window-picker-window { background: radial-gradient(circle at 50% -20%, #27282d, #0b0c0f 50%); }
+.window-picker-titlebar { height: 52px; padding-inline: 14px; background: rgba(19,20,24,.7); border-bottom-color: rgba(255,255,255,.07); backdrop-filter: blur(24px) saturate(145%); }
+.window-picker-mark { width: 31px; height: 31px; color: #dedee1; background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.1); border-radius: 9px; }
+.window-picker-body { gap: 10px; padding: 14px; }.window-picker-intro { align-items: center; }.window-picker-intro h1 { margin: 0; font-size: 16px; font-weight: 650; }
+.window-picker-refresh { color: #c4c4c7; background: rgba(255,255,255,.055); border-color: rgba(255,255,255,.1); border-radius: 9px; }
+.window-picker-search { height: 40px; background: rgba(0,0,0,.34); border-color: rgba(255,255,255,.1); border-radius: 11px; }
+.window-picker-search:focus-within { color: #fff; border-color: rgba(255,255,255,.28); box-shadow: 0 0 0 3px rgba(255,255,255,.05); }
+.window-picker-list { gap: 6px; scrollbar-width: none; }.window-picker-list::-webkit-scrollbar { display: none; }
+.window-picker-option { min-height: 52px; background: rgba(28,29,34,.66); border-color: rgba(255,255,255,.08); border-radius: 12px; backdrop-filter: blur(18px); }
+.window-picker-option:hover:not(:disabled) { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.18); transform: translateY(-1px); }
+.window-picker-option-icon { width: 32px; height: 32px; color: #d4d4d8; background: rgba(255,255,255,.06); border-radius: 8px; }.window-picker-footer { justify-content: flex-start; }

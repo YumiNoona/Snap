@@ -61,3 +61,15 @@
 .spin { animation: settings-spin 850ms linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 @keyframes settings-window-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* V7 compact glass settings */
+.settings-window { background: radial-gradient(circle at 50% -20%, #27282d, #0b0c0f 50%); }
+.settings-titlebar { height: 52px; padding-left: 14px; background: rgba(19,20,24,.7); border-bottom-color: rgba(255,255,255,.07); backdrop-filter: blur(24px) saturate(145%); }
+.settings-window-content { padding: 14px; }.settings-tabs { margin-bottom: 10px; padding: 3px; background: rgba(0,0,0,.34); border-color: rgba(255,255,255,.08); border-radius: 11px; }.settings-tabs button { height: 34px; }.settings-tabs button.active { background: rgba(255,255,255,.1); box-shadow: inset 0 1px rgba(255,255,255,.05); }
+.settings-scroll-area { padding-right: 0; scrollbar-width: none; }.settings-scroll-area::-webkit-scrollbar { display: none; }
+.settings-section { margin-bottom: 9px; padding: 13px; background: rgba(29,30,34,.66); border-color: rgba(255,255,255,.09); border-radius: 13px; backdrop-filter: blur(18px); }
+.settings-section-title { margin-bottom: 10px; color: #d1d1d4; }.recording-mode-choice { gap: 6px; margin-bottom: 9px; }.recording-mode-choice button { padding: 9px 10px; background: rgba(0,0,0,.28); border-color: rgba(255,255,255,.075); }.recording-mode-choice button.active { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.075); box-shadow: none; }
+.recording-performance-grid select { background: rgba(0,0,0,.3); border-color: rgba(255,255,255,.1); }.recording-bitrate-control strong { color: #e6e6e6; }.recording-bitrate-control input { accent-color: #f1f1ef; }
+.border-choice { padding: 8px; background: rgba(0,0,0,.26); border-color: rgba(255,255,255,.075); }.border-choice.active { border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.075); box-shadow: none; }
+.settings-options-stack { gap: 7px; }.settings-option-card { min-height: 52px; padding: 8px 10px; background: rgba(29,30,34,.64); border-color: rgba(255,255,255,.08); border-radius: 12px; }.settings-option-icon { width: 32px; height: 32px; color: #dedee1; background: rgba(255,255,255,.06); border-radius: 8px; }
+.toggle-switch.on { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.42); }.toggle-switch.on .toggle-knob { background: #fff; }

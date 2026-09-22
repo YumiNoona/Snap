@@ -31,17 +31,16 @@ import "./SettingsWindow.css";
 
 type UpdateState = "idle" | "checking" | "available" | "current" | "downloading" | "installing" | "error";
 
-function SettingsToggle({ icon, title, description, checked, onChange }: {
+function SettingsToggle({ icon, title, checked, onChange }: {
   icon: React.ReactNode;
   title: string;
-  description: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
     <div className="settings-option-card">
       <span className="settings-option-icon">{icon}</span>
-      <span className="settings-option-copy"><strong>{title}</strong><small>{description}</small></span>
+      <span className="settings-option-copy"><strong>{title}</strong></span>
       <button className={`toggle-switch ${checked ? "on" : ""}`} onClick={() => onChange(!checked)} role="switch" aria-checked={checked} aria-label={title}>
         <span className="toggle-knob" />
       </button>
@@ -153,11 +152,6 @@ export default function SettingsWindow() {
       </header>
 
       <main className="settings-window-content">
-        <div className="settings-window-heading">
-          <h1>Settings</h1>
-          <p>Recording preferences and app updates</p>
-        </div>
-
         <div className="settings-tabs" role="tablist" aria-label="Settings sections">
           <button className={tab === "recording" ? "active" : ""} onClick={() => setTab("recording")}><WandSparkles size={15} />Recording</button>
           <button className={tab === "updates" ? "active" : ""} onClick={() => setTab("updates")}><RefreshCw size={15} />Updates{updateState === "available" && <i />}</button>
@@ -194,14 +188,13 @@ export default function SettingsWindow() {
                     <button type="button" onClick={() => change("automaticRecordingProfile", null)}>Re-test this PC</button>
                   </div>
                 )}
-                <p className="recording-performance-note">{settings.recordingPerformanceMode === "automatic" ? (settings.automaticRecordingProfile ? "This saved profile is reused instantly. Snap will only test the PC again when you choose Re-test this PC." : "Snap will test the working encoder once, save the result, and prioritize low impact on browsers, games, and creative apps.") : "24–30 FPS is safest alongside Unreal Engine, games, browser video, or video calls. Native 60 FPS is intended for machines with spare GPU capacity."}</p>
               </section>
               <div className="settings-options-stack">
-                <SettingsToggle icon={<Gauge size={18} />} title="Compatibility encoder fallback" description="Allow a low-priority CPU encoder if no GPU encoder works" checked={settings.allowSoftwareEncoder} onChange={(value) => change("allowSoftwareEncoder", value)} />
-                <SettingsToggle icon={<Timer size={18} />} title="3–2–1 countdown" description="Give yourself time before recording starts" checked={settings.countdown} onChange={(value) => change("countdown", value)} />
-                <SettingsToggle icon={<Minimize2 size={18} />} title="Minimize while recording" description="Keep the launcher out of your capture" checked={settings.minimizeWhileRecording} onChange={(value) => change("minimizeWhileRecording", value)} />
-                <SettingsToggle icon={<PanelTopOpen size={18} />} title="Open editor after recording" description="Open the finished recording automatically" checked={settings.autoOpenEditor} onChange={(value) => change("autoOpenEditor", value)} />
-                <SettingsToggle icon={<Database size={18} />} title="Show audio and JSON files" description="Reveal Snap’s per-recording working-data folders in Videos" checked={settings.showRecordingDataFiles} onChange={(value) => change("showRecordingDataFiles", value)} />
+                <SettingsToggle icon={<Gauge size={18} />} title="Compatibility encoder fallback" checked={settings.allowSoftwareEncoder} onChange={(value) => change("allowSoftwareEncoder", value)} />
+                <SettingsToggle icon={<Timer size={18} />} title="3–2–1 countdown" checked={settings.countdown} onChange={(value) => change("countdown", value)} />
+                <SettingsToggle icon={<Minimize2 size={18} />} title="Minimize while recording" checked={settings.minimizeWhileRecording} onChange={(value) => change("minimizeWhileRecording", value)} />
+                <SettingsToggle icon={<PanelTopOpen size={18} />} title="Open editor after recording" checked={settings.autoOpenEditor} onChange={(value) => change("autoOpenEditor", value)} />
+                <SettingsToggle icon={<Database size={18} />} title="Show recording support files" checked={settings.showRecordingDataFiles} onChange={(value) => change("showRecordingDataFiles", value)} />
               </div>
             </>
           ) : (
@@ -218,7 +211,7 @@ export default function SettingsWindow() {
                 <span>Installed version {installedVersion}</span>
                 {updateState === "available" ? <button className="update-primary-btn" onClick={() => void downloadAndInstallUpdate()}><Download size={15} />Download & install</button> : <button className="update-check-btn" disabled={updateState === "checking" || updateState === "downloading" || updateState === "installing"} onClick={() => void checkForUpdates()}><RefreshCw size={15} />Check for updates</button>}
               </div>
-              <SettingsToggle icon={<RefreshCw size={18} />} title="Automatic update checks" description="Notify you when a new GitHub release is ready" checked={settings.autoCheckUpdates} onChange={(value) => change("autoCheckUpdates", value)} />
+              <SettingsToggle icon={<RefreshCw size={18} />} title="Automatic update checks" checked={settings.autoCheckUpdates} onChange={(value) => change("autoCheckUpdates", value)} />
             </div>
           )}
         </div>

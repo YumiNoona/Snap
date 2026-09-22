@@ -254,7 +254,7 @@ export default function Home() {
       <footer className="site-footer shell">
         <div className="brand"><BrandMark muted /><span className="brand-copy"><strong>Snap</strong><small>Screen Studio</small></span></div>
         <p>Recording tools with a point of view.</p>
-        <p>Windows · v6.0.0 · 2026</p>
+        <p>Windows · v7.0.0 · 2026</p>
       </footer>
 
       {donateOpen && (

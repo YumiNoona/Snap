@@ -24,6 +24,7 @@ interface Props {
   onKeyframesChange: (kf: Keyframe[]) => void;
   playing: boolean;
   previewMuted?: boolean;
+  previewVolume?: number;
   onDuration: (d: number) => void;
   onMediaElementChange?: (element: HTMLVideoElement | null) => void;
   cropMode?: boolean;
@@ -98,7 +99,7 @@ export default function Preview({
   config,
   keyframes,
   onKeyframesChange,
-  playing, previewMuted = false,
+  playing, previewMuted = false, previewVolume = 100,
   onDuration,
   onMediaElementChange,
   cropMode = false,
@@ -393,8 +394,8 @@ export default function Preview({
     // recordings can also retain an embedded recovery stream, which must be
     // muted when the editable sidecar is present to avoid doubled audio.
     video.muted = previewMuted || hasExternalAudio || config.audio.systemMuted;
-    video.volume = Math.max(0, Math.min(1, config.audio.systemVolume / 100));
-  }, [config.audio.systemMuted, config.audio.systemVolume, hasExternalAudio, previewMuted, videoReady]);
+    video.volume = Math.max(0, Math.min(1, config.audio.systemVolume / 100 * previewVolume / 100));
+  }, [config.audio.systemMuted, config.audio.systemVolume, hasExternalAudio, previewMuted, previewVolume, videoReady]);
 
   // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {

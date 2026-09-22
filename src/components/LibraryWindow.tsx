@@ -34,13 +34,13 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
 
   return <div className="module-window">
     <header className="module-titlebar" data-tauri-drag-region>
-      <span className="module-mark"><FolderOpen size={17} /></span><div data-tauri-drag-region><strong data-tauri-drag-region>Open media</strong><small data-tauri-drag-region>Snap recordings and videos from other apps</small></div>
+      <span className="module-mark"><FolderOpen size={17} /></span><div data-tauri-drag-region><strong data-tauri-drag-region>Open media</strong></div>
       <button onClick={() => getCurrentWindow().close()}><X size={16} /></button>
     </header>
     <main className="library-body">
-      <section className="import-card"><div><Upload size={19} /><span><strong>Import any video</strong><small>Manual zoom, captions, canvas styling, audio controls and export remain available without a Snap sidecar.</small></span></div><button onClick={() => void browse()}>Choose video</button></section>
+      <section className="import-card"><div><Upload size={19} /><span><strong>Import video</strong></span></div><button onClick={() => void browse()}>Browse</button></section>
       <label className="module-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search recent recordings" /></label>
-      <div className="media-list">{shown.map((file) => <button key={file.path} onClick={() => void open(file.path)}><span className="media-icon"><Film size={17} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span><i>Open</i></button>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No videos found</strong><small>Import a video from anywhere on your computer.</small></div>}</div>
+      <div className="media-list">{shown.map((file) => <button key={file.path} onClick={() => void open(file.path)}><span className="media-icon"><Film size={17} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span><i>Open</i></button>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No videos found</strong></div>}</div>
       {error && <p className="module-error">{error}</p>}
     </main>
   </div>;

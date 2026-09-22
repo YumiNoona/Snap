@@ -63,6 +63,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [activeTool, setActiveTool] = useState<SidebarToolTab | null>("canvas");
   const [previewFocusMode, setPreviewFocusMode] = useState(false);
   const [previewMuted, setPreviewMuted] = useState(false);
+  const [previewVolume, setPreviewVolume] = useState(100);
+  const [previewControlsVisible, setPreviewControlsVisible] = useState(true);
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
@@ -79,6 +81,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
+  const previewControlsTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (isBrowserPreview || duration > 0) return;
@@ -106,7 +109,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   });
   const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
-    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted,
+    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted, previewVolume,
   });
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
@@ -699,8 +702,28 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     return () => window.removeEventListener("keydown", exitPreview);
   }, [previewFocusMode]);
 
+  const revealPreviewControls = useCallback(() => {
+    if (!previewFocusMode) return;
+    setPreviewControlsVisible(true);
+    if (previewControlsTimerRef.current !== null) window.clearTimeout(previewControlsTimerRef.current);
+    previewControlsTimerRef.current = window.setTimeout(() => setPreviewControlsVisible(false), 2200);
+  }, [previewFocusMode]);
+
+  useEffect(() => {
+    if (!previewFocusMode) {
+      setPreviewControlsVisible(true);
+      if (previewControlsTimerRef.current !== null) window.clearTimeout(previewControlsTimerRef.current);
+      previewControlsTimerRef.current = null;
+      return;
+    }
+    revealPreviewControls();
+    return () => {
+      if (previewControlsTimerRef.current !== null) window.clearTimeout(previewControlsTimerRef.current);
+    };
+  }, [previewFocusMode, revealPreviewControls]);
+
   return (
-    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""}`} data-theme={editorTheme}>
+    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} onPointerMove={revealPreviewControls}>
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
         <div className="ss-drag-area" data-tauri-drag-region />
@@ -883,6 +906,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             onKeyframesChange={setKeyframes}
             playing={playing}
             previewMuted={previewMuted}
+            previewVolume={previewVolume}
             onDuration={(d) => {
               if (!Number.isFinite(d) || d <= 0) return;
               const previous = metadataDurationRef.current;
@@ -927,7 +951,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
               <button type="button" title="Back 5 seconds" onClick={() => seekTo(Math.max(config.trimStart, currentTime - 5))}><SkipBack size={18} /></button>
               <button type="button" className="primary" title={playing ? "Pause" : "Play"} onClick={togglePlay}>{playing ? <Pause size={21} /> : <Play size={21} fill="currentColor" />}</button>
               <button type="button" title="Forward 5 seconds" onClick={() => seekTo(Math.min(config.trimEnd || duration, currentTime + 5))}><SkipForward size={18} /></button>
-              <button type="button" title={previewMuted ? "Unmute preview" : "Mute preview"} onClick={() => setPreviewMuted((muted) => !muted)}>{previewMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+              <div className="ss-preview-volume">
+                <button type="button" title={previewMuted ? "Unmute preview" : "Mute preview"} onClick={() => setPreviewMuted((muted) => !muted)}>{previewMuted || previewVolume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+                <input aria-label="Preview volume" type="range" min={0} max={100} step={1} value={previewMuted ? 0 : previewVolume} onChange={(event) => { const value = Number(event.target.value); setPreviewVolume(value); setPreviewMuted(value === 0); }} />
+              </div>
             </div>
           </div>}
         </div>

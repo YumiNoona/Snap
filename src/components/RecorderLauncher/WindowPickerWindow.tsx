@@ -56,14 +56,13 @@ export default function WindowPickerWindow() {
         <span className="window-picker-mark"><AppWindow size={19} /></span>
         <div data-tauri-drag-region>
           <strong data-tauri-drag-region>Select a window</strong>
-          <small data-tauri-drag-region>Choose one application to record</small>
         </div>
         <button title="Close" aria-label="Close window picker" onClick={() => getCurrentWindow().close()}><X size={16} /></button>
       </header>
 
       <section className="window-picker-body">
         <div className="window-picker-intro">
-          <div><span>Window capture</span><h1>What would you like to record?</h1><p>Snap will follow the selected application window while keeping the rest of your desktop private.</p></div>
+          <div><h1>Choose a window</h1></div>
           <button className="window-picker-refresh" onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? "spin" : ""} />Refresh</button>
         </div>
 
@@ -79,14 +78,14 @@ export default function WindowPickerWindow() {
           {!loading && !error && filtered.map((target) => (
             <button key={target.id} className="window-picker-option" disabled={!!selecting} onClick={() => void choose(target)}>
               <span className="window-picker-option-icon"><AppWindow size={17} /></span>
-              <span><strong>{target.name}</strong><small>Application window</small></span>
+              <span><strong>{target.name}</strong></span>
               {selecting === target.id ? <RefreshCw size={15} className="spin" /> : <ChevronRight size={16} />}
             </button>
           ))}
           {!loading && !error && filtered.length === 0 && <div className="window-picker-empty"><Search size={21} /><strong>No matching windows</strong><small>Try refreshing or clearing the search.</small></div>}
         </div>
 
-        <footer className="window-picker-footer"><span><i />{targets.length} windows available</span><small>Selecting a window starts the normal recording countdown.</small></footer>
+        <footer className="window-picker-footer"><span><i />{targets.length} windows</span></footer>
       </section>
     </main>
   );

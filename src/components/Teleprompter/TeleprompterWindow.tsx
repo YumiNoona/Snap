@@ -9,17 +9,9 @@ interface Props {
   onClose?: () => void;
 }
 
-const DEFAULT_SCRIPT = `Welcome to Snap Screen Recorder!
+const DEFAULT_SCRIPT = `Welcome to Snap.
 
-This is your dedicated Teleprompter window. You can drag it anywhere on screen while recording your presentation, gaming, or tutorial.
-
-Features built for seamless recording:
-1. Auto-scroll with word-by-word karaoke highlighting so you never lose your place.
-2. Customizable Reading Speed (WPM), Font Size, and Window Opacity.
-3. Mirror Text Mode for hardware teleprompter glass setups.
-4. Floating overlay that stays accessible over any app or browser window.
-
-Type your script in Edit mode, then press Start Prompt to begin reading!`;
+Open Edit Script, paste your words, then press Start when you are ready.`;
 
 export default function TeleprompterWindow({ onClose }: Props) {
   const isStandalone = new URLSearchParams(window.location.search).get("window") === "teleprompter";
@@ -260,7 +252,7 @@ export default function TeleprompterWindow({ onClose }: Props) {
             <button
               className={`tp-icon-btn flip ${isFlipped ? "active" : ""}`}
               onClick={() => setIsFlipped(!isFlipped)}
-              title="Flip / Mirror Text for Glass Teleprompter"
+            title="Mirror text"
             >
               Flip
             </button>
