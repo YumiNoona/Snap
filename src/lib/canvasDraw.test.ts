@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawCaptionTrack, resolveLayerFade, resolveMaskCameraFocus } from "./canvasDraw";
+import { drawCaptionTrack, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
 import type { CaptionTrack } from "./types";
 
 describe("caption canvas isolation", () => {
@@ -100,5 +100,31 @@ describe("mask camera transitions", () => {
     expect(focus?.y).toBeCloseTo(.3);
     expect(focus?.scale).toBeGreaterThan(1);
     expect(focus?.mix).toBe(1);
+  });
+
+  it("samples a smaller centered region for a real magnifier effect", () => {
+    const sample = resolveMagnifierSample(
+      { x: 0, y: 0, w: 1920, h: 1080 },
+      { x: 100, y: 50, w: 960, h: 540 },
+      { x: 340, y: 185, w: 240, h: 135 },
+      2,
+    );
+    expect(sample.w).toBeCloseTo(240);
+    expect(sample.h).toBeCloseTo(135);
+    expect(sample.x + sample.w / 2).toBeCloseTo(720);
+    expect(sample.y + sample.h / 2).toBeCloseTo(405);
+  });
+
+  it("keeps a magnifier sample inside the source near frame edges", () => {
+    const sample = resolveMagnifierSample(
+      { x: 20, y: 10, w: 1000, h: 500 },
+      { x: 0, y: 0, w: 1000, h: 500 },
+      { x: 970, y: 470, w: 100, h: 80 },
+      4,
+    );
+    expect(sample.x).toBeGreaterThanOrEqual(20);
+    expect(sample.y).toBeGreaterThanOrEqual(10);
+    expect(sample.x + sample.w).toBeLessThanOrEqual(1020);
+    expect(sample.y + sample.h).toBeLessThanOrEqual(510);
   });
 });

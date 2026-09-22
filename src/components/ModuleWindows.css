@@ -35,7 +35,8 @@
 .import-card::after { content: ""; position: absolute; inset: 0; background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.055), transparent 68%); transform: translateX(-110%); transition: transform 550ms ease; pointer-events: none; }
 .import-card:hover { border-color: rgba(255,255,255,.19); box-shadow: 0 12px 35px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.07); transform: translateY(-1px); }
 .import-card:hover::after { transform: translateX(110%); }
-.import-card-icon { display: grid; width: 38px; height: 38px; place-items: center; color: #f4f4f5; background: rgba(255,255,255,.085); border: 1px solid rgba(255,255,255,.11); border-radius: 50%; box-shadow: inset 0 1px rgba(255,255,255,.07); }
+.import-card > .import-card-icon { display: grid; flex: 0 0 40px; width: 40px; height: 40px; min-width: 40px; padding: 0; place-items: center; gap: 0; overflow: hidden; box-sizing: border-box; color: #f4f4f5; background: rgba(255,255,255,.085); border: 1px solid rgba(255,255,255,.11); border-radius: 12px; box-shadow: inset 0 1px rgba(255,255,255,.07); }
+.import-card > .import-card-icon svg { display: block; flex: none; width: 18px; height: 18px; max-width: 18px; max-height: 18px; margin: 0; overflow: visible; }
 .import-card-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .import-card-copy strong { font-size: 13px; }
 .import-card-copy small { color: #88888f; font-size: 10px; }

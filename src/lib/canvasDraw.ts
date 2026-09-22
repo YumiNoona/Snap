@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
+import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
 export function drawCaptionTrack(
@@ -215,6 +215,24 @@ export function drawVideoLayer(
     ctx.drawImage(video, dx, dy, dw, dh);
   }
   ctx.restore();
+}
+
+/** Shared visual-layer renderer used by both live preview and frame export. */
+export function drawVisualLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: Exclude<Layer, MaskLayer>,
+  timeSeconds: number,
+  playing: boolean,
+  videoCache: Map<string, HTMLVideoElement>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  if (layer.type === "text") drawTextLayer(ctx, layer, x, y, w, h);
+  else if (layer.type === "shape") drawShapeLayer(ctx, layer, x, y, w, h);
+  else if (layer.type === "image") drawImageLayer(ctx, layer, x, y, w, h);
+  else drawVideoLayer(ctx, layer, timeSeconds, playing, videoCache, x, y, w, h);
 }
 
 export function paintGradient(
@@ -585,6 +603,25 @@ export function resolveMaskCameraFocus(layers: MaskLayer[], timeSeconds: number)
   };
 }
 
+export function resolveMagnifierSample(
+  source: { x: number; y: number; w: number; h: number },
+  dest: { x: number; y: number; w: number; h: number },
+  rect: { x: number; y: number; w: number; h: number },
+  intensity: number,
+): { x: number; y: number; w: number; h: number } {
+  const zoom = Math.max(1.25, Math.min(8, intensity));
+  const w = Math.min(source.w, rect.w / dest.w * source.w / zoom);
+  const h = Math.min(source.h, rect.h / dest.h * source.h / zoom);
+  const centerX = source.x + (rect.x + rect.w / 2 - dest.x) / dest.w * source.w;
+  const centerY = source.y + (rect.y + rect.h / 2 - dest.y) / dest.h * source.h;
+  return {
+    x: Math.max(source.x, Math.min(source.x + source.w - w, centerX - w / 2)),
+    y: Math.max(source.y, Math.min(source.y + source.h - h, centerY - h / 2)),
+    w,
+    h,
+  };
+}
+
 export function drawMaskLayer(
   ctx: CanvasRenderingContext2D, layer: MaskLayer, video: CanvasImageSource,
   source: { x: number; y: number; w: number; h: number },
@@ -628,14 +665,8 @@ export function drawMaskLayer(
     g.fillStyle = "#000"; path(g); g.fill();
     g.restore();
     g.save(); path(g); g.clip();
-    const zoom = Math.max(1.25, Math.min(8, layer.intensity));
-    const sw = Math.min(source.w, w / dest.w * source.w / zoom);
-    const sh = Math.min(source.h, h / dest.h * source.h / zoom);
-    const centerX = source.x + (x + w / 2 - dest.x) / dest.w * source.w;
-    const centerY = source.y + (y + h / 2 - dest.y) / dest.h * source.h;
-    const sx = Math.max(source.x, Math.min(source.x + source.w - sw, centerX - sw / 2));
-    const sy = Math.max(source.y, Math.min(source.y + source.h - sh, centerY - sh / 2));
-    g.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+    const sample = resolveMagnifierSample(source, dest, rect, layer.intensity);
+    g.drawImage(video, sample.x, sample.y, sample.w, sample.h, x, y, w, h);
     g.restore();
     if ((layer.borderWidth ?? 3) > 0) {
       path(g); g.strokeStyle = layer.borderColor ?? "#ffffff"; g.lineWidth = layer.borderWidth ?? 3;

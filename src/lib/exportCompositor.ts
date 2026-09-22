@@ -6,7 +6,7 @@ import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToV
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
-  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawImageLayer, drawVideoLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
+  cursorIdleOpacity, drawVisualLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
   drawCameraBubble,
 } from "./canvasDraw";
@@ -455,10 +455,7 @@ export async function createExportCompositor(
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
-      if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
-      else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
-      else if (layer.type === "image") drawImageLayer(ctx, layer, lx, ly, lw, lh);
-      else drawVideoLayer(ctx, layer, videoTs, true, layerVideoCache, lx, ly, lw, lh);
+      drawVisualLayer(ctx, layer, videoTs, true, layerVideoCache, lx, ly, lw, lh);
       ctx.restore();
     }
     for (const track of captionTracks) {

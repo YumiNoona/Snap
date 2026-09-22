@@ -9,8 +9,8 @@ import { analyzeMobileVisualActivity } from "../../../lib/mobileAutoZoom";
 import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
-  clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
-  drawImageLayer, drawVideoLayer, drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
+  clickEffectDuration, cursorIdleOpacity, drawVisualLayer,
+  drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
   drawCaptionTrack,
   drawCameraBubble,
 } from "../../../lib/canvasDraw";
@@ -802,10 +802,7 @@ export default function Preview({
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
-      if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
-      else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
-      else if (layer.type === "image") drawImageLayer(ctx, layer, lx, ly, lw, lh);
-      else drawVideoLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh);
+      drawVisualLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh);
       ctx.restore();
     }
 

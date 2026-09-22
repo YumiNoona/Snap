@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "r
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowUpFromLine, ArrowUpRight, Film, FolderOpen, Search, X } from "lucide-react";
+import { ArrowUpRight, CloudUpload, Film, FolderOpen, Search, X } from "lucide-react";
 import "./ModuleWindows.css";
 
 interface MediaFile { name: string; path: string; is_dir: boolean; size: number }
@@ -52,7 +52,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
     </header>
     <main className="library-body">
       <section className="import-card">
-        <div className="import-card-icon"><ArrowUpFromLine size={18} strokeWidth={2.1} /></div>
+        <div className="import-card-icon"><CloudUpload size={18} strokeWidth={2.1} /></div>
         <div className="import-card-copy"><strong>Bring in a video</strong><small>Drop into your next edit</small></div>
         <button onClick={() => void browse()}>Choose file <ArrowUpRight size={15} /></button>
       </section>
