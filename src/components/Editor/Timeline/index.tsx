@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Plus, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
@@ -637,7 +637,7 @@ export default function Timeline({
           </button>
 
           <button className="ss-tb-btn add-audio-timeline-btn" onClick={onAddAudio} title="Add an audio file to the timeline">
-            <Plus size={15} />
+            <Music2 size={16} />
             <span>Audio</span>
           </button>
         </div>

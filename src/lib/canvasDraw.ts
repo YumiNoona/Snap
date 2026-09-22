@@ -28,7 +28,8 @@ export function drawCaptionTrack(
   const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
   const maxWidth = Math.max(80, frame.w * style.maxWidth);
   ctx.save();
-  ctx.font = `${style.fontStyle ?? "normal"} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  const fontFamily = style.fontFamily.includes(" ") ? `"${style.fontFamily}"` : style.fontFamily;
+  ctx.font = `${style.fontStyle ?? "normal"} ${style.fontWeight} ${fontSize}px ${fontFamily}`;
   (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${style.letterSpacing ?? 0}px`;
   ctx.textAlign = style.align;
   ctx.textBaseline = "middle";
@@ -60,7 +61,12 @@ export function drawCaptionTrack(
   roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * (style.backgroundRadius ?? .18));
   ctx.fill();
 
-  const textCenterX = centerX + entrance.slide * fontSize * 1.25;
+  const textAnchorX = style.align === "left"
+    ? centerX - widest / 2
+    : style.align === "right"
+      ? centerX + widest / 2
+      : centerX;
+  const textCenterX = textAnchorX + entrance.slide * fontSize * 1.25;
   const textCenterY = centerY + entrance.rise * fontSize * .55;
   ctx.save();
   ctx.globalAlpha *= entrance.alpha;

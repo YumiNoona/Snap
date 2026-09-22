@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Clock3, Type, Palette, WandSparkles, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Clock3, Palette, WandSparkles, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -752,17 +752,17 @@ export default function Panels({
               <button onClick={() => onSelectCaption(null)} title="Back to caption tools" aria-label="Back to caption tools"><ArrowLeft size={17} /></button>
               <span><strong>Caption</strong><small>{(selectedCaptionSegment.startMs / 1000).toFixed(1)}s–{(selectedCaptionSegment.endMs / 1000).toFixed(1)}s</small></span>
             </div>
-            <div className="caption-copy-card">
-              <label className="layer-field-stack"><span><Type size={13} /> Caption text</span><textarea className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} /></label>
+            <div className="caption-copy-edit">
+              <textarea aria-label="Caption text" className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} />
+              <div className="caption-timing-heading"><Clock3 size={13} /><span>Timing</span></div>
               <div className="caption-time-row caption-inspector-time">
-                <Clock3 size={14} />
-                <label><span>In</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
-                <label><span>Out</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
+                <label><span>Start</span><div><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
+                <label><span>End</span><div><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
               </div>
             </div>
             <Section title="Text style">
               <div className="caption-compact-section">
-              <SelectRow label="Typeface" value={selectedCaptionTrack.style.fontFamily} options={["Segoe UI Variable", "Arial", "Georgia", "Courier New"]} optionLabels={{"Segoe UI Variable":"Segoe UI","Arial":"Arial","Georgia":"Georgia","Courier New":"Courier New"}} onChange={(fontFamily) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontFamily } }))} />
+              <SelectRow label="Typeface" value={selectedCaptionTrack.style.fontFamily} options={["Segoe UI Variable", "Arial", "Calibri", "Verdana", "Tahoma", "Trebuchet MS", "Georgia", "Times New Roman", "Courier New", "Impact"]} onChange={(fontFamily) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontFamily } }))} />
               <SelectRow label="Weight" value={String(selectedCaptionTrack.style.fontWeight)} options={["400", "500", "600", "700", "800"]} optionLabels={{"400":"Regular","500":"Medium","600":"Semibold","700":"Bold","800":"Extra bold"}} onChange={(fontWeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: Number(fontWeight) as CaptionTrack["style"]["fontWeight"] } }))} />
               <div className="caption-format-pills" role="toolbar" aria-label="Caption text formatting">
                 <button title="Bold" aria-label="Bold" className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong></button>
@@ -803,7 +803,6 @@ export default function Panels({
             </Section>
           </> : <>
           <Section title="Automatic Captions">
-            <div className="caption-setup-intro"><span><Sparkles size={17} /></span><div><strong>Create editable captions</strong><small>Choose a voice track and process it locally.</small></div></div>
             <div className="caption-picker-stack">
               <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
               <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />

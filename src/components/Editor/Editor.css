@@ -1244,3 +1244,34 @@
 .ss-preview-center-area { overflow: hidden; box-shadow: inset 0 0 34px rgba(0,0,0,.2); }
 .ss-timeline-container { overflow: visible; border-top-color: var(--border-subtle); box-shadow: none; }
 .screenstudio-editor-layout[data-theme="light"] { background: #e9e7e2; }
+.screenstudio-editor-layout[data-theme="light"] .ss-topbar-export-btn {
+  color: #ffffff;
+  background: #242422;
+  border-color: #242422;
+}
+.screenstudio-editor-layout[data-theme="light"] .ss-topbar-export-btn:hover {
+  color: #ffffff;
+  background: #090909;
+  border-color: #090909;
+}
+.screenstudio-editor-layout[data-theme="light"] .layer-textarea,
+.screenstudio-editor-layout[data-theme="light"] .layer-select-input,
+.screenstudio-editor-layout[data-theme="light"] .caption-time-row input,
+.screenstudio-editor-layout[data-theme="light"] .caption-segment-editor textarea,
+.screenstudio-editor-layout[data-theme="light"] .caption-inspector-time label > div,
+.screenstudio-editor-layout[data-theme="light"] .caption-format-pills,
+.screenstudio-editor-layout[data-theme="light"] .caption-format-pills button,
+.screenstudio-editor-layout[data-theme="light"] .caption-color-grid label,
+.screenstudio-editor-layout[data-theme="light"] .caption-animation-presets button,
+.screenstudio-editor-layout[data-theme="light"] .audio-import-button-last {
+  color: #292927;
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, .12);
+}
+.screenstudio-editor-layout[data-theme="light"] .caption-format-pills button.active {
+  color: #ffffff;
+  background: #292927;
+  border-color: #292927;
+}
+.screenstudio-editor-layout[data-theme="light"] .caption-copy-editor::selection { color: #ffffff; background: #292927; }
+.screenstudio-editor-layout[data-theme="light"] .caption-copy-editor::placeholder { color: #8a8983; }

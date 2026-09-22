@@ -55,27 +55,6 @@
 .captions-drawer-content { padding-top: 14px; }
 .captions-drawer-content > .ss-section:first-child { background: transparent; border-color: transparent; }
 
-.caption-setup-intro {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 2px;
-  padding: 2px 0 10px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.caption-setup-intro > span {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 9px;
-}
-.caption-setup-intro > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.caption-setup-intro strong { color: var(--text-primary); font-size: 12px; }
-.caption-setup-intro small { color: var(--text-tertiary); font-size: 10px; line-height: 1.4; }
 .caption-picker-stack { display: grid; gap: 4px; }
 .caption-picker-stack .caption-language-field { margin-top: 6px; }
 .caption-status-message { margin: 0; padding: 8px 9px; color: var(--text-secondary); background: var(--bg-surface-sunken); border-radius: 8px; font-size: 10px; line-height: 1.45; }
@@ -754,11 +733,13 @@
 .caption-format-pills button:hover { color: var(--text-primary); border-color: var(--border-default); }
 .caption-format-pills button.active { color: var(--bg-app); background: var(--accent); border-color: var(--accent); }
 .caption-copy-editor { min-height: 72px; max-height: 132px; }
-.caption-copy-card { display: grid; gap: 10px; margin: 2px 0 4px; padding: 12px; background: var(--bg-surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
-.caption-copy-card .layer-field-stack > span { display: inline-flex; align-items: center; gap: 6px; }
-.caption-inspector-time { grid-template-columns: auto repeat(2, minmax(0, 1fr)); align-items: end; margin: 0; }
-.caption-inspector-time > svg { align-self: center; color: var(--text-tertiary); }
+.caption-copy-edit { display: grid; gap: 9px; margin: 2px 1px 7px; }
+.caption-timing-heading { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
+.caption-time-row.caption-inspector-time { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 8px; margin: 0; }
 .caption-inspector-time label { display: grid; gap: 5px; color: var(--text-tertiary); font-size: 10px; }
+.caption-inspector-time label > div { display: flex; min-width: 0; align-items: center; overflow: hidden; background: var(--bg-surface-sunken); border: 1px solid var(--border-default); border-radius: 8px; }
+.caption-time-row.caption-inspector-time input { min-width: 0; height: 34px; padding: 0 4px 0 9px; background: transparent; border: 0; border-radius: 0; }
+.caption-inspector-time em { padding-right: 8px; color: var(--text-tertiary); font-size: 9px; font-style: normal; }
 .caption-compact-section { display: grid; gap: 9px; }
 .caption-compact-section .slider-row { display: grid; grid-template-columns: 82px minmax(64px, 1fr) 54px; flex-wrap: nowrap; column-gap: 8px; row-gap: 0; }
 .caption-compact-section .slider-label { width: auto; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

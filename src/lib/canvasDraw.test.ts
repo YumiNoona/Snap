@@ -42,4 +42,40 @@ describe("caption canvas isolation", () => {
     expect(operations.indexOf("beginPath")).toBeGreaterThan(-1);
     expect(operations.indexOf("beginPath")).toBeLessThan(operations.indexOf("fill"));
   });
+
+  it("anchors left and right aligned captions to the matching box edge", () => {
+    const drawAt = (align: "left" | "right") => {
+      const xPositions: number[] = [];
+      const context = {
+        globalAlpha: 1,
+        save: () => undefined,
+        restore: () => undefined,
+        measureText: (value: string) => ({ width: value.length * 10 }),
+        beginPath: () => undefined,
+        moveTo: () => undefined,
+        lineTo: () => undefined,
+        arcTo: () => undefined,
+        closePath: () => undefined,
+        fill: () => undefined,
+        translate: () => undefined,
+        scale: () => undefined,
+        strokeText: () => undefined,
+        fillText: (_value: string, x: number) => xPositions.push(x),
+      } as unknown as CanvasRenderingContext2D;
+      const track: CaptionTrack = {
+        id: "aligned", name: "Captions", language: "en", sourceTrackIds: ["mic"], visible: true, burnedIn: true,
+        style: {
+          fontFamily: "Segoe UI Variable", fontSize: 42, fontWeight: 700,
+          color: "#fff", backgroundColor: "#000", outlineColor: "#000", outlineWidth: 0,
+          shadow: false, align, x: .5, y: .86, maxWidth: .82, animation: "none",
+        },
+        segments: [{ id: "line", startMs: 0, endMs: 1_000, text: "Aligned", language: "en", sourceTrackIds: ["mic"], userEdited: false }],
+      };
+      drawCaptionTrack(context, track, 500, { x: 0, y: 0, w: 1_920, h: 1_080 });
+      return xPositions[0];
+    };
+
+    expect(drawAt("left")).toBeLessThan(960);
+    expect(drawAt("right")).toBeGreaterThan(960);
+  });
 });
