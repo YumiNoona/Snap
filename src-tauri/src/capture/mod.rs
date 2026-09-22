@@ -60,7 +60,7 @@ impl Default for RecordingOptions {
     fn default() -> Self {
         Self {
             fps: 30,
-            bitrate_mbps: 8,
+            bitrate_mbps: 10,
             max_width: Some(1920),
             max_height: Some(1080),
             allow_software_encoder: false,
@@ -385,14 +385,14 @@ fn recommend_recording_options_blocking(
     };
     let options = RecordingOptions {
         fps: 30,
-        bitrate_mbps: 4,
-        max_width: Some(1280),
-        max_height: Some(720),
+        bitrate_mbps: 10,
+        max_width: Some(1920),
+        max_height: Some(1080),
         allow_software_encoder: false,
     };
     let encoder = label.to_string();
     let hardware_encoding = true;
-    let summary = format!("1280x720 at 30 FPS using {label}; hardware-only low-impact capture");
+    let summary = format!("1920x1080 at 30 FPS and 10 Mbps using {label}; hardware-only capture");
     let recommendation = RecordingRecommendation {
         options,
         encoder,

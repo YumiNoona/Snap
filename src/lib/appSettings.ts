@@ -17,7 +17,7 @@ export interface AutomaticRecordingProfile {
   };
 }
 
-export const AUTOMATIC_PROFILE_VERSION = 3;
+export const AUTOMATIC_PROFILE_VERSION = 4;
 
 export interface AppSettings {
   borderStyle: BorderStyle;
@@ -45,7 +45,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showRecordingDataFiles: false,
   recordingPerformanceMode: "automatic",
   recordingFps: 30,
-  recordingBitrateMbps: 8,
+  recordingBitrateMbps: 10,
   recordingResolution: "1080p",
   allowSoftwareEncoder: false,
   automaticRecordingProfile: null,

@@ -116,11 +116,11 @@ fn resolve_model(preferred: &str) -> Option<PathBuf> {
             "ggml-tiny.bin",
         ],
     };
-    existing_candidate(model_names.iter().flat_map(|name| [
-        user.join(name),
-        root.join(name),
-        development.join(name),
-    ]))
+    existing_candidate(
+        model_names
+            .iter()
+            .flat_map(|name| [user.join(name), root.join(name), development.join(name)]),
+    )
 }
 
 #[tauri::command]
@@ -337,9 +337,31 @@ fn align_to_audio_activity(
     segments: Vec<TranscriptionSegment>,
     activity: &[AudioActivityRange],
 ) -> Vec<TranscriptionSegment> {
+    if segments.is_empty() || activity.is_empty() {
+        return Vec::new();
+    }
+
+    // Whisper occasionally timestamps a late speech block from zero even
+    // though the prepared WAV retains its leading silence. When none of its
+    // phrases overlap measured speech, move the transcript as one unit to the
+    // first audible sample. Keeping a single offset preserves gaps between
+    // phrases and prevents captions from appearing over the silent lead-in.
+    let has_any_overlap = segments.iter().any(|segment| {
+        activity
+            .iter()
+            .any(|range| range.end_ms > segment.start_ms && range.start_ms < segment.end_ms)
+    });
+    let shift_ms = if has_any_overlap {
+        0
+    } else {
+        activity[0].start_ms.saturating_sub(segments[0].start_ms)
+    };
+
     segments
         .into_iter()
-        .filter_map(|segment| {
+        .filter_map(|mut segment| {
+            segment.start_ms = segment.start_ms.saturating_add(shift_ms);
+            segment.end_ms = segment.end_ms.saturating_add(shift_ms);
             let overlaps = activity
                 .iter()
                 .filter(|range| range.end_ms > segment.start_ms && range.start_ms < segment.end_ms)
@@ -461,13 +483,14 @@ pub async fn transcribe_audio(
             });
         }
         let language = match request.language.as_str() {
-            "en" | "hi" => request.language.as_str(),
+            "en" | "hi" | "es" | "fr" | "de" | "it" | "pt" | "ja" | "zh" | "ko" => request.language.as_str(),
             _ => "auto",
         };
         let prompt = match language {
             "hi" => "यह स्पष्ट हिंदी भाषण है। सही शब्द, वाक्य और विराम चिह्न लिखें। अंग्रेज़ी नामों को सही रखें।",
             "en" => "Clear spoken English with accurate words, names, capitalization, and punctuation.",
-            _ => "Clear Hindi or English speech. Preserve the spoken language, names, numbers, and punctuation accurately.",
+            "auto" => "Clear multilingual speech. Preserve the spoken language, names, numbers, and punctuation accurately.",
+            _ => "Accurate transcription in the requested language. Preserve names, numbers, and punctuation.",
         };
         let output = background_command(&executable)
             .arg("-m")
@@ -546,6 +569,24 @@ mod tests {
         );
         assert_eq!(aligned.len(), 1);
         assert_eq!(aligned[0].text, "to");
+    }
+
+    #[test]
+    fn moves_an_early_whisper_transcript_after_leading_silence() {
+        let aligned = align_to_audio_activity(
+            vec![TranscriptionSegment {
+                start_ms: 0,
+                end_ms: 8_000,
+                text: "speech after silence".into(),
+            }],
+            &[AudioActivityRange {
+                start_ms: 10_000,
+                end_ms: 18_000,
+            }],
+        );
+        assert_eq!(aligned.len(), 1);
+        assert_eq!(aligned[0].start_ms, 10_000);
+        assert_eq!(aligned[0].end_ms, 18_000);
     }
 
     #[test]

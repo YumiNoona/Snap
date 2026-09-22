@@ -67,6 +67,15 @@ const TRANSCRIPTION_MODEL_SIZES: Record<Exclude<TranscriptionModel, "auto">, str
   "large-v3-turbo": "1.5 GB",
 };
 
+const CAPTION_MODEL_OPTIONS: Array<{ value: TranscriptionModel; label: string; description: string }> = [
+  { value: "auto", label: "Automatic", description: "Best installed model" },
+  { value: "tiny", label: "Tiny", description: "75 MB · Fastest" },
+  { value: "base", label: "Base", description: "142 MB · Balanced" },
+  { value: "small", label: "Small", description: "466 MB · Accurate" },
+  { value: "medium", label: "Medium", description: "1.5 GB · Higher accuracy" },
+  { value: "large-v3-turbo", label: "Large v3 Turbo", description: "1.5 GB · Best quality" },
+];
+
 const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
   none: Slash,
   default: MousePointer2,
@@ -333,6 +342,9 @@ export default function Panels({
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
   const selectedCaptionTrack = selectedCaption ? captionTracks.find((track) => track.id === selectedCaption.trackId) ?? null : null;
   const selectedCaptionSegment = selectedCaptionTrack?.segments.find((segment) => segment.id === selectedCaption?.segmentId) ?? null;
+  const captionModelReady = Boolean(transcriptionEnv && (captionModel === "auto"
+    ? transcriptionEnv.available
+    : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)));
   const updateSelectedLayer = (patch: Partial<Layer>) => {
     if (!selectedLayer) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
@@ -358,7 +370,7 @@ export default function Panels({
     <aside className="ss-panels-drawer">
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
       {activeTab === "canvas" && (
-        <div className="ss-drawer-content">
+        <div className="ss-drawer-content canvas-drawer-content">
           <Section title="Canvas Styling">
             <Slider label="Padding" value={config.padding} min={0} max={160} step={4} unit="px" onChange={(v) => update({ padding: v })} defaultValue={48} onReset={() => update({ padding: 48 })} />
             <Slider label="Roundness" value={config.borderRadius} min={0} max={60} step={1} unit="px" onChange={(v) => update({ borderRadius: v })} defaultValue={14} onReset={() => update({ borderRadius: 14 })} />
@@ -620,7 +632,7 @@ export default function Panels({
 
       {/* ═══ MOTION TAB ═══════════════════════════════════════════════ */}
       {activeTab === "motion" && (
-        <div className={`ss-drawer-content ${selectedZoomRegion ? "layer-inspector-mode" : ""}`}>
+        <div className={`ss-drawer-content motion-drawer-content ${selectedZoomRegion ? "layer-inspector-mode" : ""}`}>
           {selectedZoomRegion ? <>
             <div className="layer-inspector-header">
               <button onClick={onClearSelectedZoom} title="Back to motion tools" aria-label="Back to motion tools"><ArrowLeft size={17} /></button>
@@ -734,7 +746,7 @@ export default function Panels({
       )}
 
       {activeTab === "captions" && (
-        <div className={`ss-drawer-content ${selectedCaptionSegment ? "layer-inspector-mode" : ""}`}>
+        <div className={`ss-drawer-content captions-drawer-content ${selectedCaptionSegment ? "layer-inspector-mode" : ""}`}>
           {selectedCaptionTrack && selectedCaptionSegment ? <>
             <div className="layer-inspector-header">
               <button onClick={() => onSelectCaption(null)} title="Back to caption tools" aria-label="Back to caption tools"><ArrowLeft size={17} /></button>
@@ -782,31 +794,23 @@ export default function Panels({
             </Section>
           </> : <>
           <Section title="Automatic Captions">
-            <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
-            <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />
-            <SelectRow
-              label="Model"
-              value={captionModel}
-              options={["auto", "tiny", "base", "small", "medium", "large-v3-turbo"]}
-              optionLabels={{ auto: "Automatic · installed best", tiny: "Tiny · 75 MB · fastest", base: "Base · 142 MB · balanced", small: "Small · 466 MB · accurate", medium: "Medium · 1.5 GB · higher accuracy", "large-v3-turbo": "Large v3 Turbo · 1.5 GB · best" }}
-              onChange={(model) => { setCaptionModel(model as TranscriptionModel); setCaptionStatus(""); }}
-            />
-            <p className="caption-model-note">Automatic chooses the best compatible Whisper model installed on this PC.</p>
-            <p className="panel-help-text">Choose the track containing speech. Captions stay editable on the timeline.</p>
-            {transcriptionEnv?.available === false && <p className="panel-help-text panel-warning">{transcriptionEnv.message}</p>}
-            {transcriptionEnv?.available && captionModel !== "auto" && !transcriptionEnv.installedModels?.includes(captionModel) && <p className="panel-help-text panel-warning">This model is not downloaded yet. Install it once to keep transcription fully offline.</p>}
-            {transcriptionEnv && !(captionModel === "auto" ? transcriptionEnv.available : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)) && <>
-              <button className="ss-drawer-action-btn model-install-action" disabled={installingTranscription} onClick={() => void installTranscription(captionModel)}>{installingTranscription ? `${installPhase || "Installing model"} — ${installProgress}%` : `Install ${captionModel === "auto" ? "Offline Captions · 142 MB" : `${TRANSCRIPTION_MODEL_LABELS[captionModel]} · ${TRANSCRIPTION_MODEL_SIZES[captionModel]}`}`}</button>
+            <div className="caption-setup-intro"><span><Sparkles size={17} /></span><div><strong>Create editable captions</strong><small>Choose a voice track and process it locally.</small></div></div>
+            <div className="caption-picker-stack">
+              <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
+              <CaptionLanguagePicker value={captionLanguage} onChange={setCaptionLanguage} />
+              <CaptionModelPicker value={captionModel} installedModels={transcriptionEnv?.installedModels ?? []} engineAvailable={Boolean(transcriptionEnv?.available)} onChange={(model) => { setCaptionModel(model); setCaptionStatus(""); }} />
+            </div>
+            {transcriptionEnv && !captionModelReady && <>
+              <button className="ss-drawer-action-btn primary model-install-action" disabled={installingTranscription} onClick={() => void installTranscription(captionModel)}>{installingTranscription ? `${installPhase || "Installing model"} — ${installProgress}%` : `Install ${captionModel === "auto" ? "Base · 142 MB" : `${TRANSCRIPTION_MODEL_LABELS[captionModel]} · ${TRANSCRIPTION_MODEL_SIZES[captionModel]}`}`}</button>
               {installingTranscription && <div className="caption-install-state">
                 <div className="caption-install-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={installProgress}><span style={{ width: `${installProgress}%` }} /></div>
                 <button type="button" className="caption-install-cancel" disabled={cancellingTranscription} onClick={() => void cancelTranscriptionInstall()}><X size={13} />{cancellingTranscription ? "Cancelling…" : "Cancel download"}</button>
               </div>}
             </>}
-            {!transcriptionEnv && <button className="ss-drawer-action-btn primary" disabled>Checking installed models…</button>}
-            {transcriptionEnv && (captionModel === "auto" ? transcriptionEnv.available : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)) && <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0} onClick={() => void generateCaptions()}>
+            {captionModelReady && <button className="ss-drawer-action-btn primary" disabled={transcribing || audioTracks.length === 0} onClick={() => void generateCaptions()}>
               {transcribing ? "Transcribing…" : captionTracks.some((track) => track.sourceTrackIds.includes(captionSource)) ? "Regenerate Synced Captions" : "Generate Captions"}
             </button>}
-            {captionStatus && <p className="panel-help-text" role="status">{captionStatus}</p>}
+            {captionStatus && <p className="caption-status-message" role="status">{captionStatus}</p>}
           </Section>
           {captionTracks.map((track) => (
             <Section key={track.id} title={track.name}>
@@ -865,9 +869,17 @@ function SelectRow({ label, value, options, optionLabels, onChange }: { label: s
 }
 
 const CAPTION_LANGUAGES: Array<{ value: TranscriptionLanguage; label: string; description: string }> = [
-  { value: "auto", label: "Auto detect", description: "Hindi + English" },
+  { value: "auto", label: "Auto detect", description: "Detect multilingual speech" },
   { value: "en", label: "English", description: "English speech" },
   { value: "hi", label: "Hindi", description: "हिंदी भाषण" },
+  { value: "es", label: "Spanish", description: "Español" },
+  { value: "fr", label: "French", description: "Français" },
+  { value: "de", label: "German", description: "Deutsch" },
+  { value: "it", label: "Italian", description: "Italiano" },
+  { value: "pt", label: "Portuguese", description: "Português" },
+  { value: "ja", label: "Japanese", description: "日本語" },
+  { value: "zh", label: "Chinese", description: "中文" },
+  { value: "ko", label: "Korean", description: "한국어" },
 ];
 
 function captionSourceDescription(track: AudioTrack): string {
@@ -966,6 +978,51 @@ function CaptionLanguagePicker({ value, onChange }: { value: TranscriptionLangua
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function CaptionModelPicker({ value, installedModels, engineAvailable, onChange }: {
+  value: TranscriptionModel;
+  installedModels: TranscriptionModel[];
+  engineAvailable: boolean;
+  onChange: (value: TranscriptionModel) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = CAPTION_MODEL_OPTIONS.find((model) => model.value === value) ?? CAPTION_MODEL_OPTIONS[0];
+  const isInstalled = (model: TranscriptionModel) => model === "auto" ? engineAvailable : installedModels.includes(model);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="caption-language-field caption-model-field" ref={rootRef}>
+      <span className="caption-control-label">Model</span>
+      <button type="button" className={`caption-language-trigger caption-model-trigger ${open ? "open" : ""}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <Sparkles size={17} />
+        <span><strong>{selected.label}</strong><small>{selected.description}</small></span>
+        <ChevronDown className="caption-language-chevron" size={16} />
+      </button>
+      {open && <div className="caption-language-menu caption-model-menu" role="listbox" aria-label="Caption model">
+        {CAPTION_MODEL_OPTIONS.map((model) => (
+          <button type="button" role="option" aria-selected={model.value === value} key={model.value} onClick={() => { onChange(model.value); setOpen(false); }}>
+            <span><strong>{model.label}</strong><small>{model.description}</small></span>
+            <span className="caption-model-option-state">{isInstalled(model.value) ? "Installed" : model.value === "auto" ? "Setup" : "Download"}</span>
+          </button>
+        ))}
+      </div>}
     </div>
   );
 }

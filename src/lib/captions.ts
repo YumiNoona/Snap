@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AudioTrack, AudioTrackKind, CaptionSegment, CaptionTrack } from "./types";
 import { recordingDataPaths } from "./recordingPaths";
 
-export type TranscriptionLanguage = "auto" | "en" | "hi";
+export type TranscriptionLanguage = "auto" | "en" | "hi" | "es" | "fr" | "de" | "it" | "pt" | "ja" | "zh" | "ko";
 export type TranscriptionModel = "auto" | "tiny" | "base" | "small" | "medium" | "large-v3-turbo";
 
 export interface TranscriptionEnvironment {
