@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Clock3, Type, Palette, WandSparkles, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -718,8 +718,6 @@ export default function Panels({
       {/* ═══ AUDIO TAB ═══════════════════════════════════════════════ */}
       {activeTab === "audio" && (
         <div className="ss-drawer-content">
-          <button type="button" className="audio-import-button" onClick={onAddAudio}><Plus size={15} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
-          {audioError && <div className="audio-inline-error" role="alert">{audioError}</div>}
           <Section title="Quick mix">
             <div className="audio-preset-grid" aria-label="Audio mix presets">
               <button type="button" onClick={() => applyAudioPreset("balanced")}><strong>Balanced</strong><small>Even levels</small></button>
@@ -742,6 +740,8 @@ export default function Panels({
             <button type="button" className="audio-remove-button" onClick={() => onAudioTracksChange(audioTracks.filter((candidate) => candidate.id !== track.id))}><Trash2 size={13} /> Remove from project</button>
           </Section>)}
           {audioTracks.length === 0 && <div className="audio-empty-state"><Music2 size={20} /><span><strong>No audio tracks</strong><small>Add music, narration, or another recording.</small></span></div>}
+          {audioError && <div className="audio-inline-error" role="alert">{audioError}</div>}
+          <button type="button" className="audio-import-button audio-import-button-last" onClick={onAddAudio}><Plus size={15} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
         </div>
       )}
 
@@ -752,29 +752,36 @@ export default function Panels({
               <button onClick={() => onSelectCaption(null)} title="Back to caption tools" aria-label="Back to caption tools"><ArrowLeft size={17} /></button>
               <span><strong>Caption</strong><small>{(selectedCaptionSegment.startMs / 1000).toFixed(1)}s–{(selectedCaptionSegment.endMs / 1000).toFixed(1)}s</small></span>
             </div>
-            <Section title="Caption content">
-              <label className="layer-field-stack"><span>Text</span><textarea className="layer-textarea caption-copy-editor" rows={4} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} /></label>
+            <div className="caption-copy-card">
+              <label className="layer-field-stack"><span><Type size={13} /> Caption text</span><textarea className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} /></label>
               <div className="caption-time-row caption-inspector-time">
-                <label><span>Start</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
-                <label><span>End</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
+                <Clock3 size={14} />
+                <label><span>In</span><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
+                <label><span>Out</span><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /></label>
               </div>
-            </Section>
-            <Section title="Typography">
+            </div>
+            <Section title="Text style">
+              <div className="caption-compact-section">
               <SelectRow label="Typeface" value={selectedCaptionTrack.style.fontFamily} options={["Segoe UI Variable", "Arial", "Georgia", "Courier New"]} optionLabels={{"Segoe UI Variable":"Segoe UI","Arial":"Arial","Georgia":"Georgia","Courier New":"Courier New"}} onChange={(fontFamily) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontFamily } }))} />
               <SelectRow label="Weight" value={String(selectedCaptionTrack.style.fontWeight)} options={["400", "500", "600", "700", "800"]} optionLabels={{"400":"Regular","500":"Medium","600":"Semibold","700":"Bold","800":"Extra bold"}} onChange={(fontWeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: Number(fontWeight) as CaptionTrack["style"]["fontWeight"] } }))} />
-              <div className="caption-format-pills">
-                <button className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong> Bold</button>
-                <button className={(selectedCaptionTrack.style.fontStyle ?? "normal") === "italic" ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontStyle: track.style.fontStyle === "italic" ? "normal" : "italic" } }))}><em>I</em> Italic</button>
+              <div className="caption-format-pills" role="toolbar" aria-label="Caption text formatting">
+                <button title="Bold" aria-label="Bold" className={selectedCaptionTrack.style.fontWeight >= 700 ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontWeight: track.style.fontWeight >= 700 ? 500 : 700 } }))}><strong>B</strong></button>
+                <button title="Italic" aria-label="Italic" className={(selectedCaptionTrack.style.fontStyle ?? "normal") === "italic" ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontStyle: track.style.fontStyle === "italic" ? "normal" : "italic" } }))}><em>I</em></button>
+                {(["left", "center", "right"] as const).map((align) => { const Icon = align === "left" ? AlignLeft : align === "right" ? AlignRight : AlignCenter; return <button type="button" title={`Align ${align}`} aria-label={`Align ${align}`} key={align} className={(selectedCaptionTrack.style.align ?? "center") === align ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, align } }))}><Icon size={15} /></button>; })}
               </div>
               <Slider label="Font size" value={selectedCaptionTrack.style.fontSize} min={14} max={120} step={1} unit="px" onChange={(fontSize) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, fontSize } }))} />
               <Slider label="Letter spacing" value={selectedCaptionTrack.style.letterSpacing ?? 0} min={-2} max={12} step={0.5} unit="px" onChange={(letterSpacing) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, letterSpacing } }))} />
               <Slider label="Line height" value={selectedCaptionTrack.style.lineHeight ?? 1.22} min={0.9} max={2} step={0.05} unit="×" onChange={(lineHeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, lineHeight } }))} />
-              <ColorInput label="Text color" value={selectedCaptionTrack.style.color} onChange={(color) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, color } }))} />
-              <ColorInput label="Background" value={selectedCaptionTrack.style.backgroundColor.startsWith("#") ? selectedCaptionTrack.style.backgroundColor : "#17130f"} onChange={(backgroundColor) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundColor } }))} />
-              <ColorInput label="Outline" value={selectedCaptionTrack.style.outlineColor} onChange={(outlineColor) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineColor } }))} />
+              <div className="caption-color-grid" aria-label="Caption colors">
+                <label title={selectedCaptionTrack.style.color}><span><Palette size={12} /> Text</span><input type="color" aria-label="Caption text color" value={selectedCaptionTrack.style.color} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, color: event.target.value } }))} /></label>
+                <label title={selectedCaptionTrack.style.backgroundColor}><span>Fill</span><input type="color" aria-label="Caption background color" value={selectedCaptionTrack.style.backgroundColor.startsWith("#") ? selectedCaptionTrack.style.backgroundColor : "#17130f"} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundColor: event.target.value } }))} /></label>
+                <label title={selectedCaptionTrack.style.outlineColor}><span>Stroke</span><input type="color" aria-label="Caption outline color" value={selectedCaptionTrack.style.outlineColor} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineColor: event.target.value } }))} /></label>
+              </div>
               <Slider label="Outline" value={selectedCaptionTrack.style.outlineWidth} min={0} max={10} step={1} unit="px" onChange={(outlineWidth) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineWidth } }))} />
+              </div>
             </Section>
-            <Section title="Layout & appearance">
+            <Section title="Position & box">
+              <div className="caption-compact-section">
               <Slider label="Horizontal" value={Math.round(selectedCaptionTrack.style.x * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, x: value / 100 } }))} />
               <Slider label="Vertical" value={Math.round(selectedCaptionTrack.style.y * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, y: value / 100 } }))} />
               <Slider label="Maximum width" value={Math.round(selectedCaptionTrack.style.maxWidth * 100)} min={30} max={96} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, maxWidth: value / 100 } }))} />
@@ -782,8 +789,10 @@ export default function Panels({
               <Slider label="Box roundness" value={selectedCaptionTrack.style.backgroundRadius ?? .18} min={0} max={1} step={.05} unit="×" onChange={(backgroundRadius) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundRadius } }))} />
               <CheckRow label="Text shadow" checked={selectedCaptionTrack.style.shadow} onChange={(shadow) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadow } }))} />
               {selectedCaptionTrack.style.shadow && <Slider label="Shadow softness" value={selectedCaptionTrack.style.shadowBlur ?? .18} min={0} max={.8} step={.02} unit="×" onChange={(shadowBlur) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadowBlur } }))} />}
+              </div>
             </Section>
-            <Section title="Animation">
+            <Section title="Entrance">
+              <div className="caption-section-kicker"><WandSparkles size={13} /> Animate each caption when it appears</div>
               <div className="caption-animation-presets expanded" aria-label="Caption entrance animation">
                 {(["none", "fade", "reveal", "pop", "rise", "slide", "blur", "bounce"] as const).map((animation) => <button type="button" key={animation} className={(selectedCaptionTrack.style.animation ?? "none") === animation ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animation } }))}><span className={`caption-animation-preview ${animation}`}>Aa</span><span>{animation[0].toUpperCase() + animation.slice(1)}</span></button>)}
               </div>
