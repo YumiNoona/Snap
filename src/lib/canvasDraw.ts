@@ -53,18 +53,21 @@ export function drawCaptionTrack(
   // Paint the box once at its final geometry. Applying entrance opacity,
   // blur, or partially-revealed text to this translucent background caused
   // it to pulse like a dark tint on WebView2 at every caption boundary.
-  ctx.fillStyle = style.backgroundColor;
-  // Canvas paths are not part of save()/restore(). Without beginPath(), this
-  // fill can also repaint an old full-frame clip or shape with the caption's
-  // translucent black background, producing a one-frame video-wide tint.
-  ctx.beginPath();
-  roundRect(ctx, centerX - widest / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, widest + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * (style.backgroundRadius ?? .18));
-  ctx.fill();
+  if (style.backgroundEnabled !== false) {
+    ctx.fillStyle = style.backgroundColor;
+    // Canvas paths are not part of save()/restore(). Without beginPath(), this
+    // fill can also repaint an old full-frame clip or shape with the caption's
+    // translucent black background, producing a one-frame video-wide tint.
+    ctx.beginPath();
+    const boxWidth = style.align === "center" ? widest : maxWidth;
+    roundRect(ctx, centerX - boxWidth / 2 - paddingX, centerY - lines.length * lineHeight / 2 - paddingY, boxWidth + paddingX * 2, lines.length * lineHeight + paddingY * 2, fontSize * (style.backgroundRadius ?? .18));
+    ctx.fill();
+  }
 
   const textAnchorX = style.align === "left"
-    ? centerX - widest / 2
+    ? centerX - maxWidth / 2
     : style.align === "right"
-      ? centerX + widest / 2
+      ? centerX + maxWidth / 2
       : centerX;
   const textCenterX = textAnchorX + entrance.slide * fontSize * 1.25;
   const textCenterY = centerY + entrance.rise * fontSize * .55;

@@ -33,6 +33,7 @@ interface Props {
   onKeyframesChange: (keyframes: Keyframe[]) => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
   onAddAudio: () => void;
+  onAddCaptionAtTime: (time: number) => void;
   onAudioTrackChange: (track: AudioTrack) => void;
   onAudioTrackRemove: (trackId: string) => void;
   onPlaybackRateChange: (rate: number) => void;
@@ -90,6 +91,7 @@ export default function Timeline({
   onKeyframesChange,
   onAudioMuteChange,
   onAddAudio,
+  onAddCaptionAtTime,
   onAudioTrackChange,
   onAudioTrackRemove,
   onPlaybackRateChange,
@@ -973,16 +975,16 @@ export default function Timeline({
               </div>
             </div>
             <div className="timeline-context-separator" />
-            <button role="menuitem" onClick={() => { onSeek(config.trimStart); setContextMenu(null); }}>
-              <SkipBack size={15} /> Go to clip start
-            </button>
-            <button role="menuitem" onClick={() => { onSeek(config.trimEnd || duration); setContextMenu(null); }}>
-              <SkipForward size={15} /> Go to clip end
-            </button>
-            <div className="timeline-context-separator" />
             <button role="menuitem" onClick={() => { handleScissorCut(); setContextMenu(null); }}>
               <Scissors size={15} /> Split at playhead
             </button>
+            <button role="menuitem" onClick={() => { onAddCaptionAtTime(currentTime); setContextMenu(null); }}>
+              <Captions size={15} /> Add caption at playhead
+            </button>
+            <button role="menuitem" onClick={() => { onAddAudio(); setContextMenu(null); }}>
+              <Music2 size={15} /> Add audio track
+            </button>
+            <div className="timeline-context-separator" />
             <button role="menuitem" disabled={currentTime <= 0 || currentTime >= (config.trimEnd || duration)} onClick={() => { onTrimStartChange(currentTime); setContextMenu(null); }}>
               <Clock3 size={15} /> Set trim start here
             </button>

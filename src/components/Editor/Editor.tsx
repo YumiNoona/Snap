@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon } from "lucide-react";
+import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon, Library } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -32,7 +32,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "canvas" | "cursor" | "annotations" | "motion" | "captions" | "audio";
+export type SidebarToolTab = "uploads" | "canvas" | "cursor" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_PRESETS_STORAGE_KEY = "snap.editorPresets.v1";
@@ -282,15 +282,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     return () => { cancelled = true; };
   }, [videoPath]);
 
-  const handleAddAudio = useCallback(async () => {
+  const addAudioSources = useCallback(async (sources: string[]) => {
     setAudioError("");
     try {
-      const selected = await openDialog({
-        multiple: true,
-        title: "Add audio to the timeline",
-        filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm"] }],
-      });
-      const sources = typeof selected === "string" ? [selected] : selected ?? [];
       if (sources.length === 0) return;
       const additions = await Promise.all(sources.map(async (source, index): Promise<AudioTrack> => {
         const path = await invoke<string>("import_audio_file", { videoPath, sourcePath: source });
@@ -313,6 +307,55 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setAudioError(`Audio could not be added: ${error}`);
     }
   }, [videoPath]);
+
+  const handleAddAudio = useCallback(async () => {
+    const selected = await openDialog({
+      multiple: true,
+      title: "Add audio to the timeline",
+      filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm"] }],
+    });
+    const sources = typeof selected === "string" ? [selected] : selected ?? [];
+    await addAudioSources(sources);
+  }, [addAudioSources]);
+
+  const addManualCaptionAt = useCallback((atSeconds: number) => {
+    const now = Date.now();
+    const startMs = Math.max(Math.round(config.trimStart * 1000), Math.round(atSeconds * 1000));
+    const projectEndMs = Math.round((config.trimEnd || duration || atSeconds + 2.5) * 1000);
+    const endMs = Math.max(startMs + 300, Math.min(projectEndMs, startMs + 2_500));
+    const segmentId = `caption-manual-${now}`;
+    const target = captionTracks[0];
+    if (target) {
+      setCaptionTracks(captionTracks.map((track) => track.id === target.id ? {
+        ...track,
+        segments: [...track.segments, { id: segmentId, startMs, endMs, text: "New caption", language: track.language || "en", sourceTrackIds: [], userEdited: true }].sort((a, b) => a.startMs - b.startMs),
+      } : track));
+      setSelectedCaption({ trackId: target.id, segmentId });
+    } else {
+      const trackId = `captions-manual-${now}`;
+      setCaptionTracks([{
+        id: trackId,
+        name: "Manual captions",
+        language: "en",
+        sourceTrackIds: [],
+        visible: true,
+        burnedIn: true,
+        style: {
+          fontFamily: "Segoe UI Variable", fontSize: 42, fontWeight: 700, color: "#ffffff",
+          backgroundColor: "#171717", backgroundEnabled: true, outlineColor: "#000000", outlineWidth: 2,
+          shadow: true, align: "center", x: .5, y: .86, maxWidth: .82,
+          fontStyle: "normal", letterSpacing: 0, lineHeight: 1.22,
+          backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,
+          animation: "none", animationDurationMs: 0,
+        },
+        segments: [{ id: segmentId, startMs, endMs, text: "New caption", language: "en", sourceTrackIds: [], userEdited: true }],
+      }]);
+      setSelectedCaption({ trackId, segmentId });
+    }
+    setActiveTool("captions");
+    pausePlayback();
+    seekTo(startMs / 1000 + .01);
+  }, [captionTracks, config.trimEnd, config.trimStart, duration, pausePlayback, seekTo]);
 
   useEffect(() => {
     if (isBrowserPreview) return;
@@ -915,6 +958,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         {/* Left Vertical Tool Bar (Screen Studio style) */}
         <aside className="ss-vertical-tool-palette">
           <button
+            className={`ss-tool-icon-btn ${activeTool === "uploads" ? "active" : ""}`}
+            onClick={() => setActiveTool("uploads")}
+            aria-pressed={activeTool === "uploads"}
+            title="Uploads and media"
+          >
+            <Library size={20} /><span className="ss-tool-label">Uploads</span>
+          </button>
+          <button
             className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
             onClick={() => setActiveTool("canvas")}
             aria-pressed={activeTool === "canvas"}
@@ -1049,6 +1100,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           audioTracks={audioTracks}
           audioError={audioError}
           onAddAudio={handleAddAudio}
+          onAddAudioSources={addAudioSources}
+          onAddManualCaption={() => addManualCaptionAt(currentTime)}
           onAudioTracksChange={setAudioTracks}
           captionTracks={captionTracks}
           onCaptionTracksChange={setCaptionTracks}
@@ -1106,6 +1159,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           },
         }))}
         onAddAudio={handleAddAudio}
+        onAddCaptionAtTime={addManualCaptionAt}
         onAudioTrackChange={(updated) => setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track))}
         onAudioTrackRemove={(trackId) => setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId))}
         layers={config.layers}

@@ -281,7 +281,7 @@ export async function transcribeTrack(track: AudioTrack, language: Transcription
     burnedIn: true,
     style: {
       fontFamily: "Arial", fontSize: 42, fontWeight: 700, color: "#ffffff",
-      backgroundColor: "rgba(0,0,0,0.68)", outlineColor: "#000000", outlineWidth: 2,
+      backgroundColor: "rgba(0,0,0,0.68)", backgroundEnabled: true, outlineColor: "#000000", outlineWidth: 2,
       shadow: true, align: "center", x: 0.5, y: 0.86, maxWidth: 0.82,
       fontStyle: "normal", letterSpacing: 0, lineHeight: 1.22,
       backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,

@@ -1275,3 +1275,50 @@
 }
 .screenstudio-editor-layout[data-theme="light"] .caption-copy-editor::selection { color: #ffffff; background: #292927; }
 .screenstudio-editor-layout[data-theme="light"] .caption-copy-editor::placeholder { color: #8a8983; }
+
+/* Compact rail, floating inspector, and a timeline that owns the full width. */
+.screenstudio-editor-layout {
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+.screenstudio-editor-layout .ss-vertical-tool-palette {
+  grid-column: 1;
+  grid-row: 2;
+  width: 50px;
+  height: max-content;
+  max-height: calc(100% - 8px);
+  align-self: start;
+  padding: 8px 4px;
+  gap: 5px;
+  overflow: visible;
+}
+.screenstudio-editor-layout .ss-preview-center-area {
+  grid-column: 2;
+  grid-row: 2;
+}
+.screenstudio-editor-layout .ss-panels-drawer {
+  grid-column: 2;
+  grid-row: 2;
+  z-index: 30;
+  width: clamp(286px, 23vw, 326px);
+  max-height: calc(100% - 20px);
+  margin: 10px;
+  align-self: stretch;
+  justify-self: start;
+  border: 1px solid var(--border-default);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .38);
+}
+.screenstudio-editor-layout .ss-timeline-container {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.screenstudio-editor-layout .timeline-context-menu {
+  width: 224px;
+  padding: 8px;
+  border-radius: 14px;
+  box-shadow: 0 22px 54px rgba(0,0,0,.46);
+}
+.screenstudio-editor-layout .timeline-context-menu button { min-height: 36px; border-radius: 9px; }
+.screenstudio-editor-layout[data-theme="light"] .media-upload-primary { color: #fff; background: #242422; border-color: #242422; }
+.screenstudio-editor-layout[data-theme="light"] .media-folder-button,
+.screenstudio-editor-layout[data-theme="light"] .media-new-folder button,
+.screenstudio-editor-layout[data-theme="light"] .media-asset-card > button { background: #fff; border-color: rgba(0,0,0,.11); }

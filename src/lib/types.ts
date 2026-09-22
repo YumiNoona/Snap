@@ -216,6 +216,7 @@ export interface CaptionStyle {
   fontWeight: 400 | 500 | 600 | 700 | 800;
   color: string;
   backgroundColor: string;
+  backgroundEnabled?: boolean;
   outlineColor: string;
   outlineWidth: number;
   shadow: boolean;

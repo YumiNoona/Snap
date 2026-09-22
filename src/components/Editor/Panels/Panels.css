@@ -1459,3 +1459,60 @@
 .text-style-example { font-size: 13px; font-weight: 650; text-shadow: none; }
 .text-preview-boxed .text-style-example { padding: 7px 12px; border-radius: 5px; background: var(--text-primary); color: var(--bg-app); }
 .text-preview-pill .text-style-example { padding: 7px 12px; border-radius: 99px; background: var(--text-primary); color: var(--bg-app); }
+
+/* Media library */
+.uploads-drawer-content { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; scrollbar-width: none; }
+.uploads-drawer-content::-webkit-scrollbar,
+.captions-drawer-content.layer-inspector-mode::-webkit-scrollbar { display: none; }
+.captions-drawer-content.layer-inspector-mode { scrollbar-width: none; }
+.media-library-actions { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 7px; }
+.media-upload-primary,
+.media-folder-button,
+.media-new-folder button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #171717;
+  background: #f2f2f0;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 9px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.media-folder-button { width: 38px; color: var(--text-secondary); background: var(--bg-surface-raised); }
+.media-new-folder { display: grid; grid-template-columns: minmax(0,1fr) 34px; gap: 6px; }
+.media-new-folder input,
+.media-search {
+  min-height: 36px;
+  color: var(--text-primary);
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+.media-new-folder input { width: 100%; padding: 0 10px; }
+.media-new-folder button { min-height: 36px; color: var(--text-primary); background: var(--bg-surface-raised); }
+.media-search { display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--text-tertiary); }
+.media-search:focus-within { border-color: var(--border-default); }
+.media-search input { min-width: 0; flex: 1; color: var(--text-primary); background: transparent; border: 0; outline: 0; }
+.media-folder-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 1px; scrollbar-width: none; }
+.media-folder-strip::-webkit-scrollbar { display: none; }
+.media-folder-strip button { display: inline-flex; min-height: 29px; flex: 0 0 auto; align-items: center; gap: 5px; padding: 0 9px; color: var(--text-secondary); background: transparent; border: 1px solid var(--border-subtle); border-radius: 99px; cursor: pointer; }
+.media-folder-strip button.active { color: var(--text-primary); background: var(--bg-surface-raised); border-color: var(--border-default); }
+.media-folder-strip button span { color: var(--text-tertiary); font-size: 10px; }
+.media-asset-list { display: grid; gap: 7px; }
+.media-asset-card { display: grid; grid-template-columns: 34px minmax(0,1fr) repeat(2,30px); align-items: center; gap: 7px; padding: 8px; background: var(--bg-surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.media-kind-icon { display: grid; width: 34px; height: 34px; place-items: center; color: #93c5fd; background: rgba(59,130,246,.12); border-radius: 8px; }
+.media-kind-icon.audio { color: #6ee7b7; background: rgba(16,185,129,.12); }
+.media-kind-icon.image { color: #f0abfc; background: rgba(217,70,239,.12); }
+.media-asset-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.media-asset-name strong { overflow: hidden; color: var(--text-primary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.media-asset-name small { color: var(--text-tertiary); font-size: 10px; text-transform: capitalize; }
+.media-asset-card > button { display: grid; width: 30px; height: 30px; place-items: center; color: var(--text-secondary); background: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; }
+.media-asset-card > button.danger:hover { color: #fca5a5; }
+.media-asset-card select { grid-column: 2 / -1; width: 100%; min-height: 28px; padding: 0 8px; color: var(--text-secondary); background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 7px; }
+.media-library-empty { display: grid; min-height: 150px; place-items: center; align-content: center; gap: 6px; color: var(--text-tertiary); border: 1px dashed var(--border-default); border-radius: 11px; text-align: center; }
+.media-library-empty strong { color: var(--text-secondary); }
+.media-library-empty span { max-width: 180px; font-size: 11px; line-height: 1.4; }
+.manual-caption-action { margin: 12px 2px 2px; }

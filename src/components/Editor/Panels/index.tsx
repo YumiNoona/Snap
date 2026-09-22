@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Clock3, Palette, WandSparkles, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, FileAudio, FileImage, FileVideo, UploadCloud, Captions, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -32,6 +32,8 @@ interface Props {
   audioTracks: AudioTrack[];
   audioError: string;
   onAddAudio: () => void;
+  onAddAudioSources: (paths: string[]) => Promise<void>;
+  onAddManualCaption: () => void;
   onAudioTracksChange: (tracks: AudioTrack[]) => void;
   captionTracks: CaptionTrack[];
   onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
@@ -75,6 +77,17 @@ const CAPTION_MODEL_OPTIONS: Array<{ value: TranscriptionModel; label: string; d
   { value: "medium", label: "Medium", description: "1.5 GB · Higher accuracy" },
   { value: "large-v3-turbo", label: "Large v3 Turbo", description: "1.5 GB · Best quality" },
 ];
+const MEDIA_LIBRARY_KEY = "snap.editorMediaLibrary.v1";
+type MediaKind = "image" | "audio" | "video";
+interface MediaFolder { id: string; name: string }
+interface MediaAsset { id: string; name: string; path: string; kind: MediaKind; folderId: string | null }
+
+function mediaKind(path: string): MediaKind {
+  const extension = path.split(".").pop()?.toLowerCase() ?? "";
+  if (["png", "jpg", "jpeg", "webp", "bmp", "gif"].includes(extension)) return "image";
+  if (["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma"].includes(extension)) return "audio";
+  return "video";
+}
 
 const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
   none: Slash,
@@ -93,7 +106,7 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
-  audioTracks, audioError, onAddAudio, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
+  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -110,6 +123,16 @@ export default function Panels({
   const [cancellingTranscription, setCancellingTranscription] = useState(false);
   const [installProgress, setInstallProgress] = useState(0);
   const [installPhase, setInstallPhase] = useState("");
+  const [mediaLibrary, setMediaLibrary] = useState<{ folders: MediaFolder[]; assets: MediaAsset[] }>(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(MEDIA_LIBRARY_KEY) || "{}");
+      return { folders: Array.isArray(parsed.folders) ? parsed.folders : [], assets: Array.isArray(parsed.assets) ? parsed.assets : [] };
+    } catch { return { folders: [], assets: [] }; }
+  });
+  const [mediaSearch, setMediaSearch] = useState("");
+  const [activeMediaFolder, setActiveMediaFolder] = useState("all");
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
   const updateCursor = (patch: Partial<EditorConfig["cursorStyle"]>) =>
@@ -139,6 +162,38 @@ export default function Panels({
         : { systemVolume: 100, micVolume: 100, systemMuted: false, micMuted: false };
     onConfigChange({ ...config, audio: { ...config.audio, ...mix } });
     if (preset === "reset") onAudioTracksChange(audioTracks.map((track) => ({ ...track, muted: false, volume: 1 })));
+  };
+
+  useEffect(() => { localStorage.setItem(MEDIA_LIBRARY_KEY, JSON.stringify(mediaLibrary)); }, [mediaLibrary]);
+
+  const importMedia = async () => {
+    const selected = await openDialog({
+      multiple: true,
+      directory: false,
+      title: "Upload media",
+      filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mov", "mkv", "webm"] }],
+    });
+    const paths = typeof selected === "string" ? [selected] : selected ?? [];
+    if (!paths.length) return;
+    setMediaLibrary((current) => {
+      const known = new Set(current.assets.map((asset) => asset.path.toLowerCase()));
+      const folderId = activeMediaFolder !== "all" && activeMediaFolder !== "unfiled" ? activeMediaFolder : null;
+      const additions = paths.filter((path) => !known.has(path.toLowerCase())).map((path, index) => ({
+        id: `media-${Date.now()}-${index}`, path, folderId, kind: mediaKind(path),
+        name: path.split(/[\\/]/).pop() || `Media ${index + 1}`,
+      }));
+      return { ...current, assets: [...current.assets, ...additions] };
+    });
+  };
+
+  const createMediaFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) return;
+    const folder = { id: `folder-${Date.now()}`, name };
+    setMediaLibrary((current) => ({ ...current, folders: [...current.folders, folder] }));
+    setActiveMediaFolder(folder.id);
+    setNewFolderName("");
+    setCreatingFolder(false);
   };
 
   useEffect(() => {
@@ -345,6 +400,10 @@ export default function Panels({
   const captionModelReady = Boolean(transcriptionEnv && (captionModel === "auto"
     ? transcriptionEnv.available
     : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)));
+  const visibleMedia = mediaLibrary.assets.filter((asset) => {
+    const folderMatch = activeMediaFolder === "all" || (activeMediaFolder === "unfiled" ? !asset.folderId : asset.folderId === activeMediaFolder);
+    return folderMatch && asset.name.toLowerCase().includes(mediaSearch.trim().toLowerCase());
+  });
   const updateSelectedLayer = (patch: Partial<Layer>) => {
     if (!selectedLayer) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
@@ -368,6 +427,38 @@ export default function Panels({
 
   return (
     <aside className="ss-panels-drawer">
+      {activeTab === "uploads" && (
+        <div className="ss-drawer-content uploads-drawer-content">
+          <div className="media-library-actions">
+            <button type="button" className="media-upload-primary" onClick={() => void importMedia()}><UploadCloud size={16} /> Upload media</button>
+            <button type="button" className="media-folder-button" title="Create folder" aria-label="Create media folder" onClick={() => setCreatingFolder((value) => !value)}><FolderPlus size={16} /></button>
+          </div>
+          {creatingFolder && <div className="media-new-folder"><input autoFocus value={newFolderName} placeholder="Folder name" onChange={(event) => setNewFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") createMediaFolder(); if (event.key === "Escape") setCreatingFolder(false); }} /><button type="button" onClick={createMediaFolder}><Check size={14} /></button></div>}
+          <label className="media-search"><Search size={15} /><input value={mediaSearch} onChange={(event) => setMediaSearch(event.target.value)} placeholder="Search media" /></label>
+          <div className="media-folder-strip" aria-label="Media folders">
+            <button className={activeMediaFolder === "all" ? "active" : ""} onClick={() => setActiveMediaFolder("all")}>All <span>{mediaLibrary.assets.length}</span></button>
+            <button className={activeMediaFolder === "unfiled" ? "active" : ""} onClick={() => setActiveMediaFolder("unfiled")}>Unfiled</button>
+            {mediaLibrary.folders.map((folder) => <button className={activeMediaFolder === folder.id ? "active" : ""} key={folder.id} onClick={() => setActiveMediaFolder(folder.id)}><Folder size={12} />{folder.name}</button>)}
+          </div>
+          <div className="media-asset-list">
+            {visibleMedia.map((asset) => {
+              const Icon = asset.kind === "image" ? FileImage : asset.kind === "audio" ? FileAudio : FileVideo;
+              return <article className="media-asset-card" key={asset.id}>
+                <span className={`media-kind-icon ${asset.kind}`}><Icon size={17} /></span>
+                <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong><small>{asset.kind}</small></span>
+                {asset.kind === "audio" && <button title="Add to timeline" onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
+                {asset.kind === "image" && <button title="Use as background" onClick={() => update({ bgType: "image", wallpaperUrl: asset.path })}><ImagePlus size={14} /></button>}
+                <button className="danger" title="Remove from library" onClick={() => setMediaLibrary((current) => ({ ...current, assets: current.assets.filter((item) => item.id !== asset.id) }))}><X size={14} /></button>
+                <select aria-label={`Folder for ${asset.name}`} value={asset.folderId ?? ""} onChange={(event) => setMediaLibrary((current) => ({ ...current, assets: current.assets.map((item) => item.id === asset.id ? { ...item, folderId: event.target.value || null } : item) }))}>
+                  <option value="">Unfiled</option>
+                  {mediaLibrary.folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                </select>
+              </article>;
+            })}
+            {visibleMedia.length === 0 && <div className="media-library-empty"><UploadCloud size={22} /><strong>No media here</strong><span>Upload files or choose another folder.</span></div>}
+          </div>
+        </div>
+      )}
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
       {activeTab === "canvas" && (
         <div className="ss-drawer-content canvas-drawer-content">
@@ -754,7 +845,6 @@ export default function Panels({
             </div>
             <div className="caption-copy-edit">
               <textarea aria-label="Caption text" className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} />
-              <div className="caption-timing-heading"><Clock3 size={13} /><span>Timing</span></div>
               <div className="caption-time-row caption-inspector-time">
                 <label><span>Start</span><div><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
                 <label><span>End</span><div><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
@@ -774,9 +864,10 @@ export default function Panels({
               <Slider label="Line height" value={selectedCaptionTrack.style.lineHeight ?? 1.22} min={0.9} max={2} step={0.05} unit="×" onChange={(lineHeight) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, lineHeight } }))} />
               <div className="caption-color-grid" aria-label="Caption colors">
                 <label title={selectedCaptionTrack.style.color}><span><Palette size={12} /> Text</span><input type="color" aria-label="Caption text color" value={selectedCaptionTrack.style.color} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, color: event.target.value } }))} /></label>
-                <label title={selectedCaptionTrack.style.backgroundColor}><span>Fill</span><input type="color" aria-label="Caption background color" value={selectedCaptionTrack.style.backgroundColor.startsWith("#") ? selectedCaptionTrack.style.backgroundColor : "#17130f"} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundColor: event.target.value } }))} /></label>
+                {selectedCaptionTrack.style.backgroundEnabled !== false && <label title={selectedCaptionTrack.style.backgroundColor}><span>Fill</span><input type="color" aria-label="Caption background color" value={selectedCaptionTrack.style.backgroundColor.startsWith("#") ? selectedCaptionTrack.style.backgroundColor : "#17130f"} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundColor: event.target.value } }))} /></label>}
                 <label title={selectedCaptionTrack.style.outlineColor}><span>Stroke</span><input type="color" aria-label="Caption outline color" value={selectedCaptionTrack.style.outlineColor} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineColor: event.target.value } }))} /></label>
               </div>
+              <CheckRow label="Background box" checked={selectedCaptionTrack.style.backgroundEnabled !== false} onChange={(backgroundEnabled) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundEnabled } }))} />
               <Slider label="Outline" value={selectedCaptionTrack.style.outlineWidth} min={0} max={10} step={1} unit="px" onChange={(outlineWidth) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, outlineWidth } }))} />
               </div>
             </Section>
@@ -785,8 +876,10 @@ export default function Panels({
               <Slider label="Horizontal" value={Math.round(selectedCaptionTrack.style.x * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, x: value / 100 } }))} />
               <Slider label="Vertical" value={Math.round(selectedCaptionTrack.style.y * 100)} min={5} max={95} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, y: value / 100 } }))} />
               <Slider label="Maximum width" value={Math.round(selectedCaptionTrack.style.maxWidth * 100)} min={30} max={96} step={1} unit="%" onChange={(value) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, maxWidth: value / 100 } }))} />
-              <Slider label="Box padding" value={selectedCaptionTrack.style.backgroundPadding ?? .4} min={0} max={1.2} step={.05} unit="×" onChange={(backgroundPadding) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundPadding } }))} />
-              <Slider label="Box roundness" value={selectedCaptionTrack.style.backgroundRadius ?? .18} min={0} max={1} step={.05} unit="×" onChange={(backgroundRadius) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundRadius } }))} />
+              {selectedCaptionTrack.style.backgroundEnabled !== false && <>
+                <Slider label="Box padding" value={selectedCaptionTrack.style.backgroundPadding ?? .4} min={0} max={1.2} step={.05} unit="×" onChange={(backgroundPadding) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundPadding } }))} />
+                <Slider label="Box roundness" value={selectedCaptionTrack.style.backgroundRadius ?? .18} min={0} max={1} step={.05} unit="×" onChange={(backgroundRadius) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, backgroundRadius } }))} />
+              </>}
               <CheckRow label="Text shadow" checked={selectedCaptionTrack.style.shadow} onChange={(shadow) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadow } }))} />
               {selectedCaptionTrack.style.shadow && <Slider label="Shadow softness" value={selectedCaptionTrack.style.shadowBlur ?? .18} min={0} max={.8} step={.02} unit="×" onChange={(shadowBlur) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, shadowBlur } }))} />}
               </div>
@@ -802,6 +895,7 @@ export default function Panels({
               <button className="ss-drawer-action-btn danger" onClick={() => { updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.filter((segment) => segment.id !== selectedCaptionSegment.id) })); onSelectCaption(null); }}><Trash2 size={14} /> Delete Caption</button>
             </Section>
           </> : <>
+          <button type="button" className="ss-drawer-action-btn manual-caption-action" onClick={onAddManualCaption}><Captions size={15} /> Add caption manually</button>
           <Section title="Automatic Captions">
             <div className="caption-picker-stack">
               <CaptionAudioSourcePicker tracks={audioTracks} value={captionSource} onChange={setCaptionSource} onAddAudio={onAddAudio} />
