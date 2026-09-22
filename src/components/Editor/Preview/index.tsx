@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer } from "../../../lib/types";
+import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer, MaskLayer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
@@ -10,7 +10,7 @@ import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
   clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
-  drawMaskLayer, drawVideoWithMotionBlur,
+  drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
   drawCaptionTrack,
   drawCameraBubble,
 } from "../../../lib/canvasDraw";
@@ -23,6 +23,7 @@ interface Props {
   keyframes: Keyframe[];
   onKeyframesChange: (kf: Keyframe[]) => void;
   playing: boolean;
+  previewMuted?: boolean;
   onDuration: (d: number) => void;
   onMediaElementChange?: (element: HTMLVideoElement | null) => void;
   cropMode?: boolean;
@@ -97,7 +98,7 @@ export default function Preview({
   config,
   keyframes,
   onKeyframesChange,
-  playing,
+  playing, previewMuted = false,
   onDuration,
   onMediaElementChange,
   cropMode = false,
@@ -391,9 +392,9 @@ export default function Preview({
     // Desktop recordings keep audio in independent WAV sidecars. Mobile
     // recordings can also retain an embedded recovery stream, which must be
     // muted when the editable sidecar is present to avoid doubled audio.
-    video.muted = hasExternalAudio || config.audio.systemMuted;
+    video.muted = previewMuted || hasExternalAudio || config.audio.systemMuted;
     video.volume = Math.max(0, Math.min(1, config.audio.systemVolume / 100));
-  }, [config.audio.systemMuted, config.audio.systemVolume, hasExternalAudio, videoReady]);
+  }, [config.audio.systemMuted, config.audio.systemVolume, hasExternalAudio, previewMuted, videoReady]);
 
   // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {
@@ -512,7 +513,12 @@ export default function Preview({
     // Shared with the export renderer via lib/canvasDraw.resolveZoom so both
     // compute the exact same pan/zoom for a given timestamp.
     const zoomResult = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
-    const zoomX = zoomResult.x, zoomY = zoomResult.y, zoomScale = zoomResult.scale;
+    const maskLayers = config.layers.filter((layer): layer is MaskLayer => layer.type === "mask");
+    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime);
+    const focusMix = maskFocus?.mix ?? 0;
+    const zoomX = maskFocus ? zoomResult.x + (maskFocus.x - zoomResult.x) * focusMix : zoomResult.x;
+    const zoomY = maskFocus ? zoomResult.y + (maskFocus.y - zoomResult.y) * focusMix : zoomResult.y;
+    const zoomScale = maskFocus ? zoomResult.scale + (maskFocus.scale - zoomResult.scale) * focusMix : zoomResult.scale;
     if (config.zoomEnabled && keyframes.length > 0) {
       const z = Math.round(zoomScale * 100) / 100;
       setCurrentZoom((current) => Math.abs(current - z) > 0.01 ? z : current);
@@ -755,12 +761,15 @@ export default function Preview({
         maskCtx.drawImage(canvas, 0, 0);
         for (const layer of activeMasks) {
           if (layer.type !== "mask") continue;
-          const lx = offsetX + layer.x * videoW;
-          const ly = offsetY + layer.y * videoH;
+          const layerFade = resolveLayerFade(layer, videoTs);
+          const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
+          const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
+          const lx = offsetX + (layer.x + (.5 - layer.w / 2 - layer.x) * centerShift) * videoW;
+          const ly = offsetY + (layer.y + (.5 - layer.h / 2 - layer.y) * centerShift) * videoH;
           const lw = layer.w * videoW;
           const lh = layer.h * videoH;
           drawMaskLayer(
-            ctx, layer, maskSource,
+            ctx, effectLayer, maskSource,
             { x: 0, y: 0, w: cw, h: ch },
             { x: 0, y: 0, w: cw, h: ch },
             { x: lx, y: ly, w: lw, h: lh }
@@ -1268,6 +1277,17 @@ export default function Preview({
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, [videoReady, computeCanvasSize]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const video = videoRef.current;
+      if (video && videoReady) computeCanvasSize(video.videoWidth, video.videoHeight);
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [videoReady, computeCanvasSize]);
 
   const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {

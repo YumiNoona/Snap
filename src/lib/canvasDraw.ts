@@ -475,6 +475,37 @@ export function drawShapeLayer(
 
 const maskBuffers = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
 
+export interface MaskCameraFocus {
+  x: number;
+  y: number;
+  scale: number;
+  mix: number;
+}
+
+export function resolveLayerFade(layer: Pick<MaskLayer, "start" | "end" | "transitionDuration">, timeSeconds: number): number {
+  const transition = Math.max(.12, Math.min(1.5, layer.transitionDuration ?? .45));
+  const edge = Math.min((timeSeconds - layer.start) / transition, (layer.end - timeSeconds) / transition, 1);
+  const linear = Math.max(0, Math.min(1, edge));
+  return linear * linear * (3 - 2 * linear);
+}
+
+/** Resolve the camera move and fade shared by preview and export masks. */
+export function resolveMaskCameraFocus(layers: MaskLayer[], timeSeconds: number): MaskCameraFocus | null {
+  const layer = layers.find((candidate) => timeSeconds >= candidate.start && timeSeconds <= candidate.end
+    && candidate.mask !== "blur" && candidate.focusCamera !== false);
+  if (!layer) return null;
+  const mix = resolveLayerFade(layer, timeSeconds);
+  const targetScale = layer.mask === "magnifier"
+    ? Math.max(1.18, Math.min(2.2, 1 + (layer.intensity - 1) * .42))
+    : Math.max(1.18, Math.min(1.65, 1.18 + layer.intensity * .18));
+  return {
+    x: Math.max(.05, Math.min(.95, layer.x + layer.w / 2)),
+    y: Math.max(.05, Math.min(.95, layer.y + layer.h / 2)),
+    scale: targetScale,
+    mix,
+  };
+}
+
 export function drawMaskLayer(
   ctx: CanvasRenderingContext2D, layer: MaskLayer, video: CanvasImageSource,
   source: { x: number; y: number; w: number; h: number },

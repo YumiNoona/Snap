@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, EditorConfig, Keyframe } from "./types";
+import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
@@ -7,6 +7,7 @@ import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
   cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
+  resolveMaskCameraFocus, resolveLayerFade,
   drawCameraBubble,
 } from "./canvasDraw";
 
@@ -217,7 +218,12 @@ export async function createExportCompositor(
     const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
     const zoom = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
-    const zoomX = zoom.x, zoomY = zoom.y, zoomScale = Math.max(0.0001, zoom.scale);
+    const maskLayers = config.layers.filter((layer): layer is MaskLayer => layer.type === "mask");
+    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime);
+    const focusMix = maskFocus?.mix ?? 0;
+    const zoomX = maskFocus ? zoom.x + (maskFocus.x - zoom.x) * focusMix : zoom.x;
+    const zoomY = maskFocus ? zoom.y + (maskFocus.y - zoom.y) * focusMix : zoom.y;
+    const zoomScale = Math.max(0.0001, maskFocus ? zoom.scale + (maskFocus.scale - zoom.scale) * focusMix : zoom.scale);
 
     // Background — same bgType-driven priority as Preview (see lib/canvasDraw
     // usage in Preview/index.tsx for why this must key off bgType, not a
@@ -406,12 +412,15 @@ export async function createExportCompositor(
       maskSourceCtx.drawImage(canvas, 0, 0);
       for (const layer of activeLayers) {
         if (layer.type !== "mask") continue;
-        const lx = offsetX + layer.x * videoW;
-        const ly = offsetY + layer.y * videoH;
+        const layerFade = resolveLayerFade(layer, videoTs);
+        const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
+        const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
+        const lx = offsetX + (layer.x + (.5 - layer.w / 2 - layer.x) * centerShift) * videoW;
+        const ly = offsetY + (layer.y + (.5 - layer.h / 2 - layer.y) * centerShift) * videoH;
         const lw = layer.w * videoW;
         const lh = layer.h * videoH;
         drawMaskLayer(
-          ctx, layer, maskSource,
+          ctx, effectLayer, maskSource,
           { x: 0, y: 0, w: outputW, h: outputH },
           { x: 0, y: 0, w: outputW, h: outputH },
           { x: lx, y: ly, w: lw, h: lh }

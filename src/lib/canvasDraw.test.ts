@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawCaptionTrack } from "./canvasDraw";
+import { drawCaptionTrack, resolveLayerFade, resolveMaskCameraFocus } from "./canvasDraw";
 import type { CaptionTrack } from "./types";
 
 describe("caption canvas isolation", () => {
@@ -77,5 +77,28 @@ describe("caption canvas isolation", () => {
 
     expect(drawAt("left")).toBeLessThan(960);
     expect(drawAt("right")).toBeGreaterThan(960);
+  });
+});
+
+describe("mask camera transitions", () => {
+  const mask = {
+    id: "lens", type: "mask" as const, mask: "magnifier" as const,
+    start: 2, end: 6, x: .1, y: .2, w: .3, h: .2,
+    intensity: 2, focusCamera: true, transitionDuration: .5,
+  };
+
+  it("eases in, holds, and returns to the normal camera", () => {
+    expect(resolveLayerFade(mask, 2)).toBe(0);
+    expect(resolveLayerFade(mask, 2.5)).toBe(1);
+    expect(resolveLayerFade(mask, 5.75)).toBeCloseTo(.5, 5);
+    expect(resolveLayerFade(mask, 6)).toBe(0);
+  });
+
+  it("focuses on the mask center with a useful magnification", () => {
+    const focus = resolveMaskCameraFocus([mask], 3);
+    expect(focus?.x).toBeCloseTo(.25);
+    expect(focus?.y).toBeCloseTo(.3);
+    expect(focus?.scale).toBeGreaterThan(1);
+    expect(focus?.mix).toBe(1);
   });
 });

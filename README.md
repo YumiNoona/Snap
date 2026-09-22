@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-5.0.0-10b981?style=flat-square" alt="Version 5.0.0" />
+    <img src="https://img.shields.io/badge/version-6.0.0-10b981?style=flat-square" alt="Version 6.0.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,9 +22,9 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 5.0.0
+## Snap 6.0.0
 
-Snap 5 focuses on lightweight recording, reliable recovery, precise captions,
+Snap 6 focuses on lightweight recording, reliable recovery, precise captions,
 and a complete editor refresh:
 
 - Automatic recording uses hardware encoding with a conservative 720p/30 profile;

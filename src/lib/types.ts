@@ -129,6 +129,8 @@ export interface MaskLayer extends BaseLayer {
   shape?: "ellipse" | "rectangle";
   borderWidth?: number;
   borderColor?: string;
+  focusCamera?: boolean;
+  transitionDuration?: number;
 }
 
 export type Layer = TextLayer | ShapeLayer | MaskLayer;

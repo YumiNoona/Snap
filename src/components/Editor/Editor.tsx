@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Bookmark, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Trash2, RotateCcw, Captions, Sun, Moon, Library, Maximize2, Minimize2 } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -35,60 +35,7 @@ interface Props {
 export type SidebarToolTab = "uploads" | "canvas" | "cursor" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
-const EDITOR_PRESETS_STORAGE_KEY = "snap.editorPresets.v1";
 const EDITOR_THEME_STORAGE_KEY = "snap.editorTheme.v1";
-
-type PresetSettings = Pick<EditorConfig,
-  "backgroundColor" | "bgType" | "wallpaperUrl" | "bgBlur" | "padding" |
-  "borderRadius" | "inset" | "insetColor" | "shadow" | "cursorStyle" |
-  "showCursor" | "zoomEnabled" | "zoomMode" | "zoomLevel" | "fixedZoomPart" |
-  "aspectRatio" | "motionBlur" | "cursorMovement" | "zoomMovement" | "audio"
-  | "autoZoom"
->;
-
-interface SavedEditorPreset {
-  id: string;
-  name: string;
-  createdAt: number;
-  settings: PresetSettings;
-}
-
-function snapshotPresetSettings(config: EditorConfig): PresetSettings {
-  return {
-    backgroundColor: config.backgroundColor,
-    bgType: config.bgType,
-    wallpaperUrl: config.wallpaperUrl,
-    bgBlur: config.bgBlur,
-    padding: config.padding,
-    borderRadius: config.borderRadius,
-    inset: config.inset,
-    insetColor: config.insetColor,
-    shadow: { ...config.shadow },
-    cursorStyle: { ...config.cursorStyle },
-    showCursor: config.showCursor,
-    zoomEnabled: config.zoomEnabled,
-    zoomMode: config.zoomMode,
-    zoomLevel: config.zoomLevel,
-    fixedZoomPart: config.fixedZoomPart,
-    aspectRatio: config.aspectRatio ? { ...config.aspectRatio } : null,
-    motionBlur: { ...config.motionBlur },
-    cursorMovement: { ...config.cursorMovement },
-    zoomMovement: { ...config.zoomMovement },
-    autoZoom: { ...config.autoZoom },
-    audio: { ...config.audio },
-  };
-}
-
-function loadEditorPresets(): SavedEditorPreset[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(EDITOR_PRESETS_STORAGE_KEY) || "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter((preset): preset is SavedEditorPreset => !!preset?.id && !!preset?.name && !!preset?.settings)
-      : [];
-  } catch {
-    return [];
-  }
-}
 
 function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   try {
@@ -115,6 +62,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab | null>("canvas");
   const [previewFocusMode, setPreviewFocusMode] = useState(false);
+  const [previewMuted, setPreviewMuted] = useState(false);
   const [cropMode, setCropMode] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
@@ -123,15 +71,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
-  const [showPresets, setShowPresets] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [fileActionStatus, setFileActionStatus] = useState("");
-  const [presetName, setPresetName] = useState("");
-  const [savedPresets, setSavedPresets] = useState<SavedEditorPreset[]>(loadEditorPresets);
   const [exportProgress, setExportProgress] = useState(0);
   const [isMaximized, setIsMaximized] = useState(false);
   const appWindow = useMemo(() => isBrowserPreview ? null : getCurrentWindow(), [isBrowserPreview]);
-  const presetMenuRef = useRef<HTMLDivElement | null>(null);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
@@ -162,7 +106,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   });
   const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
-    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio,
+    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted,
   });
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
@@ -392,23 +336,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, [config.cursorHotspots]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(EDITOR_PRESETS_STORAGE_KEY, JSON.stringify(savedPresets));
-    } catch {
-      // Presets remain available for the current session if storage is unavailable.
-    }
-  }, [savedPresets]);
-
-  useEffect(() => {
-    if (!showPresets) return;
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!presetMenuRef.current?.contains(event.target as Node)) setShowPresets(false);
-    };
-    window.addEventListener("pointerdown", closeOnOutsideClick);
-    return () => window.removeEventListener("pointerdown", closeOnOutsideClick);
-  }, [showPresets]);
-
-  useEffect(() => {
     if (!showFileMenu) return;
     const closeOnOutsideClick = (event: PointerEvent) => {
       if (!fileMenuRef.current?.contains(event.target as Node)) setShowFileMenu(false);
@@ -434,40 +361,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     window.addEventListener("keydown", onProjectShortcut);
     return () => window.removeEventListener("keydown", onProjectShortcut);
   }, [handleOpenProject, handleSaveProject, handleSaveProjectAs, isBrowserPreview]);
-
-  const applyPresetSettings = useCallback((settings: PresetSettings) => {
-    setConfig((current) => ({
-      ...current,
-      ...settings,
-      shadow: { ...settings.shadow },
-      cursorStyle: { ...settings.cursorStyle },
-      motionBlur: { ...settings.motionBlur },
-      cursorMovement: { ...settings.cursorMovement },
-      zoomMovement: { ...settings.zoomMovement },
-      autoZoom: { ...settings.autoZoom },
-      audio: { ...settings.audio },
-      // These are recording-specific and must never be overwritten by a look preset.
-      cursorHotspots: current.cursorHotspots,
-      crop: current.crop,
-      trimStart: current.trimStart,
-      trimEnd: current.trimEnd,
-      cuts: current.cuts,
-      layers: current.layers,
-    }));
-    setShowPresets(false);
-  }, []);
-
-  const saveCurrentPreset = useCallback(() => {
-    const name = presetName.trim() || `Preset ${savedPresets.length + 1}`;
-    const next: SavedEditorPreset = {
-      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      name,
-      createdAt: Date.now(),
-      settings: snapshotPresetSettings(config),
-    };
-    setSavedPresets((presets) => [next, ...presets].slice(0, 20));
-    setPresetName("");
-  }, [config, presetName, savedPresets.length]);
 
   const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
 
@@ -857,76 +750,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           {projectStatus && <span className={`ss-project-status ${projectDirty ? "dirty" : ""}`} title="Non-destructive project save status">{projectStatus}</span>}
         </div>
 
-        <div className="ss-topbar-center">
-          <div className="ss-presets-wrap" ref={presetMenuRef}>
-            <button
-              className={`ss-presets-pill ${showPresets ? "active" : ""}`}
-              onClick={() => setShowPresets((open) => !open)}
-              aria-expanded={showPresets}
-              aria-haspopup="dialog"
-              aria-label="Editor presets"
-              title="Editor presets"
-            >
-              <Bookmark size={15} />
-              {savedPresets.length > 0 && <span className="preset-count">{savedPresets.length}</span>}
-            </button>
-
-            {showPresets && (
-              <div className="presets-popover" role="dialog" aria-label="Editor presets">
-                <div className="presets-popover-head">
-                  <div>
-                    <strong>Saved looks</strong>
-                    <span>Reuse your canvas, cursor, motion and audio settings.</span>
-                  </div>
-                </div>
-
-                <div className="preset-save-row">
-                  <input
-                    value={presetName}
-                    onChange={(event) => setPresetName(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Enter") saveCurrentPreset(); }}
-                    placeholder={`Preset ${savedPresets.length + 1}`}
-                    maxLength={36}
-                    aria-label="Preset name"
-                  />
-                  <button onClick={saveCurrentPreset} title="Save current settings">
-                    <Save size={15} />
-                    Save
-                  </button>
-                </div>
-
-                <div className="preset-list">
-                  <button className="preset-row built-in" onClick={() => applyPresetSettings(snapshotPresetSettings(DEFAULT_EDITOR_CONFIG))}>
-                    <span className="preset-row-icon"><RotateCcw size={15} /></span>
-                    <span className="preset-row-copy"><strong>Snap Default</strong><small>Restore the default editor look</small></span>
-                  </button>
-
-                  {savedPresets.map((preset) => (
-                    <div className="preset-row" key={preset.id}>
-                      <button className="preset-apply-btn" onClick={() => applyPresetSettings(preset.settings)}>
-                        <span className="preset-row-icon"><Bookmark size={15} /></span>
-                        <span className="preset-row-copy"><strong>{preset.name}</strong><small>Apply saved settings</small></span>
-                      </button>
-                      <button
-                        className="preset-delete-btn"
-                        onClick={() => setSavedPresets((presets) => presets.filter((item) => item.id !== preset.id))}
-                        title={`Delete ${preset.name}`}
-                        aria-label={`Delete ${preset.name}`}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-
-                  {savedPresets.length === 0 && (
-                    <p className="preset-empty">Save your current setup and it will appear here.</p>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="ss-topbar-right">
           <button
             className="ss-theme-toggle"
@@ -1059,6 +882,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             keyframes={keyframes}
             onKeyframesChange={setKeyframes}
             playing={playing}
+            previewMuted={previewMuted}
             onDuration={(d) => {
               if (!Number.isFinite(d) || d <= 0) return;
               const previous = metadataDurationRef.current;
@@ -1096,6 +920,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             captionTracks={captionTracks}
             hasExternalAudio={audioTracks.length > 0}
           />
+          {previewFocusMode && <div className="ss-preview-player" role="group" aria-label="Preview playback controls">
+            <div className="ss-preview-player-time"><span>{formatPlayerTime(currentTime)}</span><span>{formatPlayerTime(duration)}</span></div>
+            <input aria-label="Preview position" type="range" min={config.trimStart} max={config.trimEnd || duration || 1} step="0.01" value={Math.min(currentTime, config.trimEnd || duration || 1)} onChange={(event) => seekTo(Number(event.target.value))} />
+            <div className="ss-preview-player-buttons">
+              <button type="button" title="Back 5 seconds" onClick={() => seekTo(Math.max(config.trimStart, currentTime - 5))}><SkipBack size={18} /></button>
+              <button type="button" className="primary" title={playing ? "Pause" : "Play"} onClick={togglePlay}>{playing ? <Pause size={21} /> : <Play size={21} fill="currentColor" />}</button>
+              <button type="button" title="Forward 5 seconds" onClick={() => seekTo(Math.min(config.trimEnd || duration, currentTime + 5))}><SkipForward size={18} /></button>
+              <button type="button" title={previewMuted ? "Unmute preview" : "Mute preview"} onClick={() => setPreviewMuted((muted) => !muted)}>{previewMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+            </div>
+          </div>}
         </div>
 
         {/* Right Tool Settings Panel Drawer */}
@@ -1265,4 +1099,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       )}
     </div>
   );
+}
+
+function formatPlayerTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const whole = Math.floor(seconds);
+  const minutes = Math.floor(whole / 60);
+  const remaining = whole % 60;
+  return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }

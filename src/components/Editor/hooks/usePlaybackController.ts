@@ -16,6 +16,7 @@ interface Options {
   playbackRate: number;
   audioTracks: AudioTrack[];
   audioMix: AudioMixConfig;
+  previewMuted?: boolean;
 }
 
 export type TransportStatus = "idle" | "paused" | "starting" | "playing" | "buffering" | "seeking" | "recovering" | "failed";
@@ -28,7 +29,7 @@ const SIDECAR_SYNC_INTERVAL_MS = 50;
  * The video element is the sole editor clock. Every user action invalidates
  * older async media work, and only confirmed frame progress reports playing.
  */
-export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, playbackRate, audioTracks, audioMix }: Options) {
+export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, playbackRate, audioTracks, audioMix, previewMuted = false }: Options) {
   const [currentTime, setCurrentTime] = useState(0);
   const [status, setStatusState] = useState<TransportStatus>("idle");
   const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
@@ -36,6 +37,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   const audioElementsRef = useRef(new Map<string, HTMLAudioElement>());
   const audioTracksRef = useRef(audioTracks);
   const audioMixRef = useRef(audioMix);
+  const previewMutedRef = useRef(previewMuted);
   const boundsRef = useRef({ start: trimStart, end: trimEnd || duration });
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -52,6 +54,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   boundsRef.current = { start: trimStart, end: trimEnd || duration };
   audioTracksRef.current = audioTracks;
   audioMixRef.current = audioMix;
+  previewMutedRef.current = previewMuted;
 
   const setStatus = useCallback((next: TransportStatus) => {
     statusRef.current = next;
@@ -59,7 +62,8 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   }, []);
 
   const trackIsMuted = useCallback((track: AudioTrack) => (
-    track.muted
+    previewMutedRef.current
+    || track.muted
     || (track.kind === "microphone" && audioMixRef.current.micMuted)
     || ((track.kind === "system" || track.kind === "device") && audioMixRef.current.systemMuted)
   ), []);
@@ -371,7 +375,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     if (video && wantsPlaybackRef.current && !video.paused && !video.seeking) {
       playSidecars(video, generationRef.current);
     }
-  }, [applyAudioMix, audioMix, playSidecars]);
+  }, [applyAudioMix, audioMix, playSidecars, previewMuted]);
 
   useEffect(() => {
     const video = mediaElement;

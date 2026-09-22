@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Plus, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, FileAudio, FileImage, FileVideo, UploadCloud, Captions, type LucideIcon } from "lucide-react";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, FileAudio, FileImage, FileVideo, UploadCloud, Captions, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -385,7 +385,7 @@ export default function Panels({
     return {
       id: genId(), type: "mask", ...timing, x: 0.32, y: 0.28, w: 0.36, h: 0.34,
       mask, intensity: mask === "blur" ? 12 : mask === "magnifier" ? 2.0 : 1,
-      feather: 8, opacity: 1,
+      feather: 8, opacity: 1, focusCamera: mask !== "blur", transitionDuration: .45,
     };
   };
 
@@ -694,6 +694,8 @@ export default function Panels({
                     <SelectRow label="Effect" value={selectedLayer.mask} options={["spotlight", "blur", "magnifier"]} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"] })} />
                     <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.1} onChange={(intensity) => updateSelectedLayer({ intensity })} />
                     <SelectRow label="Mask Shape" value={selectedLayer.shape ?? "ellipse"} options={["ellipse", "rectangle"]} onChange={(shape) => updateSelectedLayer({ shape: shape as MaskLayer["shape"] })} />
+                    {selectedLayer.mask !== "blur" && <CheckRow label="Camera focus" checked={selectedLayer.focusCamera !== false} onChange={(focusCamera) => updateSelectedLayer({ focusCamera })} />}
+                    <Slider label="Fade & camera" value={selectedLayer.transitionDuration ?? .45} min={.12} max={1.5} step={.05} unit="s" onChange={(transitionDuration) => updateSelectedLayer({ transitionDuration })} />
                     {selectedLayer.mask === "magnifier" && <><Slider label="Lens Border" value={selectedLayer.borderWidth ?? 3} min={0} max={12} step={1} unit="px" onChange={(borderWidth) => updateSelectedLayer({ borderWidth })} /><ColorInput label="Border Color" value={selectedLayer.borderColor ?? "#ffffff"} onChange={(borderColor) => updateSelectedLayer({ borderColor })} /></>}
                     {selectedLayer.mask !== "blur" && <Slider label={selectedLayer.mask === "magnifier" ? "Lens Shadow" : "Edge Feather"} value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
                   </>
@@ -832,7 +834,7 @@ export default function Panels({
           </Section>)}
           {audioTracks.length === 0 && <div className="audio-empty-state"><Music2 size={20} /><span><strong>No audio tracks</strong><small>Add music, narration, or another recording.</small></span></div>}
           {audioError && <div className="audio-inline-error" role="alert">{audioError}</div>}
-          <button type="button" className="audio-import-button audio-import-button-last" onClick={onAddAudio}><Plus size={15} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
+          <button type="button" className="audio-import-button audio-import-button-last" onClick={onAddAudio}><Music2 size={16} /><span>Add audio</span><small>MP3, WAV, M4A and more</small></button>
         </div>
       )}
 
@@ -918,14 +920,6 @@ export default function Panels({
             <button type="button" className="ss-drawer-action-btn manual-caption-action" onClick={onAddManualCaption}><Captions size={15} /> Add caption manually</button>
             {captionStatus && <p className="caption-status-message" role="status">{captionStatus}</p>}
           </Section>
-          {captionTracks.map((track) => (
-            <Section key={track.id} title={track.name}>
-              <CheckRow label="Show Captions" checked={track.visible} onChange={(visible) => updateCaptionTrack(track.id, (current) => ({ ...current, visible }))} />
-              <CheckRow label="Burn Into Export" checked={track.burnedIn} onChange={(burnedIn) => updateCaptionTrack(track.id, (current) => ({ ...current, burnedIn }))} />
-              <div className="caption-track-summary"><span><strong>{track.segments.length} captions</strong><small>{track.language.toUpperCase()} · click any caption bar in the timeline to edit it</small></span>{track.segments[0] && <button onClick={() => onSelectCaption({ trackId: track.id, segmentId: track.segments[0].id })}>Edit captions</button>}</div>
-              <button className="ss-drawer-action-btn danger" onClick={() => onCaptionTracksChange(captionTracks.filter((item) => item.id !== track.id))}><Trash2 size={14} /> Delete Caption Track</button>
-            </Section>
-          ))}
           </>}
         </div>
       )}
@@ -1032,9 +1026,9 @@ function CaptionAudioSourcePicker({ tracks, value, onChange, onAddAudio }: {
           <span><strong>{track.label}</strong><small>{captionSourceDescription(track)}</small></span>
           {track.id === selected?.id && <Check size={16} />}
         </button>)}
-        <button type="button" className="caption-source-add" onClick={() => { setOpen(false); onAddAudio(); }}><span><strong>Add another audio file</strong><small>Import music, narration, or dialogue</small></span><Plus size={15} /></button>
+        <button type="button" className="caption-source-add" onClick={() => { setOpen(false); onAddAudio(); }}><span><strong>Add another audio file</strong><small>Import music, narration, or dialogue</small></span><Music2 size={15} /></button>
       </div>}
-      {tracks.length === 0 && <button type="button" className="caption-source-empty-add" onClick={onAddAudio}><Plus size={14} /> Add audio</button>}
+      {tracks.length === 0 && <button type="button" className="caption-source-empty-add" onClick={onAddAudio}><Music2 size={14} /> Add audio</button>}
     </div>
   );
 }
