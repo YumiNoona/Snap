@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
@@ -33,6 +33,7 @@ interface Props {
   onKeyframesChange: (keyframes: Keyframe[]) => void;
   onAudioMuteChange: (track: "system" | "mic", muted: boolean) => void;
   onAddAudio: () => void;
+  onMediaDrop: (paths: string[], atTime: number) => void;
   onAddCaptionAtTime: (time: number) => void;
   onAudioTrackChange: (track: AudioTrack) => void;
   onAudioTrackRemove: (trackId: string) => void;
@@ -91,6 +92,7 @@ export default function Timeline({
   onKeyframesChange,
   onAudioMuteChange,
   onAddAudio,
+  onMediaDrop,
   onAddCaptionAtTime,
   onAudioTrackChange,
   onAudioTrackRemove,
@@ -119,6 +121,7 @@ export default function Timeline({
   const [waveformErrors, setWaveformErrors] = useState<Set<string>>(() => new Set());
   const [contentWidth, setContentWidth] = useState(600);
   const [timelineHeight, setTimelineHeight] = useState(240);
+  const [mediaDragOver, setMediaDragOver] = useState(false);
   const [contextMenu, setContextMenu] = useState<
     | { kind: "zoom"; x: number; y: number; region: ZoomRegionSelection }
     | { kind: "layer"; x: number; y: number; layer: Layer }
@@ -235,7 +238,7 @@ export default function Timeline({
   }, [keyframes, config.trimEnd, duration]);
 
   const visibleLayerTypes = useMemo(
-    () => (["text", "shape", "mask"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
+    () => (["text", "shape", "mask", "image"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
     [layers]
   );
   const visibleCaptionTracks = captionTracks.filter((track) => track.segments.length > 0);
@@ -594,7 +597,24 @@ export default function Timeline({
   };
 
   return (
-    <div className="ss-timeline-container" style={{ height: `${timelineHeight}px` }}>
+    <div
+      className={`ss-timeline-container ${mediaDragOver ? "is-media-drag-over" : ""}`}
+      style={{ height: `${timelineHeight}px` }}
+      onDragEnter={(event) => { event.preventDefault(); setMediaDragOver(true); }}
+      onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setMediaDragOver(true); }}
+      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMediaDragOver(false); }}
+      onDrop={(event) => {
+        event.preventDefault(); setMediaDragOver(false);
+        let paths: string[] = [];
+        const encoded = event.dataTransfer.getData("application/x-snap-media");
+        if (encoded) { try { const item = JSON.parse(encoded) as { path?: string }; if (item.path) paths = [item.path]; } catch { /* ignore invalid drag data */ } }
+        if (!paths.length) {
+          const files = Array.from(event.dataTransfer.files) as Array<File & { path?: string }>;
+          paths = files.map((file) => file.path).filter((path): path is string => Boolean(path));
+        }
+        if (paths.length) onMediaDrop(paths, getTimeFromEvent(event));
+      }}
+    >
       <div className="timeline-resize-edge" onMouseDown={beginResize} title="Drag the timeline edge to resize" />
       {/* ── Screen Studio Toolbar ──────────────────────────────────── */}
       <div className="ss-timeline-toolbar">
@@ -720,8 +740,8 @@ export default function Timeline({
           {zoomSegments.length > 0 && <div className="track-label zoom-label" title="Zoom"><Sparkles size={14} /></div>}
           {visibleCaptionTracks.map((track) => <div className="track-label caption-label" title="Captions" key={track.id}><Captions size={14} /></div>)}
           {visibleLayerTypes.map((type) => (
-            <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : "Text"}>
-              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : <Type size={14} />}
+            <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : "Text"}>
+              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : type === "image" ? <ImageIcon size={14} /> : <Type size={14} />}
             </div>
           ))}
         </div>
@@ -839,7 +859,7 @@ export default function Timeline({
             <div key={type} className={`ss-track-row layer-track ${type}-track`}>
               <div className="layer-connecting-line" />
               {layers.filter((layer) => layer.type === type).map((layer) => {
-                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : layer.mask;
+                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : layer.type === "mask" ? layer.mask : layer.path.split(/[\\/]/).pop() || "Image";
                 return (
                   <div
                     key={layer.id}

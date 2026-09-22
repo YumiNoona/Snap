@@ -4,9 +4,9 @@ import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import {
-  loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
+  loadCachedImage, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
-  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
+  cursorIdleOpacity, drawTextLayer, drawShapeLayer, drawImageLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
   drawCameraBubble,
 } from "./canvasDraw";
@@ -38,6 +38,11 @@ export async function createExportCompositor(
   outputH: number,
   signal?: AbortSignal
 ): Promise<ExportCompositor> {
+  await Promise.all(config.layers.filter((layer) => layer.type === "image").map(async (layer) => {
+    const image = preloadImageAsset(layer.path);
+    if (image.complete && image.naturalWidth > 0) return;
+    try { await image.decode(); } catch { /* draw loop leaves an unreadable image empty */ }
+  }));
   const video = document.createElement("video");
   video.src = convertFileSrc(videoPath);
   video.muted = true; // audio is muxed from the original sidecar wav files, not captured here
@@ -440,7 +445,8 @@ export async function createExportCompositor(
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
-      else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      else drawImageLayer(ctx, layer, lx, ly, lw, lh);
       ctx.restore();
     }
     for (const track of captionTracks) {

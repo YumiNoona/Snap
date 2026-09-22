@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowUpRight, Film, FolderOpen, Play, Search, Upload, X } from "lucide-react";
+import { ArrowUpRight, CloudUpload, Film, FolderOpen, Play, Search, X } from "lucide-react";
 import "./ModuleWindows.css";
 
 interface MediaFile { name: string; path: string; is_dir: boolean; size: number }
@@ -11,6 +11,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
 
   const refresh = async () => {
     try {
@@ -21,10 +22,22 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
   };
   useEffect(() => { void refresh(); }, []);
   const shown = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(search.toLowerCase())), [files, search]);
-  const open = async (path: string) => {
+  const open = useCallback(async (path: string) => {
     const log = await invoke<string>("resolve_recording_log_path", { videoPath: path });
     onOpen(path, log);
-  };
+  }, [onOpen]);
+  useEffect(() => {
+    const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter" || payload.type === "over") setDragOver(true);
+      if (payload.type === "leave") setDragOver(false);
+      if (payload.type === "drop") {
+        setDragOver(false);
+        const video = payload.paths.find((path) => /\.(mp4|mov|mkv|webm|avi)$/i.test(path));
+        if (video) void open(video);
+      }
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [open]);
   const browse = async () => {
     try {
       const selected = await openDialog({ multiple: false, directory: false, filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi"] }] });
@@ -32,14 +45,14 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
     } catch (cause) { setError(String(cause)); }
   };
 
-  return <div className="module-window">
+  return <div className={`module-window ${dragOver ? "is-drag-over" : ""}`}>
     <header className="module-titlebar" data-tauri-drag-region>
       <span className="module-mark"><FolderOpen size={17} /></span><div data-tauri-drag-region><strong data-tauri-drag-region>Open media</strong></div>
       <button onClick={() => getCurrentWindow().close()}><X size={16} /></button>
     </header>
     <main className="library-body">
       <section className="import-card">
-        <div className="import-card-icon"><Upload size={21} /></div>
+        <div className="import-card-icon"><CloudUpload size={21} /></div>
         <div className="import-card-copy"><strong>Bring in a video</strong><small>Drop into your next edit</small></div>
         <button onClick={() => void browse()}>Choose file <ArrowUpRight size={15} /></button>
       </section>

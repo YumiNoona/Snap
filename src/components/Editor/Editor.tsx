@@ -256,6 +256,50 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     }
   }, [videoPath]);
 
+  const addMediaToTimeline = useCallback((paths: string[], atTime = currentTime) => {
+    const audio = paths.filter((path) => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
+    if (audio.length) void addAudioSources(audio);
+    const images = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif)$/i.test(path));
+    if (!images.length) return;
+    const projectEnd = config.trimEnd || duration || atTime + 3;
+    const start = Math.max(config.trimStart, Math.min(atTime, Math.max(config.trimStart, projectEnd - .2)));
+    const end = Math.min(projectEnd, start + 3);
+    const additions: Layer[] = images.map((path, index) => ({
+      id: `image-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+      type: "image", path, fit: "contain", cornerRadius: 10,
+      start, end: Math.max(start + .2, end),
+      x: .25 + (index % 3) * .035, y: .2 + (index % 3) * .035, w: .5, h: .5,
+      opacity: 1, rotation: 0, flipX: false, flipY: false,
+    }));
+    setConfig((current) => ({ ...current, layers: [...current.layers, ...additions] }));
+    setSelectedLayerId(additions[additions.length - 1].id);
+    setSelectedCaption(null);
+    setSelectedZoomRegion(null);
+    setActiveTool("annotations");
+  }, [addAudioSources, config.trimEnd, config.trimStart, currentTime, duration]);
+
+  useEffect(() => {
+    if (isBrowserPreview || !appWindow) return;
+    const unlisten = appWindow.onDragDropEvent(async ({ payload }) => {
+      if (payload.type !== "drop" || payload.paths.length === 0) return;
+      const scale = await appWindow.scaleFactor();
+      const clientX = payload.position.x / scale;
+      const clientY = payload.position.y / scale;
+      const target = document.elementFromPoint(clientX, clientY);
+      if (target?.closest(".uploads-drawer-content")) {
+        window.dispatchEvent(new CustomEvent<string[]>("snap-import-media", { detail: payload.paths }));
+        return;
+      }
+      const timeline = target?.closest<HTMLElement>(".ss-timeline-col");
+      if (timeline && duration > 0) {
+        const rect = timeline.getBoundingClientRect();
+        const at = Math.max(0, Math.min(duration, (clientX - rect.left) / rect.width * duration));
+        addMediaToTimeline(payload.paths, at);
+      }
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [addMediaToTimeline, appWindow, duration, isBrowserPreview]);
+
   const handleAddAudio = useCallback(async () => {
     const selected = await openDialog({
       multiple: true,
@@ -989,6 +1033,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           audioError={audioError}
           onAddAudio={handleAddAudio}
           onAddAudioSources={addAudioSources}
+          onAddMediaToTimeline={addMediaToTimeline}
           onAddManualCaption={() => addManualCaptionAt(currentTime)}
           onAudioTracksChange={setAudioTracks}
           captionTracks={captionTracks}
@@ -1047,6 +1092,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           },
         }))}
         onAddAudio={handleAddAudio}
+        onMediaDrop={addMediaToTimeline}
         onAddCaptionAtTime={addManualCaptionAt}
         onAudioTrackChange={(updated) => setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track))}
         onAudioTrackRemove={(trackId) => setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId))}

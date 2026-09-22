@@ -10,7 +10,7 @@ import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
   clickEffectDuration, cursorIdleOpacity, drawTextLayer, drawShapeLayer,
-  drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
+  drawImageLayer, drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
   drawCaptionTrack,
   drawCameraBubble,
 } from "../../../lib/canvasDraw";
@@ -795,7 +795,8 @@ export default function Preview({
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
       if (layer.type === "text") drawTextLayer(ctx, layer, lx, ly, lw, lh);
-      else drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      else if (layer.type === "shape") drawShapeLayer(ctx, layer, lx, ly, lw, lh);
+      else drawImageLayer(ctx, layer, lx, ly, lw, lh);
       ctx.restore();
     }
 

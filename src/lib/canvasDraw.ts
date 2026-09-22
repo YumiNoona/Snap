@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, ClickEffect, CursorStyle, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
+import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
 export function drawCaptionTrack(
@@ -136,6 +136,36 @@ export function loadCachedImage(path: string, cache: Map<string, HTMLImageElemen
   const img = preloadImageAsset(path);
   cache.set(path, img);
   return img;
+}
+
+export function drawImageLayer(
+  ctx: CanvasRenderingContext2D,
+  layer: ImageLayer,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const image = preloadImageAsset(layer.path);
+  if (!image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+  const sourceRatio = image.naturalWidth / image.naturalHeight;
+  const targetRatio = w / Math.max(1, h);
+  let dx = x, dy = y, dw = w, dh = h;
+  if ((layer.fit ?? "contain") === "contain") {
+    if (sourceRatio > targetRatio) { dh = w / sourceRatio; dy += (h - dh) / 2; }
+    else { dw = h * sourceRatio; dx += (w - dw) / 2; }
+  }
+  ctx.save();
+  ctx.beginPath();
+  roundRect(ctx, x, y, w, h, Math.max(0, Math.min(layer.cornerRadius ?? 10, w / 2, h / 2)));
+  ctx.clip();
+  if ((layer.fit ?? "contain") === "cover") {
+    const crop = computeCoverRect(0, 0, image.naturalWidth, image.naturalHeight, w, h);
+    ctx.drawImage(image, crop.x, crop.y, crop.w, crop.h, x, y, w, h);
+  } else {
+    ctx.drawImage(image, dx, dy, dw, dh);
+  }
+  ctx.restore();
 }
 
 export function paintGradient(
@@ -532,25 +562,35 @@ export function drawMaskLayer(
     g.globalCompositeOperation = "destination-out";
     g.filter = `blur(${feather}px)`;
     g.fillStyle = "#000"; path(g); g.fill();
-  } else {
+  } else if (layer.mask === "blur") {
     g.save(); path(g); g.clip();
-    if (layer.mask === "blur") {
       g.filter = `blur(${Math.max(1, layer.intensity)}px)`;
       g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
-    } else {
-      const zoom = Math.max(1.1, Math.min(8, layer.intensity));
-      const sw = Math.min(source.w, w / dest.w * source.w / zoom);
-      const sh = Math.min(source.h, h / dest.h * source.h / zoom);
-      const centerX = source.x + (x + w / 2 - dest.x) / dest.w * source.w;
-      const centerY = source.y + (y + h / 2 - dest.y) / dest.h * source.h;
-      const sx = Math.max(source.x, Math.min(source.x + source.w - sw, centerX - sw / 2));
-      const sy = Math.max(source.y, Math.min(source.y + source.h - sh, centerY - sh / 2));
-      g.drawImage(video, sx, sy, sw, sh, x, y, w, h);
-    }
     g.restore();
-    if (layer.mask === "magnifier" && (layer.borderWidth ?? 3) > 0) {
+  } else {
+    // Make the lens unmistakable: soften the surrounding frame, cut a clean
+    // window, then sample a smaller source rectangle into that window.
+    g.save();
+    g.filter = `blur(${Math.max(3, feather * .72)}px)`;
+    g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
+    g.restore();
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    g.fillStyle = "#000"; path(g); g.fill();
+    g.restore();
+    g.save(); path(g); g.clip();
+    const zoom = Math.max(1.25, Math.min(8, layer.intensity));
+    const sw = Math.min(source.w, w / dest.w * source.w / zoom);
+    const sh = Math.min(source.h, h / dest.h * source.h / zoom);
+    const centerX = source.x + (x + w / 2 - dest.x) / dest.w * source.w;
+    const centerY = source.y + (y + h / 2 - dest.y) / dest.h * source.h;
+    const sx = Math.max(source.x, Math.min(source.x + source.w - sw, centerX - sw / 2));
+    const sy = Math.max(source.y, Math.min(source.y + source.h - sh, centerY - sh / 2));
+    g.drawImage(video, sx, sy, sw, sh, x, y, w, h);
+    g.restore();
+    if ((layer.borderWidth ?? 3) > 0) {
       path(g); g.strokeStyle = layer.borderColor ?? "#ffffff"; g.lineWidth = layer.borderWidth ?? 3;
-      g.shadowColor = "rgba(0,0,0,.2)"; g.shadowBlur = feather; g.stroke();
+      g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = Math.max(6, feather); g.stroke();
     }
   }
   g.restore();

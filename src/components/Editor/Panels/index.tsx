@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, FileAudio, FileImage, FileVideo, UploadCloud, Captions, type LucideIcon } from "lucide-react";
-import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
+import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, X, Palette, WandSparkles, FolderPlus, Folder, UploadCloud, Captions, type LucideIcon } from "lucide-react";
+import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
 import { preloadImageAsset } from "../../../lib/canvasDraw";
@@ -33,6 +33,7 @@ interface Props {
   audioError: string;
   onAddAudio: () => void;
   onAddAudioSources: (paths: string[]) => Promise<void>;
+  onAddMediaToTimeline: (paths: string[], atTime?: number) => void;
   onAddManualCaption: () => void;
   onAudioTracksChange: (tracks: AudioTrack[]) => void;
   captionTracks: CaptionTrack[];
@@ -106,7 +107,7 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
-  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
+  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -133,6 +134,7 @@ export default function Panels({
   const [activeMediaFolder, setActiveMediaFolder] = useState("all");
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [mediaDragOver, setMediaDragOver] = useState(false);
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
   const updateCursor = (patch: Partial<EditorConfig["cursorStyle"]>) =>
@@ -166,14 +168,7 @@ export default function Panels({
 
   useEffect(() => { localStorage.setItem(MEDIA_LIBRARY_KEY, JSON.stringify(mediaLibrary)); }, [mediaLibrary]);
 
-  const importMedia = async () => {
-    const selected = await openDialog({
-      multiple: true,
-      directory: false,
-      title: "Upload media",
-      filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mov", "mkv", "webm"] }],
-    });
-    const paths = typeof selected === "string" ? [selected] : selected ?? [];
+  const addMediaPaths = useCallback((paths: string[]) => {
     if (!paths.length) return;
     setMediaLibrary((current) => {
       const known = new Set(current.assets.map((asset) => asset.path.toLowerCase()));
@@ -184,7 +179,23 @@ export default function Panels({
       }));
       return { ...current, assets: [...current.assets, ...additions] };
     });
+  }, [activeMediaFolder]);
+
+  const importMedia = async () => {
+    const selected = await openDialog({
+      multiple: true,
+      directory: false,
+      title: "Upload media",
+      filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mov", "mkv", "webm"] }],
+    });
+    addMediaPaths(typeof selected === "string" ? [selected] : selected ?? []);
   };
+
+  useEffect(() => {
+    const receive = (event: Event) => addMediaPaths((event as CustomEvent<string[]>).detail ?? []);
+    window.addEventListener("snap-import-media", receive);
+    return () => window.removeEventListener("snap-import-media", receive);
+  }, [addMediaPaths]);
 
   const createMediaFolder = () => {
     const name = newFolderName.trim();
@@ -384,8 +395,9 @@ export default function Panels({
     const timing = layerTiming();
     return {
       id: genId(), type: "mask", ...timing, x: 0.32, y: 0.28, w: 0.36, h: 0.34,
-      mask, intensity: mask === "blur" ? 12 : mask === "magnifier" ? 2.0 : 1,
-      feather: 8, opacity: 1, focusCamera: mask !== "blur", transitionDuration: .45,
+      mask, intensity: mask === "blur" ? 12 : mask === "magnifier" ? 2.4 : 1,
+      feather: mask === "magnifier" ? 12 : 8, shape: mask === "magnifier" ? "rectangle" : "ellipse",
+      opacity: 1, focusCamera: mask === "spotlight", transitionDuration: .45,
     };
   };
 
@@ -428,7 +440,17 @@ export default function Panels({
   return (
     <aside className="ss-panels-drawer">
       {activeTab === "uploads" && (
-        <div className="ss-drawer-content uploads-drawer-content">
+        <div
+          className={`ss-drawer-content uploads-drawer-content ${mediaDragOver ? "is-drag-over" : ""}`}
+          onDragEnter={(event) => { event.preventDefault(); setMediaDragOver(true); }}
+          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setMediaDragOver(true); }}
+          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMediaDragOver(false); }}
+          onDrop={(event) => {
+            event.preventDefault(); setMediaDragOver(false);
+            const files = Array.from(event.dataTransfer.files) as Array<File & { path?: string }>;
+            addMediaPaths(files.map((file) => file.path).filter((path): path is string => Boolean(path)));
+          }}
+        >
           <div className="media-library-actions">
             <button type="button" className="media-upload-primary" onClick={() => void importMedia()}><UploadCloud size={16} /> Upload media</button>
             <button type="button" className="media-folder-button" title="Create folder" aria-label="Create media folder" onClick={() => setCreatingFolder((value) => !value)}><FolderPlus size={16} /></button>
@@ -442,24 +464,28 @@ export default function Panels({
           </div>
           <div className="media-asset-list">
             {visibleMedia.map((asset, index) => {
-              const Icon = asset.kind === "image" ? FileImage : asset.kind === "audio" ? FileAudio : FileVideo;
-              return <article className="media-asset-card" key={asset.id} style={{ "--media-index": index } as CSSProperties}>
+              return <article
+                className="media-asset-card"
+                key={asset.id}
+                style={{ "--media-index": index } as CSSProperties}
+                draggable={asset.kind !== "video"}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "copy";
+                  event.dataTransfer.setData("application/x-snap-media", JSON.stringify({ path: asset.path, kind: asset.kind }));
+                  event.dataTransfer.setData("text/plain", asset.path);
+                }}
+              >
                 <div className={`media-asset-preview ${asset.kind}`}>
                   {asset.kind === "image" && <img src={convertFileSrc(asset.path)} alt="" draggable={false} />}
                   {asset.kind === "video" && <video src={convertFileSrc(asset.path)} muted playsInline preload="metadata" onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }} onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }} onPointerLeave={(event) => event.currentTarget.pause()} />}
                   {asset.kind === "audio" && <div className="media-audio-art"><Music2 size={23} /> <span>{Array.from({ length: 13 }, (_, bar) => <i key={bar} />)}</span></div>}
-                  <span className={`media-kind-badge ${asset.kind}`}><Icon size={12} />{asset.kind}</span>
                   <div className="media-card-actions">
                     {asset.kind === "audio" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
-                    {asset.kind === "image" && <button title="Use as background" aria-label={`Use ${asset.name} as background`} onClick={() => update({ bgType: "image", wallpaperUrl: asset.path })}><ImagePlus size={14} /></button>}
+                    {asset.kind === "image" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><ImagePlus size={14} /></button>}
                     <button className="danger" title="Remove from library" aria-label={`Remove ${asset.name}`} onClick={() => setMediaLibrary((current) => ({ ...current, assets: current.assets.filter((item) => item.id !== asset.id) }))}><X size={14} /></button>
                   </div>
                 </div>
                 <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong></span>
-                <select aria-label={`Folder for ${asset.name}`} value={asset.folderId ?? ""} onChange={(event) => setMediaLibrary((current) => ({ ...current, assets: current.assets.map((item) => item.id === asset.id ? { ...item, folderId: event.target.value || null } : item) }))}>
-                  <option value="">Unfiled</option>
-                  {mediaLibrary.folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-                </select>
               </article>;
             })}
             {visibleMedia.length === 0 && <div className="media-library-empty"><UploadCloud size={22} /><strong>No media here</strong><span>Upload files or choose another folder.</span></div>}
@@ -705,6 +731,12 @@ export default function Panels({
                     <Slider label="Fade & camera" value={selectedLayer.transitionDuration ?? .45} min={.12} max={1.5} step={.05} unit="s" onChange={(transitionDuration) => updateSelectedLayer({ transitionDuration })} />
                     {selectedLayer.mask === "magnifier" && <><Slider label="Lens Border" value={selectedLayer.borderWidth ?? 3} min={0} max={12} step={1} unit="px" onChange={(borderWidth) => updateSelectedLayer({ borderWidth })} /><ColorInput label="Border Color" value={selectedLayer.borderColor ?? "#ffffff"} onChange={(borderColor) => updateSelectedLayer({ borderColor })} /></>}
                     {selectedLayer.mask !== "blur" && <Slider label={selectedLayer.mask === "magnifier" ? "Lens Shadow" : "Edge Feather"} value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
+                  </>
+                )}
+                {selectedLayer.type === "image" && (
+                  <>
+                    <SelectRow label="Fit" value={selectedLayer.fit ?? "contain"} options={["contain", "cover"]} onChange={(fit) => updateSelectedLayer({ fit: fit as ImageLayer["fit"] })} />
+                    <Slider label="Roundness" value={selectedLayer.cornerRadius ?? 10} min={0} max={80} step={1} unit="px" onChange={(cornerRadius) => updateSelectedLayer({ cornerRadius })} />
                   </>
                 )}
               </Section>

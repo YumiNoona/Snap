@@ -241,8 +241,12 @@ select:focus-visible,
 
 /* Icon button press "bounce" for consistent click feel */
 button:active:not(:disabled) {
-  transform: scale(0.94);
+  transform: none !important;
 }
+
+/* Controls respond with color and light, never a click bounce. */
+button:active:not(:disabled),
+.slider-track-wrap:active .slider-thumb { transform: none !important; }
 
 /* Modal + dropdown entrance animations */
 .modal-overlay {
