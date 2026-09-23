@@ -3,87 +3,47 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
-  AudioLines,
-  Check,
-  ChevronRight,
-  CircleDot,
-  Copy,
-  Download,
-  Focus,
-  Gauge,
-  Heart,
-  Layers3,
-  Mic2,
-  MonitorUp,
-  MousePointer2,
-  ScanLine,
-  ShieldCheck,
-  Smartphone,
-  Sparkles,
-  WandSparkles,
-  X,
+  ArrowRight, AudioLines, Captions, Check, Copy, Download, Focus, Heart,
+  Layers3, MonitorUp, MousePointer2, ShieldCheck, Sparkles, WandSparkles,
+  X, Zap,
 } from "lucide-react";
 
 const UPI_ID = "rushikeshingale2001@okicici";
 
-function BrandMark({ muted = false }: { muted?: boolean }) {
-  return (
-    <span className={`snap-mark${muted ? " snap-mark-muted" : ""}`} aria-hidden="true">
-      <span className="snap-mark-layer snap-mark-layer-back" />
-      <span className="snap-mark-layer snap-mark-layer-front"><Focus size={18} strokeWidth={2.3} /></span>
-    </span>
-  );
+function BrandMark() {
+  return <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>;
 }
 
-function DownloadButton({ compact = false }: { compact?: boolean }) {
+function DownloadButton({ light = false }: { light?: boolean }) {
   return (
-    <a className={`action action-download${compact ? " action-compact" : ""}`} href="/download">
-      <Download size={17} strokeWidth={2.2} />
-      <span>Download Snap</span>
-      {!compact && <ChevronRight className="action-tail" size={16} />}
+    <a className={`button button-primary${light ? " button-light" : ""}`} href="/download">
+      <Download size={16} /> Download for Windows <ArrowRight size={15} />
     </a>
   );
 }
 
-function DonateButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
-  return (
-    <button className={`action action-donate${compact ? " action-compact" : ""}`} onClick={onClick}>
-      <Heart size={17} strokeWidth={2.2} />
-      <span>Donate</span>
-    </button>
-  );
-}
-
-const featureCards = [
+const tools = [
   {
-    icon: Focus,
-    label: "Auto Zoom",
-    title: "The camera follows the story.",
-    copy: "Clicks become editable focus regions with natural pacing, smooth curves, and targets you can move at any time.",
-    className: "feature-auto",
+    eyebrow: "Motion", title: "Movement with a reason.",
+    copy: "Turn clicks into smooth camera moves, tune the response, and add motion blur only where it helps the story.",
+    image: "/Motion.png", width: 480, height: 720, icon: WandSparkles, tone: "peach", layout: "portrait",
   },
   {
-    icon: AudioLines,
-    label: "Separate audio",
-    title: "Two tracks. Zero compromises.",
-    copy: "Desktop and microphone audio remain independent, synchronized, and ready to mute or tune directly in the timeline.",
-    className: "feature-audio",
+    eyebrow: "Cursor", title: "Make every interaction readable.",
+    copy: "Style the pointer, smooth its travel, and choose click effects that guide attention without taking it over.",
+    image: "/Cursor.png", width: 1920, height: 1080, icon: MousePointer2, tone: "sky", layout: "wide",
   },
   {
-    icon: MousePointer2,
-    label: "Cursor motion",
-    title: "Movement that feels intentional.",
-    copy: "Smooth pointer travel, choose a cursor style, add click effects, and keep every interaction readable without distraction.",
-    className: "feature-cursor",
+    eyebrow: "Captions", title: "Words that arrive on cue.",
+    copy: "Generate captions locally, then refine timing, typography, spacing, color, and animation inside the same edit.",
+    image: "/Caption.png", width: 480, height: 720, icon: Captions, tone: "sage", layout: "portrait",
   },
   {
-    icon: Smartphone,
-    label: "Mobile recording",
-    title: "Phone capture joins the same edit.",
-    copy: "Record Android or iPhone video with synchronized audio, recovery-safe saving, and the same automatic zoom workflow.",
-    className: "feature-mobile",
+    eyebrow: "Layers & effects", title: "Explain more than the recording can.",
+    copy: "Add text, shapes, highlights, masks, and image layers directly to the timeline without leaving Snap.",
+    image: "/Effects.png", width: 1920, height: 1080, icon: Layers3, tone: "lilac", layout: "wide",
   },
-];
+] as const;
 
 export default function Home() {
   const [donateOpen, setDonateOpen] = useState(false);
@@ -91,14 +51,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!donateOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDonateOpen(false);
-    };
+    const close = (event: KeyboardEvent) => event.key === "Escape" && setDonateOpen(false);
     document.body.classList.add("modal-open");
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", close);
     return () => {
       document.body.classList.remove("modal-open");
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", close);
     };
   }, [donateOpen]);
 
@@ -120,166 +78,157 @@ export default function Home() {
   };
 
   return (
-    <main className="snap-site">
-      <header className="site-header shell">
-        <a className="brand" href="#top" aria-label="Snap home">
-          <BrandMark />
-          <span className="brand-copy"><strong>Snap</strong><small>Screen Studio</small></span>
-        </a>
-        <div className="header-status"><span /> Native Windows capture</div>
-        <div className="header-actions">
-          <DonateButton compact onClick={() => setDonateOpen(true)} />
-          <DownloadButton compact />
+    <div className="site-frame" id="top">
+      <header className="site-nav shell">
+        <a className="brand" href="#top" aria-label="Snap home"><BrandMark /><strong>Snap</strong></a>
+        <nav aria-label="Primary navigation">
+          <a href="#product">Product</a><a href="#tools">Tools</a><a href="#workflow">Workflow</a>
+        </nav>
+        <div className="nav-actions">
+          <button className="text-button" onClick={() => setDonateOpen(true)}><Heart size={15} /> Support</button>
+          <a className="nav-download" href="/download">Get Snap <ArrowRight size={14} /></a>
         </div>
       </header>
 
-      <section className="hero shell" id="top">
-        <div className="hero-copy">
-          <div className="hero-kicker"><Sparkles size={14} /> Record once. Finish in Snap.</div>
-          <h1>Your screen recording,<br /><span>already directed.</span></h1>
-          <p>Snap records every click, sound, and movement—then turns them into an editable camera system made for clear, polished videos.</p>
-          <div className="hero-actions">
-            <DownloadButton />
-            <DonateButton onClick={() => setDonateOpen(true)} />
-          </div>
-          <div className="hero-trust">
-            <span><Gauge size={15} /> Hardware accelerated</span>
-            <span><ShieldCheck size={15} /> Local-first</span>
-            <span><CircleDot size={15} /> 60 FPS</span>
-          </div>
-        </div>
-
-        <div className="product-stage">
-          <div className="stage-glow" />
-          <div className="stage-orbit stage-orbit-one" />
-          <div className="stage-orbit stage-orbit-two" />
-          <div className="product-window">
-            <div className="product-topbar">
-              <span className="product-brand"><BrandMark muted /> Snap Editor</span>
-              <span className="product-file">snap_1786441712922.mp4</span>
-              <span className="product-dots"><i /><i /><i /></span>
+      <main>
+        <section className="hero shell">
+          <div className="hero-sky">
+            <span className="cloud cloud-one" /><span className="cloud cloud-two" />
+            <div className="hero-copy">
+              <div className="eyebrow-pill"><Sparkles size={13} /> Snap 8 is ready</div>
+              <h1>Record the screen.<br /><em>Direct the attention.</em></h1>
+              <p>A lightweight Windows recorder with an editor that adds camera movement, cursor clarity, captions, and polish—without sending your work to the cloud.</p>
+              <div className="hero-actions">
+                <DownloadButton />
+                <a className="button button-secondary" href="#product">See how it works <ArrowRight size={15} /></a>
+              </div>
             </div>
-            <div className="product-image-wrap">
-              <Image
-                className="product-image"
-                src="/editor-preview.png"
-                alt="Snap editor with canvas controls and a multitrack timeline"
-                width={1920}
-                height={1041}
-                priority
-              />
+            <div className="hero-badges">
+              <span><Zap size={14} /> Hardware capture</span>
+              <span><ShieldCheck size={14} /> Local-first</span>
+              <span><MonitorUp size={14} /> Windows 10 / 11</span>
             </div>
           </div>
-          <div className="stage-chip chip-zoom"><Focus size={15} /> Auto Zoom <strong>1.9×</strong></div>
-          <div className="stage-chip chip-audio"><AudioLines size={15} /> Two audio tracks</div>
-          <div className="stage-chip chip-local"><ShieldCheck size={15} /> Saved locally</div>
-        </div>
-      </section>
 
-      <section className="signal-bar" aria-label="Snap highlights">
-        <div className="signal-track">
-          <span><Focus /> Editable Auto Zoom</span><i />
-          <span><Mic2 /> Desktop + microphone</span><i />
-          <span><ScanLine /> Cursor intelligence</span><i />
-          <span><MonitorUp /> Native Windows capture</span><i />
-          <span><Focus /> Editable Auto Zoom</span>
-        </div>
-      </section>
+          <div className="hero-product" id="product">
+            <div className="window-bar">
+              <span><BrandMark /> Snap Editor</span><small>snap_1789989309422.mp4</small><i /><i /><i />
+            </div>
+            <Image src="/EditorPreview.png" alt="Snap editor showing canvas controls, video preview, audio waveforms, zoom regions, and captions" width={1920} height={1080} loading="eager" sizes="(max-width: 900px) 94vw, 1240px" />
+          </div>
+        </section>
 
-      <section className="features shell">
-        <div className="section-intro">
-          <span className="section-index">01 — THE EDIT SYSTEM</span>
-          <h2>Everything your recording<br />needs. Nothing it doesn’t.</h2>
-          <p>Designed as one continuous workflow instead of a pile of disconnected tools.</p>
-        </div>
+        <section className="proof shell" aria-label="Snap product facts">
+          <div><strong>60 FPS</strong><span>hardware-oriented capture</span></div>
+          <div><strong>2 tracks</strong><span>desktop + microphone audio</span></div>
+          <div><strong>Local</strong><span>record, caption, and export privately</span></div>
+          <div><strong>Editable</strong><span>every zoom remains under your control</span></div>
+        </section>
 
-        <div className="feature-grid">
-          {featureCards.map(({ icon: Icon, label, title, copy, className }) => (
-            <article className={`feature-card ${className}`} key={label}>
-              <div className="feature-card-head"><span className="feature-icon"><Icon size={21} /></span><small>{label}</small></div>
-              {className === "feature-auto" && (
-                <div className="auto-visual" aria-hidden="true">
-                  <div className="auto-screen"><span className="focus-node focus-node-one" /><span className="focus-node focus-node-two" /><span className="focus-path" /></div>
-                  <div className="auto-timeline"><span /><strong>1.8×</strong><span /></div>
+        <section className="manifesto shell">
+          <span className="section-label">Built for showing, not fixing</span>
+          <div>
+            <h2>Your recording already knows<br />where the story happened.</h2>
+            <p>Snap remembers the clicks, pointer movement, audio, and timing behind every take. The editor turns those signals into a first pass you can shape instead of starting from an empty timeline.</p>
+          </div>
+        </section>
+
+        <section className="focus-feature shell">
+          <div className="focus-copy">
+            <span className="feature-number">01</span><Focus size={21} />
+            <span className="section-label">The edit system</span>
+            <h2>A polished frame,<br />before you touch a keyframe.</h2>
+            <p>Choose a canvas, set the padding and corners, then let Auto Zoom build a clean camera path from the moments that matter.</p>
+            <ul>
+              <li><Check size={15} /> Editable Auto Zoom regions</li>
+              <li><Check size={15} /> Backgrounds, images, gradients, and shadows</li>
+              <li><Check size={15} /> Multitrack audio and caption timeline</li>
+            </ul>
+          </div>
+          <div className="focus-image">
+            <Image src="/EditorPreview.png" alt="Snap canvas and timeline editor" width={1920} height={1080} sizes="(max-width: 900px) 90vw, 720px" />
+          </div>
+        </section>
+
+        <section className="tools shell" id="tools">
+          <div className="section-heading">
+            <span className="section-label">A complete toolset</span>
+            <h2>Small controls.<br /><em>Big difference.</em></h2>
+            <p>Everything is arranged around the preview, so the work stays visual and the settings stay close to what they change.</p>
+          </div>
+
+          <div className="tool-grid">
+            {tools.map(({ eyebrow, title, copy, image, width, height, icon: Icon, tone, layout }) => (
+              <article className={`tool-card tool-${layout} tone-${tone}`} key={eyebrow}>
+                <div className="tool-copy">
+                  <span className="tool-icon"><Icon size={18} /></span><small>{eyebrow}</small>
+                  <h3>{title}</h3><p>{copy}</p>
                 </div>
-              )}
-              {className === "feature-audio" && (
-                <div className="audio-visual" aria-hidden="true">
-                  <div><Mic2 size={14} />{Array.from({ length: 17 }).map((_, index) => <i key={`mic-${index}`} style={{ height: `${12 + ((index * 13) % 34)}px` }} />)}</div>
-                  <div><MonitorUp size={14} />{Array.from({ length: 17 }).map((_, index) => <i key={`desk-${index}`} style={{ height: `${10 + ((index * 17) % 37)}px` }} />)}</div>
+                <div className="tool-image">
+                  <Image src={image} alt={`${eyebrow} controls in Snap`} width={width} height={height} sizes={layout === "wide" ? "(max-width: 900px) 90vw, 760px" : "(max-width: 900px) 90vw, 360px"} />
                 </div>
-              )}
-              {className === "feature-cursor" && (
-                <div className="cursor-visual" aria-hidden="true">
-                  <span><MousePointer2 /></span><span><MousePointer2 fill="currentColor" /></span><span><Sparkles /></span><span><CircleDot /></span>
-                </div>
-              )}
-              {className === "feature-mobile" && (
-                <div className="mobile-visual" aria-hidden="true">
-                  <span className="phone-frame"><i /></span><span className="mobile-link"><i /><i /><i /></span><span className="desktop-frame"><Focus /></span>
-                </div>
-              )}
-              <h3>{title}</h3>
-              <p>{copy}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+              </article>
+            ))}
+          </div>
 
-      <section className="workflow shell">
-        <div className="workflow-heading">
-          <span className="section-index">02 — ONE FLOW</span>
-          <h2>Capture to export,<br />without changing context.</h2>
-        </div>
-        <div className="workflow-steps">
-          <article><span>01</span><MonitorUp /><div><h3>Record</h3><p>Choose a screen, window, region, or connected phone.</p></div></article>
-          <article><span>02</span><WandSparkles /><div><h3>Shape</h3><p>Adjust zooms, audio, cursor, canvas, text, and masks.</p></div></article>
-          <article><span>03</span><Layers3 /><div><h3>Export</h3><p>Render a polished MP4 using the settings you actually need.</p></div></article>
-        </div>
-      </section>
+          <article className="caption-feature">
+            <div className="caption-preview"><Image src="/Audio.png" alt="Automatic caption generation panel in Snap" width={480} height={720} sizes="(max-width: 760px) 85vw, 380px" /></div>
+            <div className="caption-copy">
+              <span className="section-label">Offline captions</span>
+              <h2>Turn speech into<br />a designed layer.</h2>
+              <p>Pick an installed model, detect the language, generate locally, and refine every caption without uploading the recording.</p>
+              <div className="mini-facts">
+                <span><strong>Private</strong>Runs on your PC</span>
+                <span><strong>Flexible</strong>Burn in or export a sidecar</span>
+              </div>
+            </div>
+          </article>
+        </section>
 
-      <section className="final-cta shell">
-        <div className="cta-orb"><BrandMark /><span>1.0</span></div>
-        <div>
-          <span className="section-index">AVAILABLE FOR WINDOWS 10 / 11</span>
-          <h2>Make the screen<br />feel like a camera.</h2>
-        </div>
-        <div className="cta-actions">
-          <p>Download the latest release, or support the independent work behind Snap.</p>
-          <DownloadButton />
-          <DonateButton onClick={() => setDonateOpen(true)} />
-        </div>
-      </section>
+        <section className="workflow shell" id="workflow">
+          <div className="workflow-top"><span className="section-label">One continuous flow</span><h2>From capture to a video<br />that feels deliberately made.</h2></div>
+          <div className="workflow-grid">
+            <article><span>01</span><MonitorUp /><h3>Record lightly</h3><p>Native Windows capture stays out of the way while you work, play, or present.</p></article>
+            <article><span>02</span><Focus /><h3>Shape the focus</h3><p>Review the automatic camera pass and adjust any region directly on the timeline.</p></article>
+            <article><span>03</span><AudioLines /><h3>Finish the sound</h3><p>Balance desktop and microphone tracks independently, then add captions when needed.</p></article>
+            <article><span>04</span><Download /><h3>Export with confidence</h3><p>Render an MP4 with the canvas, motion, cursor, layers, and captions baked in.</p></article>
+          </div>
+        </section>
+
+        <section className="closing shell">
+          <div className="closing-orb"><BrandMark /></div>
+          <div><span className="section-label">Snap v8.0.0</span><h2>Make the screen<br /><em>feel like a camera.</em></h2></div>
+          <div className="closing-actions">
+            <p>Free to download for Windows. Local-first by design, with no account required.</p>
+            <DownloadButton light />
+            <button className="support-button" onClick={() => setDonateOpen(true)}><Heart size={16} /> Support independent development</button>
+          </div>
+        </section>
+      </main>
 
       <footer className="site-footer shell">
-        <div className="brand"><BrandMark muted /><span className="brand-copy"><strong>Snap</strong><small>Screen Studio</small></span></div>
-        <p>Recording tools with a point of view.</p>
-        <p>Windows · v7.0.5 · 2026</p>
+        <a className="brand" href="#top"><BrandMark /><strong>Snap</strong></a>
+        <p>Screen recording with a point of view.</p><p>Windows · v8.0.0 · 2026</p>
       </footer>
 
       {donateOpen && (
         <div className="donate-backdrop" onPointerDown={() => setDonateOpen(false)}>
           <section className="donate-dialog" role="dialog" aria-modal="true" aria-labelledby="donate-title" onPointerDown={(event) => event.stopPropagation()}>
-            <button className="donate-close" onClick={() => setDonateOpen(false)} aria-label="Close donation panel"><X size={19} /></button>
-            <div className="donate-message">
-              <BrandMark />
-              <span className="section-index">SUPPORT INDEPENDENT SOFTWARE</span>
-              <h2 id="donate-title">Help build the<br /><span>next Snap.</span></h2>
-              <p>Every contribution goes back into capture reliability, smarter Auto Zoom, faster exports, and better editing tools.</p>
-              <div className="donate-promise"><ShieldCheck size={16} /><span>Payment stays inside your UPI app. Snap never sees your payment information.</span></div>
+            <button className="donate-close" onClick={() => setDonateOpen(false)} aria-label="Close donation panel"><X size={18} /></button>
+            <div className="donate-copy">
+              <BrandMark /><span className="section-label">Support independent software</span>
+              <h2 id="donate-title">Help build the<br /><em>next Snap.</em></h2>
+              <p>Contributions go back into capture reliability, smarter motion, faster exports, and a calmer editing experience.</p>
+              <div><ShieldCheck size={16} /> Payment stays inside your UPI app.</div>
             </div>
             <div className="donate-payment">
-              <div className="qr-shell"><Image src="/donate.jpeg" alt="UPI QR code for donating to Snap" fill sizes="220px" priority /></div>
-              <div className="payment-label"><span>UPI ID</span><small>Scan or copy</small></div>
-              <strong>{UPI_ID}</strong>
-              <button className={`copy-id${copied ? " copied" : ""}`} onClick={() => void copyUpiId()}>
-                {copied ? <Check size={17} /> : <Copy size={17} />}
-                <span>{copied ? "Copied to clipboard" : "Copy UPI ID"}</span>
-              </button>
+              <div className="qr"><Image src="/donate.jpeg" alt="UPI QR code for donating to Snap" fill sizes="260px" /></div>
+              <small>UPI ID</small><strong>{UPI_ID}</strong>
+              <button onClick={() => void copyUpiId()}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Copied" : "Copy UPI ID"}</button>
             </div>
           </section>
         </div>
       )}
-    </main>
+    </div>
   );
 }
