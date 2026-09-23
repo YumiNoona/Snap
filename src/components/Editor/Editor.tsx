@@ -1174,7 +1174,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           exportedPath={lastExportPath}
           onClose={() => setShowExport(false)}
           onCancel={handleCancelExport}
-          onOpenFile={() => { if (lastExportPath) void openPath(lastExportPath); }}
+          onOpenFile={() => {
+            if (!lastExportPath) return;
+            void openPath(lastExportPath).catch((error) => {
+              setExportStatus(`Done: ${lastExportPath} · Could not open file: ${error instanceof Error ? error.message : String(error)}`);
+            });
+          }}
           onExport={handleExport}
         />
       )}
