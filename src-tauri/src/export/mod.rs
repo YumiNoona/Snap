@@ -451,12 +451,11 @@ fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) ->
 //
 // The editor renders every frame of the export the exact same way the
 // canvas preview does (background, cover-cropped pan/zoom, custom cursor
-// overlay, click ripples, mask layers) by playing the recording in real
-// time and capturing the on-screen canvas via `canvas.captureStream()` +
-// `MediaRecorder`. The resulting WebM bytes are streamed to disk here in
-// chunks (there's no bundled `fs` plugin, so this direct sink avoids
-// adding one), then muxed with the original audio and transcoded to the
-// user's chosen format by `finalize_canvas_export`.
+// overlay, click ripples, mask layers), then sends those frames through
+// WebCodecs into an IVF staging stream. The resulting bytes are streamed
+// to disk here in chunks (there's no bundled `fs` plugin, so this direct
+// sink avoids adding one), then muxed with the original audio and
+// transcoded to the user's chosen format by `finalize_canvas_export`.
 
 struct ExportSink {
     writer: BufWriter<File>,
@@ -470,7 +469,21 @@ fn export_sink() -> &'static StdMutex<Option<ExportSink>> {
     EXPORT_SINK.get_or_init(|| StdMutex::new(None))
 }
 
-/// Open (create/truncate) the temp file that streamed WebM chunks are
+fn validated_export_staging_path(
+    staging_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let allowed = [
+        output_path.with_extension("snapexport.ivf"),
+        output_path.with_extension("snapexport.webm"),
+    ];
+    allowed
+        .into_iter()
+        .find(|candidate| candidate == staging_path)
+        .ok_or_else(|| "Invalid export staging path".to_string())
+}
+
+/// Open (create/truncate) the temp file that encoded canvas chunks are
 /// written into. Must be called before any `write_export_chunk` calls.
 #[tauri::command]
 pub fn open_export_sink(
@@ -481,12 +494,9 @@ pub fn open_export_sink(
 ) -> std::result::Result<(), String> {
     let output = std::path::Path::new(&output_path);
     crate::access::require(&app, output)?;
-    let expected = output.with_extension("snapexport.webm");
-    if std::path::Path::new(&path) != expected {
-        return Err("Invalid export staging path".into());
-    }
+    let staging = validated_export_staging_path(std::path::Path::new(&path), output)?;
     for allowed in [
-        expected,
+        staging,
         output.with_extension("srt"),
         output.with_extension("vtt"),
     ] {
@@ -566,15 +576,15 @@ pub fn discard_canvas_export(
     output_path: String,
 ) -> std::result::Result<(), String> {
     crate::access::require(&app, std::path::Path::new(&output_path))?;
-    let expected = std::path::Path::new(&output_path).with_extension("snapexport.webm");
-    if std::path::Path::new(&temp_webm_path) != expected {
-        return Err("Invalid export staging path".into());
-    }
+    let staging = validated_export_staging_path(
+        std::path::Path::new(&temp_webm_path),
+        std::path::Path::new(&output_path),
+    )?;
     discard_export_sink_for_window(window.label());
     for path in [
-        expected.clone(),
-        std::path::PathBuf::from(format!("{}.clicks.wav", expected.display())),
-        std::path::PathBuf::from(format!("{}.captions.srt", expected.display())),
+        staging.clone(),
+        std::path::PathBuf::from(format!("{}.clicks.wav", staging.display())),
+        std::path::PathBuf::from(format!("{}.captions.srt", staging.display())),
     ] {
         match std::fs::remove_file(path) {
             Ok(()) => {}
@@ -1145,6 +1155,21 @@ fn finalize_canvas_export_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_path_accepts_webcodecs_ivf_and_rejects_unscoped_files() {
+        let output = std::path::Path::new(r"C:\Videos\Snap\clip.mp4");
+        assert!(validated_export_staging_path(
+            std::path::Path::new(r"C:\Videos\Snap\clip.snapexport.ivf"),
+            output,
+        )
+        .is_ok());
+        assert!(validated_export_staging_path(
+            std::path::Path::new(r"C:\Videos\Snap\other.snapexport.ivf"),
+            output,
+        )
+        .is_err());
+    }
 
     #[test]
     fn click_track_is_valid_pcm_wav_with_requested_duration() {
