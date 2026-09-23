@@ -79,8 +79,13 @@ export async function createExportCompositor(
   canvas.width = outputW;
   canvas.height = outputH;
   canvas.style.position = "fixed";
-  canvas.style.left = "-99999px";
-  canvas.style.top = "0px";
+  canvas.style.right = "0px";
+  canvas.style.bottom = "0px";
+  canvas.style.width = "1px";
+  canvas.style.height = "1px";
+  canvas.style.opacity = "0.001";
+  canvas.style.pointerEvents = "none";
+  canvas.style.zIndex = "2147483647";
   document.body.appendChild(canvas);
 
   let destroyed = false;

@@ -66,27 +66,27 @@ export async function runCanvasExport(
   let stream: MediaStream | null = null;
   let writeQueue: Promise<void> = Promise.resolve();
   let waitForRecorderStop: Promise<void> | null = null;
-  let recordedBytes = 0;
   try {
     throwIfAborted();
     await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
     sinkOpen = true;
 
-    const manualStream = compositor.canvas.captureStream(0);
-    const manualTrack = manualStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
-    if (manualTrack && typeof manualTrack.requestFrame === "function") {
-      stream = manualStream;
+    // WebView2's zero-rate/manual CanvasCaptureMediaStreamTrack mode can expose
+    // requestFrame() while silently producing an almost-empty WebM. Keep the
+    // browser's automatic capture clock active and request freshly composited
+    // frames as a supplemental signal. The native finalizer verifies the real
+    // packet count and duration before it installs the destination file.
+    stream = compositor.canvas.captureStream(Math.max(1, exportSettings.fps));
+    const captureTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
+    if (captureTrack && typeof captureTrack.requestFrame === "function") {
       const frameInterval = 1000 / Math.max(1, exportSettings.fps);
       let lastRequestedAt = -Infinity;
       compositor.setFrameConsumer(() => {
         const now = performance.now();
         if (now - lastRequestedAt + .5 < frameInterval) return;
         lastRequestedAt = now;
-        manualTrack.requestFrame();
+        captureTrack.requestFrame();
       });
-    } else {
-      manualStream.getTracks().forEach((track) => track.stop());
-      stream = compositor.canvas.captureStream(exportSettings.fps);
     }
     recorder = new MediaRecorder(stream, {
       mimeType: pickMimeType(),
@@ -104,7 +104,6 @@ export async function runCanvasExport(
         if (writeError) return;
         try {
           const buf = new Uint8Array(await e.data.arrayBuffer());
-          recordedBytes += buf.byteLength;
           for (let i = 0; i < buf.length; i += CHUNK_BYTES) {
             const slice = buf.subarray(i, Math.min(buf.length, i + CHUNK_BYTES));
             await invoke("write_export_chunk", { bytes: Array.from(slice) });
@@ -190,10 +189,6 @@ export async function runCanvasExport(
 
     if (recorderError) throw recorderError;
     if (writeError) throw new Error(`Export write failed: ${writeError}`);
-    if (totalMs >= 1000 && recordedBytes < 32 * 1024) {
-      throw new Error("The canvas encoder produced an incomplete video. No export file was saved; please try again.");
-    }
-
     await invoke("close_export_sink");
     sinkOpen = false;
 
