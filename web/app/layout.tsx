@@ -24,7 +24,7 @@ export function generateMetadata(): Metadata {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.variable} ${jetBrainsMono.variable}`}>{children}</body>
+      <body className={`${spaceGrotesk.className} ${spaceGrotesk.variable} ${jetBrainsMono.variable}`}>{children}</body>
     </html>
   );
 }

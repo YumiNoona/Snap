@@ -9,10 +9,11 @@
   --sage: #cbd8ba;
   --peach: #ebc9ae;
   --lilac: #d8cde7;
+  --accent: #f05432;
   --radius: 34px;
-  --font-display: var(--font-space-grotesk), "Arial Narrow", sans-serif;
-  --font-body: var(--font-space-grotesk), Arial, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), Consolas, monospace;
+  --font-display: var(--font-space-grotesk, Arial), "Arial Narrow", sans-serif;
+  --font-body: var(--font-space-grotesk, Arial), Arial, sans-serif;
+  --font-mono: var(--font-jetbrains-mono, Consolas), Consolas, monospace;
   --text-xs: .6875rem;
   --text-sm: .8125rem;
   --text-base: .9375rem;
@@ -102,11 +103,11 @@ button { color: inherit; }
 h1, h2, h3, p { margin-top: 0; }
 .hero h1, .manifesto h2, .focus-feature h2, .section-heading h2, .caption-feature h2, .workflow h2, .closing h2, .donate-copy h2 {
   font-family: var(--font-display);
-  font-weight: 600;
-  letter-spacing: -.055em;
+  font-weight: 700;
+  letter-spacing: -.06em;
 }
 .hero h1 { font-size: clamp(3.625rem, 7.1vw, 6.625rem); line-height: .91; margin: 30px 0 25px; }
-.hero h1 em, .section-heading h2 em, .closing h2 em, .donate-copy h2 em { font-weight: 450; }
+.accent-line { color: var(--accent); font-style: normal; font-weight: inherit; }
 .hero-copy > p { max-width: 660px; margin: 0 auto; font-size: var(--text-md); line-height: 1.65; color: #3e4b4c; }
 .hero-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 31px; }
 .button {
@@ -131,10 +132,12 @@ h1, h2, h3, p { margin-top: 0; }
 .window-bar > i { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.2); }
 .hero-product img { display: block; width: 100%; height: auto; border-radius: 16px; }
 
-.proof { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; grid-template-columns: repeat(4,1fr); }
-.proof > div { padding: 28px 25px; display: grid; gap: 6px; border-left: 1px solid var(--line); }
-.proof > div:first-child { border-left: 0; }
-.proof strong { font-family: var(--font-display); font-size: 1.75rem; font-weight: 600; letter-spacing: -.04em; }
+.proof { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.proof > div { min-height: 122px; padding: 25px; display: flex; flex-direction: column; justify-content: flex-end; gap: 7px; background: rgba(255,255,255,.62); border-radius: 20px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.5); }
+.proof > div:nth-child(2) { background: rgba(185,221,235,.44); }
+.proof > div:nth-child(3) { background: rgba(203,216,186,.5); }
+.proof > div:nth-child(4) { background: rgba(235,201,174,.44); }
+.proof strong { font-family: var(--font-display); font-size: 1.75rem; font-weight: 700; letter-spacing: -.045em; }
 .proof span { color: var(--muted); font-size: var(--text-xs); }
 
 .section-label { font-family: var(--font-mono); font-size: .625rem; text-transform: uppercase; letter-spacing: .14em; font-weight: 700; }
@@ -187,12 +190,14 @@ h1, h2, h3, p { margin-top: 0; }
 .workflow { border-top: 1px solid var(--line); padding-block: 110px 135px; }
 .workflow-top { display: grid; grid-template-columns: .65fr 2fr; gap: 40px; margin-bottom: 72px; }
 .workflow h2 { font-size: clamp(2.8125rem, 5vw, 4.5rem); line-height: .96; margin: 0; }
-.workflow-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); }
-.workflow-grid article { padding: 27px 24px 10px; min-height: 260px; border-left: 1px solid var(--line); display: flex; flex-direction: column; align-items: flex-start; }
-.workflow-grid article:first-child { border-left: 0; }
-.workflow-grid article > span { font-family: var(--font-mono); font-size: .625rem; color: var(--muted); margin-bottom: 45px; }
-.workflow-grid svg { margin-bottom: auto; }
-.workflow-grid h3 { font-family: var(--font-display); font-size: 1.6875rem; letter-spacing: -.035em; font-weight: 600; margin: 25px 0 9px; }
+.workflow-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.workflow-grid article { padding: 24px; min-height: 290px; border-radius: 24px; background: rgba(255,255,255,.65); display: flex; flex-direction: column; align-items: flex-start; box-shadow: inset 0 0 0 1px rgba(255,255,255,.55); }
+.workflow-grid article:nth-child(2) { background: rgba(185,221,235,.43); }
+.workflow-grid article:nth-child(3) { background: rgba(203,216,186,.5); }
+.workflow-grid article:nth-child(4) { background: rgba(216,205,231,.55); }
+.workflow-grid article > span { font-family: var(--font-mono); font-size: .625rem; color: var(--muted); margin-bottom: 24px; }
+.workflow-grid svg { width: 42px; height: 42px; padding: 11px; margin-bottom: auto; border-radius: 13px; background: var(--ink); color: white; }
+.workflow-grid h3 { font-family: var(--font-display); font-size: 1.6875rem; letter-spacing: -.04em; font-weight: 700; margin: 25px 0 9px; }
 .workflow-grid p { color: var(--muted); font-size: var(--text-xs); line-height: 1.65; margin: 0; }
 
 .closing { background: var(--sage); min-height: 540px; border-radius: var(--radius); padding: 62px; display: grid; grid-template-columns: .45fr 1.1fr .7fr; gap: 45px; align-items: center; }
@@ -259,8 +264,6 @@ h1, h2, h3, p { margin-top: 0; }
   .window-bar small { display: none; }
   .hero-product img { border-radius: 9px; }
   .proof { grid-template-columns: 1fr 1fr; }
-  .proof > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
-  .proof > div:nth-child(4) { border-top: 1px solid var(--line); }
   .manifesto { padding-block: 90px; gap: 36px; }
   .manifesto h2 { font-size: 2.6875rem; }
   .focus-feature { padding: 9px; border-radius: 25px; }
@@ -288,8 +291,6 @@ h1, h2, h3, p { margin-top: 0; }
   .mini-facts { grid-template-columns: 1fr; }
   .workflow { padding-block: 80px; }
   .workflow-grid { grid-template-columns: 1fr 1fr; }
-  .workflow-grid article:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
-  .workflow-grid article:nth-child(4) { border-top: 1px solid var(--line); }
   .closing { padding: 38px 27px; grid-template-columns: 1fr; gap: 35px; }
   .closing-orb { width: 80px; height: 80px; }
   .closing-actions { grid-column: auto; }
@@ -309,8 +310,6 @@ h1, h2, h3, p { margin-top: 0; }
   .proof > div { padding: 21px 14px; }
   .proof strong { font-size: 1.4375rem; }
   .workflow-grid { grid-template-columns: 1fr; }
-  .workflow-grid article { border-left: 0; border-top: 1px solid var(--line); }
-  .workflow-grid article:first-child { border-top: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

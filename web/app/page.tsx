@@ -96,7 +96,7 @@ export default function Home() {
             <span className="cloud cloud-one" /><span className="cloud cloud-two" />
             <div className="hero-copy">
               <div className="eyebrow-pill"><Sparkles size={13} /> Snap 8 is ready</div>
-              <h1>Record the screen.<br /><em>Direct the attention.</em></h1>
+              <h1>Record the screen.<br /><span className="accent-line">Direct the attention.</span></h1>
               <p>A lightweight Windows recorder with an editor that adds camera movement, cursor clarity, captions, and polish—without sending your work to the cloud.</p>
               <div className="hero-actions">
                 <DownloadButton />
@@ -153,7 +153,7 @@ export default function Home() {
         <section className="tools shell" id="tools">
           <div className="section-heading">
             <span className="section-label">A complete toolset</span>
-            <h2>Small controls.<br /><em>Big difference.</em></h2>
+            <h2>Small controls.<br /><span className="accent-line">Big difference.</span></h2>
             <p>Everything is arranged around the preview, so the work stays visual and the settings stay close to what they change.</p>
           </div>
 
@@ -197,7 +197,7 @@ export default function Home() {
 
         <section className="closing shell">
           <div className="closing-orb"><BrandMark /></div>
-          <div><span className="section-label">Snap v8.0.0</span><h2>Make the screen<br /><em>feel like a camera.</em></h2></div>
+          <div><span className="section-label">Snap v8.0.0</span><h2>Make the screen<br /><span className="accent-line">feel like a camera.</span></h2></div>
           <div className="closing-actions">
             <p>Free to download for Windows. Local-first by design, with no account required.</p>
             <DownloadButton light />
@@ -217,7 +217,7 @@ export default function Home() {
             <button className="donate-close" onClick={() => setDonateOpen(false)} aria-label="Close donation panel"><X size={18} /></button>
             <div className="donate-copy">
               <BrandMark /><span className="section-label">Support independent software</span>
-              <h2 id="donate-title">Help build the<br /><em>next Snap.</em></h2>
+              <h2 id="donate-title">Help build the<br /><span className="accent-line">next Snap.</span></h2>
               <p>Contributions go back into capture reliability, smarter motion, faster exports, and a calmer editing experience.</p>
               <div><ShieldCheck size={16} /> Payment stays inside your UPI app.</div>
             </div>
