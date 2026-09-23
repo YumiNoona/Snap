@@ -2,19 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe } from "./types";
 import { createExportCompositor } from "./exportCompositor";
 import { captionsToSrt, captionsToVtt } from "./captions";
+import { createIvfHeader, wrapIvfFrame, type IvfCodec } from "./ivf";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
   progress: number; // 0-1
   message: string;
-}
-
-function pickMimeType(): string {
-  const candidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
-  for (const c of candidates) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.(c)) return c;
-  }
-  return "video/webm";
 }
 
 /**
@@ -58,54 +51,58 @@ export async function runCanvasExport(
     signal
   );
 
-  const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.webm";
+  const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.ivf";
 
   let sinkOpen = false;
   let completed = false;
-  let recorder: MediaRecorder | null = null;
-  let stream: MediaStream | null = null;
+  let encoder: VideoEncoder | null = null;
   let writeQueue: Promise<void> = Promise.resolve();
-  let waitForRecorderStop: Promise<void> | null = null;
   try {
     throwIfAborted();
     await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
     sinkOpen = true;
 
-    // WebView2's zero-rate/manual CanvasCaptureMediaStreamTrack mode can expose
-    // requestFrame() while silently producing an almost-empty WebM. Keep the
-    // browser's automatic capture clock active and request freshly composited
-    // frames as a supplemental signal. The native finalizer verifies the real
-    // packet count and duration before it installs the destination file.
-    stream = compositor.canvas.captureStream(Math.max(1, exportSettings.fps));
-    const captureTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
-    if (captureTrack && typeof captureTrack.requestFrame === "function") {
-      const frameInterval = 1000 / Math.max(1, exportSettings.fps);
-      let lastRequestedAt = -Infinity;
-      compositor.setFrameConsumer(() => {
-        const now = performance.now();
-        if (now - lastRequestedAt + .5 < frameInterval) return;
-        lastRequestedAt = now;
-        captureTrack.requestFrame();
-      });
+    if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined") {
+      throw new Error("This WebView2 version does not support frame-accurate video export. Update Microsoft Edge WebView2 Runtime and try again.");
     }
-    recorder = new MediaRecorder(stream, {
-      mimeType: pickMimeType(),
-      videoBitsPerSecond: 12_000_000,
-    });
 
-    // Chunks must land on disk in the order they were produced — chain
-    // each write onto the previous one instead of firing them in parallel.
+    const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
+    const totalMs = Math.max(1, ((trimEnd - trimStart) / playbackRate) * 1000);
+    const fps = Math.max(1, Math.round(exportSettings.fps));
+    const totalFrames = Math.max(1, Math.ceil((totalMs / 1000) * fps));
+    const pixelsComparedWith1080p = (exportSettings.width * exportSettings.height) / (1920 * 1080);
+    const qualityBitrate = exportSettings.quality === "high" ? 12_000_000 : exportSettings.quality === "medium" ? 8_000_000 : 4_000_000;
+    const bitrate = Math.round(Math.max(1_000_000, Math.min(50_000_000, qualityBitrate * pixelsComparedWith1080p * (fps / 60))));
+    const candidates: Array<{ config: VideoEncoderConfig; fourCc: IvfCodec }> = [
+      { config: { codec: "vp8", width: exportSettings.width, height: exportSettings.height, bitrate, framerate: fps, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, fourCc: "VP80" },
+      { config: { codec: "vp09.00.10.08", width: exportSettings.width, height: exportSettings.height, bitrate, framerate: fps, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, fourCc: "VP90" },
+    ];
+    let selected: { config: VideoEncoderConfig; fourCc: IvfCodec } | null = null;
+    for (const candidate of candidates) {
+      try {
+        const support = await VideoEncoder.isConfigSupported(candidate.config);
+        if (support.supported) { selected = candidate; break; }
+      } catch { /* try the next Chromium-supported codec */ }
+    }
+    if (!selected) throw new Error("No WebCodecs VP8/VP9 encoder is available. Update your display driver and Microsoft Edge WebView2 Runtime.");
+
     let writeError: string | null = null;
     const CHUNK_BYTES = 256 * 1024;
-
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (e.data.size === 0) return;
+    const BATCH_BYTES = 1024 * 1024;
+    let pendingParts: Uint8Array[] = [];
+    let pendingBytes = 0;
+    const flushPendingBytes = () => {
+      if (pendingBytes === 0) return;
+      const combined = new Uint8Array(pendingBytes);
+      let offset = 0;
+      for (const part of pendingParts) { combined.set(part, offset); offset += part.byteLength; }
+      pendingParts = [];
+      pendingBytes = 0;
       writeQueue = writeQueue.then(async () => {
         if (writeError) return;
         try {
-          const buf = new Uint8Array(await e.data.arrayBuffer());
-          for (let i = 0; i < buf.length; i += CHUNK_BYTES) {
-            const slice = buf.subarray(i, Math.min(buf.length, i + CHUNK_BYTES));
+          for (let index = 0; index < combined.length; index += CHUNK_BYTES) {
+            const slice = combined.subarray(index, Math.min(combined.length, index + CHUNK_BYTES));
             await invoke("write_export_chunk", { bytes: Array.from(slice) });
           }
         } catch (err) {
@@ -113,20 +110,26 @@ export async function runCanvasExport(
         }
       });
     };
+    const queueBytes = (bytes: Uint8Array) => {
+      pendingParts.push(bytes);
+      pendingBytes += bytes.byteLength;
+      if (pendingBytes >= BATCH_BYTES) flushPendingBytes();
+    };
+    queueBytes(createIvfHeader(exportSettings.width, exportSettings.height, fps, totalFrames, selected.fourCc));
 
-    const activeRecorder = recorder;
-    let recorderError: Error | null = null;
-    const stopped = new Promise<void>((resolve) => {
-      activeRecorder.addEventListener("stop", () => resolve(), { once: true });
-      activeRecorder.addEventListener("error", (e: Event) => {
-        const err = (e as unknown as { error?: Error }).error;
-        recorderError = err ?? new Error("MediaRecorder error");
-        resolve();
-      }, { once: true });
+    let encoderError: Error | null = null;
+    let encodedFrames = 0;
+    encoder = new VideoEncoder({
+      output: (chunk) => {
+        const payload = new Uint8Array(chunk.byteLength);
+        chunk.copyTo(payload);
+        const frameIndex = Math.max(0, Math.round((chunk.timestamp * fps) / 1_000_000));
+        queueBytes(wrapIvfFrame(payload, frameIndex));
+        encodedFrames += 1;
+      },
+      error: (error) => { encoderError = error; },
     });
-    waitForRecorderStop = stopped;
-
-    const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
+    encoder.configure(selected.config);
 
     // Install the listener before seeking; seeking to the current time may emit nothing.
     if (Math.abs(compositor.video.currentTime - trimStart) > 0.001) {
@@ -141,21 +144,49 @@ export async function runCanvasExport(
 
     compositor.video.defaultPlaybackRate = playbackRate;
     compositor.video.playbackRate = playbackRate;
-    recorder.start(250);
+    let submittedFrames = 0;
+    const submitFramesThrough = (targetExclusive: number) => {
+      const cappedTarget = Math.min(totalFrames, Math.max(0, targetExclusive));
+      while (submittedFrames < cappedTarget) {
+        const timestamp = Math.round((submittedFrames * 1_000_000) / fps);
+        const duration = Math.round(1_000_000 / fps);
+        const frame = new VideoFrame(compositor.canvas, { timestamp, duration });
+        encoder!.encode(frame, { keyFrame: submittedFrames % Math.max(1, fps * 2) === 0 });
+        frame.close();
+        submittedFrames += 1;
+      }
+    };
+    compositor.setFrameConsumer(() => {
+      const sourceElapsed = Math.max(0, compositor.video.currentTime - trimStart);
+      const exportElapsed = sourceElapsed / playbackRate;
+      submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
+    });
     await compositor.video.play();
-
-    const totalMs = Math.max(1, (trimEnd - trimStart) * 1000);
 
     await new Promise<void>((resolve, reject) => {
       let lastTime = compositor.video.currentTime;
       let lastAdvance = performance.now();
+      let heldForEncoder = false;
       const check = () => {
         if (signal?.aborted) {
           reject(new DOMException("Export cancelled", "AbortError"));
           return;
         }
-        if (recorderError) {
-          reject(recorderError);
+        if (encoderError) {
+          reject(encoderError);
+          return;
+        }
+        if (!heldForEncoder && encoder!.encodeQueueSize > 24) {
+          compositor.video.pause();
+          heldForEncoder = true;
+        }
+        if (heldForEncoder) {
+          lastAdvance = performance.now();
+          if (encoder!.encodeQueueSize <= 6) {
+            heldForEncoder = false;
+            void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
+          }
+          requestAnimationFrame(check);
           return;
         }
         if (compositor.video.currentTime !== lastTime) { lastTime = compositor.video.currentTime; lastAdvance = performance.now(); }
@@ -183,12 +214,14 @@ export async function runCanvasExport(
       requestAnimationFrame(check);
     });
 
-    recorder.stop();
-    await stopped;
+    submitFramesThrough(totalFrames);
+    await encoder.flush();
+    flushPendingBytes();
     await writeQueue;
 
-    if (recorderError) throw recorderError;
+    if (encoderError) throw encoderError;
     if (writeError) throw new Error(`Export write failed: ${writeError}`);
+    if (encodedFrames !== totalFrames) throw new Error(`Video encoder returned ${encodedFrames} of ${totalFrames} requested frames.`);
     await invoke("close_export_sink");
     sinkOpen = false;
 
@@ -224,10 +257,8 @@ export async function runCanvasExport(
     return result;
   } finally {
     compositor.setFrameConsumer(null);
-    if (recorder && recorder.state !== "inactive") recorder.stop();
-    if (waitForRecorderStop) await waitForRecorderStop.catch(() => {});
+    if (encoder && encoder.state !== "closed") encoder.close();
     await writeQueue.catch(() => {});
-    stream?.getTracks().forEach((track) => track.stop());
     if (sinkOpen) await invoke("close_export_sink").catch(() => {});
     if (!completed) {
       await invoke("discard_canvas_export", {
