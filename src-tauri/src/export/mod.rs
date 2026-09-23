@@ -475,6 +475,8 @@ fn validated_export_staging_path(
 ) -> std::result::Result<std::path::PathBuf, String> {
     let allowed = [
         output_path.with_extension("snapexport.ivf"),
+        output_path.with_extension("snapexport.h264"),
+        output_path.with_extension("snapexport.mjpeg"),
         output_path.with_extension("snapexport.webm"),
     ];
     allowed
@@ -894,7 +896,18 @@ fn finalize_canvas_export_blocking(
         _ => "28",
     };
 
-    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), request.temp_webm_path.clone()];
+    let mut args: Vec<String> = vec!["-y".into()];
+    if std::path::Path::new(&request.temp_webm_path)
+        .extension()
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("h264") || extension.eq_ignore_ascii_case("mjpeg")
+        })
+    {
+        args.push("-r".into());
+        args.push(settings.fps.to_string());
+    }
+    args.push("-i".into());
+    args.push(request.temp_webm_path.clone());
 
     if settings.format == "gif" {
         // GIF export: no audio track. Downsample fps for reasonable file size.
@@ -1161,6 +1174,16 @@ mod tests {
         let output = std::path::Path::new(r"C:\Videos\Snap\clip.mp4");
         assert!(validated_export_staging_path(
             std::path::Path::new(r"C:\Videos\Snap\clip.snapexport.ivf"),
+            output,
+        )
+        .is_ok());
+        assert!(validated_export_staging_path(
+            std::path::Path::new(r"C:\Videos\Snap\clip.snapexport.h264"),
+            output,
+        )
+        .is_ok());
+        assert!(validated_export_staging_path(
+            std::path::Path::new(r"C:\Videos\Snap\clip.snapexport.mjpeg"),
             output,
         )
         .is_ok());

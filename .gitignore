@@ -66,6 +66,8 @@ recordings/
 exports/
 *.snapexport.webm
 *.snapexport.ivf
+*.snapexport.h264
+*.snapexport.mjpeg
 *.snapexport.webm.clicks.wav
 *.snapexport.webm.captions.srt
 .*.snapexport.final.*

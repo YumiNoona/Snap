@@ -10,6 +10,18 @@ export interface ExportProgress {
   message: string;
 }
 
+function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Could not encode an export frame"));
+        return;
+      }
+      void blob.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
+    }, "image/jpeg", 0.94);
+  });
+}
+
 /**
  * Runs the full canvas-accurate export: plays the recording in real time
  * through the same compositor Preview uses, captures the composited canvas
@@ -51,7 +63,8 @@ export async function runCanvasExport(
     signal
   );
 
-  const tempWebmPath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "") + ".snapexport.ivf";
+  const stagingBasePath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "");
+  let tempWebmPath = stagingBasePath + ".snapexport.ivf";
 
   let sinkOpen = false;
   let completed = false;
@@ -59,12 +72,7 @@ export async function runCanvasExport(
   let writeQueue: Promise<void> = Promise.resolve();
   try {
     throwIfAborted();
-    await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
-    sinkOpen = true;
-
-    if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined") {
-      throw new Error("This WebView2 version does not support frame-accurate video export. Update Microsoft Edge WebView2 Runtime and try again.");
-    }
+    const hasWebCodecs = typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
 
     const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
     const totalMs = Math.max(1, ((trimEnd - trimStart) / playbackRate) * 1000);
@@ -73,18 +81,35 @@ export async function runCanvasExport(
     const pixelsComparedWith1080p = (exportSettings.width * exportSettings.height) / (1920 * 1080);
     const qualityBitrate = exportSettings.quality === "high" ? 12_000_000 : exportSettings.quality === "medium" ? 8_000_000 : 4_000_000;
     const bitrate = Math.round(Math.max(1_000_000, Math.min(50_000_000, qualityBitrate * pixelsComparedWith1080p * (fps / 60))));
-    const candidates: Array<{ config: VideoEncoderConfig; fourCc: IvfCodec }> = [
-      { config: { codec: "vp8", width: exportSettings.width, height: exportSettings.height, bitrate, framerate: fps, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, fourCc: "VP80" },
-      { config: { codec: "vp09.00.10.08", width: exportSettings.width, height: exportSettings.height, bitrate, framerate: fps, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, fourCc: "VP90" },
+    type EncoderChoice =
+      | { config: VideoEncoderConfig; format: "annexb" }
+      | { config: VideoEncoderConfig; format: "ivf"; fourCc: IvfCodec };
+    const baseConfig = { width: exportSettings.width, height: exportSettings.height, bitrate, framerate: fps };
+    const h264Codec = exportSettings.width > 1920 || exportSettings.height > 1080
+      ? "avc1.640034"
+      : "avc1.64002A";
+    const candidates: EncoderChoice[] = [
+      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" }, hardwareAcceleration: "prefer-hardware", latencyMode: "realtime" }, format: "annexb" },
+      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" } }, format: "annexb" },
+      { config: { ...baseConfig, codec: "avc1.42002A", avc: { format: "annexb" } }, format: "annexb" },
+      { config: { ...baseConfig, codec: "vp8" }, format: "ivf", fourCc: "VP80" },
+      { config: { ...baseConfig, codec: "vp09.00.10.08" }, format: "ivf", fourCc: "VP90" },
     ];
-    let selected: { config: VideoEncoderConfig; fourCc: IvfCodec } | null = null;
-    for (const candidate of candidates) {
-      try {
-        const support = await VideoEncoder.isConfigSupported(candidate.config);
-        if (support.supported) { selected = candidate; break; }
-      } catch { /* try the next Chromium-supported codec */ }
+    let selected: EncoderChoice | null = null;
+    if (hasWebCodecs) {
+      for (const candidate of candidates) {
+        try {
+          const support = await VideoEncoder.isConfigSupported(candidate.config);
+          if (support.supported) { selected = candidate; break; }
+        } catch { /* try the next Chromium-supported codec */ }
+      }
     }
-    if (!selected) throw new Error("No WebCodecs VP8/VP9 encoder is available. Update your display driver and Microsoft Edge WebView2 Runtime.");
+    const exportMode: EncoderChoice | { format: "mjpeg" } = selected ?? { format: "mjpeg" };
+
+    const stagingExtension = exportMode.format === "annexb" ? "h264" : exportMode.format;
+    tempWebmPath = `${stagingBasePath}.snapexport.${stagingExtension}`;
+    await invoke("open_export_sink", { path: tempWebmPath, outputPath: exportSettings.outputPath });
+    sinkOpen = true;
 
     let writeError: string | null = null;
     const CHUNK_BYTES = 256 * 1024;
@@ -115,21 +140,31 @@ export async function runCanvasExport(
       pendingBytes += bytes.byteLength;
       if (pendingBytes >= BATCH_BYTES) flushPendingBytes();
     };
-    queueBytes(createIvfHeader(exportSettings.width, exportSettings.height, fps, totalFrames, selected.fourCc));
+    if (exportMode.format === "ivf") {
+      queueBytes(createIvfHeader(exportSettings.width, exportSettings.height, fps, totalFrames, exportMode.fourCc));
+    }
 
     let encoderError: Error | null = null;
     let encodedFrames = 0;
-    encoder = new VideoEncoder({
-      output: (chunk) => {
-        const payload = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(payload);
-        const frameIndex = Math.max(0, Math.round((chunk.timestamp * fps) / 1_000_000));
-        queueBytes(wrapIvfFrame(payload, frameIndex));
-        encodedFrames += 1;
-      },
-      error: (error) => { encoderError = error; },
-    });
-    encoder.configure(selected.config);
+    let jpegQueue: Promise<void> = Promise.resolve();
+    let jpegQueueDepth = 0;
+    if (exportMode.format !== "mjpeg") {
+      encoder = new VideoEncoder({
+        output: (chunk) => {
+          const payload = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(payload);
+          if (exportMode.format === "ivf") {
+            const frameIndex = Math.max(0, Math.round((chunk.timestamp * fps) / 1_000_000));
+            queueBytes(wrapIvfFrame(payload, frameIndex));
+          } else {
+            queueBytes(payload);
+          }
+          encodedFrames += 1;
+        },
+        error: (error) => { encoderError = error; },
+      });
+      encoder.configure(exportMode.config);
+    }
 
     // Install the listener before seeking; seeking to the current time may emit nothing.
     if (Math.abs(compositor.video.currentTime - trimStart) > 0.001) {
@@ -147,6 +182,21 @@ export async function runCanvasExport(
     let submittedFrames = 0;
     const submitFramesThrough = (targetExclusive: number) => {
       const cappedTarget = Math.min(totalFrames, Math.max(0, targetExclusive));
+      if (exportMode.format === "mjpeg" && submittedFrames < cappedTarget) {
+        const repeatCount = cappedTarget - submittedFrames;
+        submittedFrames = cappedTarget;
+        jpegQueueDepth += 1;
+        const snapshot = canvasToJpeg(compositor.canvas);
+        jpegQueue = jpegQueue
+          .then(async () => {
+            const payload = await snapshot;
+            for (let index = 0; index < repeatCount; index += 1) queueBytes(payload);
+            encodedFrames += repeatCount;
+          })
+          .catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); })
+          .finally(() => { jpegQueueDepth -= 1; });
+        return;
+      }
       while (submittedFrames < cappedTarget) {
         const timestamp = Math.round((submittedFrames * 1_000_000) / fps);
         const duration = Math.round(1_000_000 / fps);
@@ -176,13 +226,17 @@ export async function runCanvasExport(
           reject(encoderError);
           return;
         }
-        if (!heldForEncoder && encoder!.encodeQueueSize > 24) {
+        const encodeBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
+        const pauseThreshold = encoder ? 24 : 4;
+        const resumeThreshold = encoder ? 6 : 1;
+        if (!heldForEncoder && encodeBacklog > pauseThreshold) {
           compositor.video.pause();
           heldForEncoder = true;
         }
         if (heldForEncoder) {
           lastAdvance = performance.now();
-          if (encoder!.encodeQueueSize <= 6) {
+          const currentBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
+          if (currentBacklog <= resumeThreshold) {
             heldForEncoder = false;
             void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
           }
@@ -215,7 +269,8 @@ export async function runCanvasExport(
     });
 
     submitFramesThrough(totalFrames);
-    await encoder.flush();
+    if (encoder) await encoder.flush();
+    await jpegQueue;
     flushPendingBytes();
     await writeQueue;
 
