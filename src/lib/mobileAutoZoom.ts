@@ -58,6 +58,7 @@ export function analyzeMobileVisualActivity(
   const analysis = (async () => {
     if (durationMs < 1200 || sourceWidth <= 0 || sourceHeight <= 0) return [];
     const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
     video.muted = true;
     video.preload = "auto";
     video.playsInline = true;

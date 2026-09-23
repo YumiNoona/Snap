@@ -192,6 +192,7 @@ export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElemen
   const cached = cache.get(src);
   if (cached) return cached;
   const video = document.createElement("video");
+  video.crossOrigin = "anonymous";
   video.src = src;
   video.muted = true;
   video.playsInline = true;

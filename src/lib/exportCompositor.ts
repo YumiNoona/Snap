@@ -54,6 +54,7 @@ export async function createExportCompositor(
     window.setTimeout(finish, 2500);
   })));
   const video = document.createElement("video");
+  video.crossOrigin = "anonymous";
   video.src = convertFileSrc(videoPath);
   video.muted = true; // audio is muxed from the original sidecar wav files, not captured here
   video.playsInline = true;
@@ -66,6 +67,7 @@ export async function createExportCompositor(
   let camera: HTMLVideoElement | null = null;
   if (cameraMedia) {
     camera = document.createElement("video");
+    camera.crossOrigin = "anonymous";
     camera.src = convertFileSrc(cameraMedia.path);
     camera.muted = true;
     camera.playsInline = true;

@@ -179,6 +179,14 @@ export async function runCanvasExport(
 
     compositor.video.defaultPlaybackRate = playbackRate;
     compositor.video.playbackRate = playbackRate;
+    // A tainted canvas can display normally but browsers prohibit exporting
+    // pixels from it. Verify the sought frame before spending time rendering.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    try {
+      compositor.canvas.getContext("2d")?.getImageData(0, 0, 1, 1);
+    } catch (error) {
+      throw new Error(`A local video or image could not be prepared for export: ${error instanceof Error ? error.message : String(error)}`);
+    }
     let submittedFrames = 0;
     const submitFramesThrough = (targetExclusive: number) => {
       const cappedTarget = Math.min(totalFrames, Math.max(0, targetExclusive));
@@ -209,7 +217,11 @@ export async function runCanvasExport(
     compositor.setFrameConsumer(() => {
       const sourceElapsed = Math.max(0, compositor.video.currentTime - trimStart);
       const exportElapsed = sourceElapsed / playbackRate;
-      submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
+      try {
+        submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
+      } catch (error) {
+        encoderError = error instanceof Error ? error : new Error(String(error));
+      }
     });
     await compositor.video.play();
 
