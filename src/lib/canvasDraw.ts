@@ -156,8 +156,18 @@ export function drawImageLayer(
     else { dw = h * sourceRatio; dx += (w - dw) / 2; }
   }
   ctx.save();
+  ctx.globalCompositeOperation = layer.blendMode ?? "source-over";
+  ctx.filter = [
+    `brightness(${Math.max(0, layer.brightness ?? 100)}%)`,
+    `contrast(${Math.max(0, layer.contrast ?? 100)}%)`,
+    `saturate(${Math.max(0, layer.saturation ?? 100)}%)`,
+    `blur(${Math.max(0, layer.blur ?? 0)}px)`,
+    `hue-rotate(${layer.hue ?? 0}deg)`,
+    `grayscale(${Math.max(0, Math.min(100, layer.grayscale ?? 0))}%)`,
+  ].join(" ");
   ctx.beginPath();
-  roundRect(ctx, x, y, w, h, Math.max(0, Math.min(layer.cornerRadius ?? 10, w / 2, h / 2)));
+  const radius = Math.max(0, Math.min(layer.cornerRadius ?? 10, w / 2, h / 2));
+  roundRect(ctx, x, y, w, h, radius);
   ctx.clip();
   if ((layer.fit ?? "contain") === "cover") {
     const crop = computeCoverRect(0, 0, image.naturalWidth, image.naturalHeight, w, h);
@@ -166,6 +176,15 @@ export function drawImageLayer(
     ctx.drawImage(image, dx, dy, dw, dh);
   }
   ctx.restore();
+  if ((layer.borderWidth ?? 0) > 0) {
+    ctx.save();
+    ctx.beginPath();
+    roundRect(ctx, x, y, w, h, radius);
+    ctx.strokeStyle = layer.borderColor ?? "#ffffff";
+    ctx.lineWidth = Math.max(0, layer.borderWidth ?? 0);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>): HTMLVideoElement {
@@ -579,11 +598,13 @@ export interface MaskCameraFocus {
   mix: number;
 }
 
-export function resolveLayerFade(layer: Pick<MaskLayer, "start" | "end" | "transitionDuration">, timeSeconds: number): number {
-  const transition = Math.max(.12, Math.min(1.5, layer.transitionDuration ?? .45));
-  const edge = Math.min((timeSeconds - layer.start) / transition, (layer.end - timeSeconds) / transition, 1);
-  const linear = Math.max(0, Math.min(1, edge));
-  return linear * linear * (3 - 2 * linear);
+export function resolveLayerFade(layer: Pick<MaskLayer, "start" | "end" | "transitionDuration" | "exitTransitionDuration" | "transitionCurve">, timeSeconds: number): number {
+  const entrance = Math.max(.12, Math.min(2.5, layer.transitionDuration ?? .45));
+  const exit = Math.max(.12, Math.min(2.5, layer.exitTransitionDuration ?? entrance));
+  const curve = layer.transitionCurve ?? "smoother";
+  const fadeIn = motionEase((timeSeconds - layer.start) / entrance, curve);
+  const fadeOut = motionEase((layer.end - timeSeconds) / exit, curve);
+  return Math.max(0, Math.min(1, fadeIn, fadeOut));
 }
 
 /** Resolve the camera move and fade shared by preview and export masks. */
@@ -591,7 +612,7 @@ export function resolveMaskCameraFocus(layers: MaskLayer[], timeSeconds: number)
   const layer = layers.find((candidate) => timeSeconds >= candidate.start && timeSeconds <= candidate.end
     && candidate.mask !== "blur" && candidate.focusCamera !== false);
   if (!layer) return null;
-  const mix = resolveLayerFade(layer, timeSeconds);
+  const mix = resolveLayerFade(layer, timeSeconds) * Math.max(0, Math.min(1, layer.focusStrength ?? 1));
   const targetScale = layer.mask === "magnifier"
     ? Math.max(1.18, Math.min(2.2, 1 + (layer.intensity - 1) * .42))
     : Math.max(1.18, Math.min(1.65, 1.18 + layer.intensity * .18));

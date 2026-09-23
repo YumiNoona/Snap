@@ -268,7 +268,7 @@ export function generateKeyframes(
   const options: AutoZoomConfig = {
     preset: "balanced", minScale: MIN_SCALE, maxScale: MAX_SCALE, holdMs: MIN_HOLD_MS,
     cooldownMs: MERGE_GAP_MS, typingSensitivity: MIN_TYPING_BURST,
-    scrollSensitivity: 2, edgePadding: 0.015, ...requestedOptions,
+    scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out", ...requestedOptions,
   };
   options.minScale = clamp(options.minScale, 1.05, 3);
   options.maxScale = clamp(options.maxScale, options.minScale, 4);
@@ -342,7 +342,7 @@ export function generateKeyframes(
         x: 0.5,
         y: 0.5,
         scale: 1.0,
-        easing: "ease-in-out",
+        easing: options.curve,
       });
       prevKf = keyframes[keyframes.length - 1];
       lastHoldIndex = -1;
@@ -365,7 +365,7 @@ export function generateKeyframes(
       x: target.cx,
       y: target.cy,
       scale: target.scale,
-      easing: "ease-in-out",
+      easing: options.curve,
     });
 
     keyframes.push({
@@ -374,7 +374,7 @@ export function generateKeyframes(
       x: target.cx,
       y: target.cy,
       scale: target.scale,
-      easing: "ease-in-out",
+      easing: options.curve,
     });
     lastHoldIndex = keyframes.length - 1;
   }
@@ -392,7 +392,7 @@ export function generateKeyframes(
       x: 0.5,
       y: 0.5,
       scale: 1.0,
-      easing: "ease-in-out",
+      easing: options.curve,
     });
     lastKf = keyframes[keyframes.length - 1];
   }

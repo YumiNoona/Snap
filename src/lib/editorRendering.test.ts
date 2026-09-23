@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { drawTextLayer, motionEase, resolveZoom, drawVideoWithMotionBlur } from "./canvasDraw";
-import type { TextLayer } from "./types";
+import { describe, it, expect, vi } from "vitest";
+import { drawImageLayer, drawTextLayer, motionEase, resolveZoom, drawVideoWithMotionBlur } from "./canvasDraw";
+import type { ImageLayer, TextLayer } from "./types";
 
 describe("editor rendering regressions", () => {
   it("uses the selected camera curve in the shared preview/export renderer", () => {
@@ -34,5 +34,25 @@ describe("editor rendering regressions", () => {
     drawVideoWithMotionBlur(ctx, {} as CanvasImageSource, rect, rect, { enabled: true, panAmount: 100, zoomAmount: 100, cursorAmount: 0 }, { x: 10, y: 0, scale: .01 });
     expect(alphas[0]).toBe(1);
     expect(alphas[alphas.length - 1]).toBeLessThan(1);
+  });
+
+  it("applies image adjustments and border styling in the shared renderer", () => {
+    class MockImage { complete = true; naturalWidth = 200; naturalHeight = 100; crossOrigin = ""; decoding = ""; src = ""; }
+    vi.stubGlobal("Image", MockImage);
+    const filters: string[] = [];
+    let strokes = 0;
+    const ctx = {
+      save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arcTo() {}, clip() {}, drawImage() {},
+      stroke() { strokes += 1; },
+      set filter(value: string) { filters.push(value); },
+      set globalCompositeOperation(_value: string) {}, set strokeStyle(_value: string) {}, set lineWidth(_value: number) {},
+    } as unknown as CanvasRenderingContext2D;
+    const layer = { type: "image", path: "/adjusted-image-test.png", fit: "cover", brightness: 115, contrast: 90, saturation: 130, blur: 2, hue: 12, grayscale: 20, borderWidth: 3, borderColor: "#fff", blendMode: "overlay" } as ImageLayer;
+    drawImageLayer(ctx, layer, 0, 0, 200, 100);
+    expect(filters[0]).toContain("brightness(115%)");
+    expect(filters[0]).toContain("saturate(130%)");
+    expect(filters[0]).toContain("blur(2px)");
+    expect(strokes).toBe(1);
+    vi.unstubAllGlobals();
   });
 });

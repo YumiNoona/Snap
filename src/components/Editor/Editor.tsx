@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
 import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
@@ -76,6 +77,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [fileActionStatus, setFileActionStatus] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
+  const [lastExportPath, setLastExportPath] = useState("");
   const [isMaximized, setIsMaximized] = useState(false);
   const appWindow = useMemo(() => isBrowserPreview ? null : getCurrentWindow(), [isBrowserPreview]);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
@@ -444,6 +446,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       exportAbortRef.current = abortController;
       setExportStatus("Exporting...");
       setExportProgress(0);
+      setLastExportPath("");
       const result = await runCanvasExport(
         videoPath,
         inputLogPath,
@@ -457,7 +460,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         config.trimEnd > 0 ? config.trimEnd : duration,
         (p) => {
           if (p.phase === "recording") {
-            setExportStatus(`Exporting... ${Math.round(p.progress * 100)}%`);
+            setExportStatus("Exporting...");
             setExportProgress(p.progress);
           } else if (p.phase === "finalizing") {
             setExportStatus("Finalizing...");
@@ -468,6 +471,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       );
       setExportStatus(`Done: ${settings.outputPath}`);
       setExportProgress(1);
+      setLastExportPath(settings.outputPath);
       void result;
     } catch (e) {
       setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${e}`);
@@ -1167,8 +1171,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           captionTrackCount={captionTracks.length}
           status={exportStatus}
           progress={exportProgress}
+          exportedPath={lastExportPath}
           onClose={() => setShowExport(false)}
           onCancel={handleCancelExport}
+          onOpenFile={() => { if (lastExportPath) void openPath(lastExportPath); }}
           onExport={handleExport}
         />
       )}

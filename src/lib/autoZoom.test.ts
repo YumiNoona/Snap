@@ -50,6 +50,14 @@ describe("Auto Zoom", () => {
     expect(Math.max(...frames.map((frame) => frame.scale))).toBeLessThanOrEqual(1.3);
   });
 
+  it("bakes the selected camera curve into generated moves", () => {
+    const frames = generateKeyframes(
+      [event(1_000, "mousedown", 960, 540)], 1920, 1080, 5_000, 600,
+      { curve: "smoother" },
+    );
+    expect(frames.filter((frame) => frame.duration > 0).every((frame) => frame.easing === "smoother")).toBe(true);
+  });
+
   it("does not move the camera for typing below the configured intent threshold", () => {
     const typing = [0, 1, 2, 3].map((index) => event(1_000 + index * 80, "keydown", 600, 400));
     const frames = generateKeyframes(typing, 1920, 1080, 5_000, 600, { typingSensitivity: 6 });

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Clock3, Download, HardDrive, MonitorPlay, X } from "lucide-react";
+import { CheckCircle2, Clock3, Download, ExternalLink, HardDrive, MonitorPlay, RefreshCw, X } from "lucide-react";
 import type { EditorConfig, ExportSettings } from "../../lib/types";
 import "./ExportModal.css";
 
@@ -10,8 +10,10 @@ interface Props {
   captionTrackCount: number;
   status: string;
   progress: number;
+  exportedPath: string;
   onClose: () => void;
   onCancel: () => void;
+  onOpenFile: () => void;
   onExport: (settings: ExportSettings) => Promise<void>;
 }
 
@@ -33,7 +35,7 @@ function formatEstimate(seconds: number) {
   return `about ${Math.ceil(seconds / 60)} min`;
 }
 
-export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, onClose, onCancel, onExport }: Props) {
+export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, exportedPath, onClose, onCancel, onOpenFile, onExport }: Props) {
   const defaultPath = videoPath.replace(/\.[^\\/.]+$/i, "_edited.mp4");
   const [settings, setSettings] = useState<ExportSettings>({
     format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false,
@@ -122,8 +124,13 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
 
         <footer className="export-modal-footer">
           <span>{settings.width} × {settings.height} · {settings.fps} FPS · {settings.quality}</span>
-          {cancellable && <button type="button" onClick={onCancel}>Cancel export</button>}
-          <button className="export-start-button" disabled={exporting || !settings.outputPath.trim()} onClick={() => onExport(settings)}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>
+          <div className="export-footer-actions">
+            {cancellable && <button type="button" className="export-secondary-button" onClick={onCancel}>Cancel export</button>}
+            {done && exportedPath && <button type="button" className="export-open-button" onClick={onOpenFile}><ExternalLink size={17} /> Open file</button>}
+            {done
+              ? <button type="button" className="export-secondary-button export-again-button" disabled={!settings.outputPath.trim()} onClick={() => onExport(settings)}><RefreshCw size={16} /> Export again</button>
+              : <button className="export-start-button" disabled={exporting || !settings.outputPath.trim()} onClick={() => onExport(settings)}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>}
+          </div>
         </footer>
       </section>
     </div>

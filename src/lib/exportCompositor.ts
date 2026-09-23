@@ -15,6 +15,7 @@ export interface ExportCompositor {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   clickTimesMs: number[];
+  setFrameConsumer: (consumer: (() => void) | null) => void;
   destroy: () => void;
 }
 
@@ -84,6 +85,7 @@ export async function createExportCompositor(
 
   let destroyed = false;
   let rafId = 0;
+  let frameConsumer: (() => void) | null = null;
   const cleanup = () => {
     destroyed = true;
     if (rafId) cancelAnimationFrame(rafId);
@@ -462,6 +464,11 @@ export async function createExportCompositor(
       if (track.burnedIn) drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     }
 
+    // Chromium/WebView2 may aggressively coalesce frames for an offscreen
+    // canvas. Export uses a zero-rate capture track and explicitly requests a
+    // frame after the compositor has finished drawing each updated canvas.
+    frameConsumer?.();
+
     // Click-ripple spawning — export always plays forward in real time, so
     // this mirrors Preview's "playing" branch (never the seek/scrub branch).
     const prev = prevTs < 0 ? ts : prevTs;
@@ -478,6 +485,7 @@ export async function createExportCompositor(
     video,
     canvas,
     clickTimesMs: clickEvents.map((event) => event.ts),
+    setFrameConsumer: (consumer) => { frameConsumer = consumer; },
     destroy: cleanup,
   };
 }

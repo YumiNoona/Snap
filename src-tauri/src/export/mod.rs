@@ -20,6 +20,132 @@ fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, Stri
         .map_err(|error| format!("Failed while waiting for FFmpeg: {error}"))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct VideoProbeMetrics {
+    duration_seconds: f64,
+    packets: u64,
+    bytes: u64,
+}
+
+fn probe_video_metrics(path: &std::path::Path) -> std::result::Result<VideoProbeMetrics, String> {
+    let output = background_command("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=duration,nb_read_packets:format=duration",
+            "-of",
+            "json",
+        ])
+        .arg(path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Unable to inspect exported video: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "The exported video container is invalid: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to read exported video metadata: {error}"))?;
+    let stream = value
+        .get("streams")
+        .and_then(|streams| streams.as_array())
+        .and_then(|streams| streams.first())
+        .ok_or_else(|| "The exported file does not contain a video stream".to_string())?;
+    let parse_number = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(|value| value.as_str())
+            .and_then(|value| value.parse::<f64>().ok())
+    };
+    let stream_duration = parse_number(stream.get("duration"));
+    let format_duration = parse_number(
+        value
+            .get("format")
+            .and_then(|format| format.get("duration")),
+    );
+    let duration_seconds = stream_duration.or(format_duration).unwrap_or(0.0);
+    let packets = stream
+        .get("nb_read_packets")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let bytes = std::fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect exported video size: {error}"))?
+        .len();
+    Ok(VideoProbeMetrics {
+        duration_seconds,
+        packets,
+        bytes,
+    })
+}
+
+fn validate_video_metrics(
+    metrics: VideoProbeMetrics,
+    expected_duration_seconds: f64,
+    fps: u32,
+    require_duration: bool,
+) -> std::result::Result<(), String> {
+    let expected_duration_seconds = expected_duration_seconds.max(0.01);
+    let minimum_duration = if expected_duration_seconds < 0.5 {
+        expected_duration_seconds * 0.5
+    } else {
+        expected_duration_seconds * 0.75
+    };
+    let minimum_packets = (expected_duration_seconds * f64::from(fps.min(10)) * 0.5)
+        .ceil()
+        .max(1.0) as u64;
+    if metrics.bytes < 4_096
+        || (require_duration
+            && (!metrics.duration_seconds.is_finite()
+                || metrics.duration_seconds < minimum_duration))
+        || metrics.packets < minimum_packets
+    {
+        return Err(format!(
+            "Export validation failed: expected about {:.2}s of video, but received {:.2}s across {} frames ({} bytes). The incomplete file was not saved.",
+            expected_duration_seconds, metrics.duration_seconds, metrics.packets, metrics.bytes
+        ));
+    }
+    Ok(())
+}
+
+fn replace_export_output(
+    staged: &std::path::Path,
+    destination: &std::path::Path,
+) -> std::result::Result<(), String> {
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("export");
+    let backup = destination.with_file_name(format!(".{file_name}.snap-backup"));
+    let _ = std::fs::remove_file(&backup);
+    let had_previous = destination.exists();
+    if had_previous {
+        std::fs::rename(destination, &backup)
+            .map_err(|error| format!("Unable to preserve the previous export: {error}"))?;
+    }
+    match std::fs::rename(staged, destination) {
+        Ok(()) => {
+            if had_previous {
+                let _ = std::fs::remove_file(backup);
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if had_previous {
+                let _ = std::fs::rename(&backup, destination);
+            }
+            Err(format!("Unable to install the completed export: {error}"))
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct ExportKeyframe {
@@ -673,6 +799,13 @@ fn finalize_canvas_export_blocking(
         crate::access::require(&app, std::path::Path::new(&track.path))?;
     }
     let playback_rate = request.playback_rate.clamp(0.5, 2.0);
+    let captured_metrics = probe_video_metrics(std::path::Path::new(&request.temp_webm_path))?;
+    validate_video_metrics(
+        captured_metrics,
+        request.export_duration_seconds,
+        settings.fps,
+        false,
+    )?;
 
     eprintln!(
         "[Snap Export] Finalizing canvas export -> {}",
@@ -702,8 +835,26 @@ fn finalize_canvas_export_blocking(
             .unwrap_or(false);
     let click_wav = std::path::PathBuf::from(format!("{}.clicks.wav", request.temp_webm_path));
     let caption_srt = std::path::PathBuf::from(format!("{}.captions.srt", request.temp_webm_path));
-    let mut temporary_files =
-        ExportTempFiles(vec![std::path::PathBuf::from(&request.temp_webm_path)]);
+    let destination = std::path::PathBuf::from(&settings.output_path);
+    let output_parent = destination
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let output_stem = destination
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("export");
+    let output_extension = destination
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or(settings.format.as_str());
+    let final_staging = output_parent.join(format!(
+        ".{output_stem}.snapexport.final.{output_extension}"
+    ));
+    let _ = std::fs::remove_file(&final_staging);
+    let mut temporary_files = ExportTempFiles(vec![
+        std::path::PathBuf::from(&request.temp_webm_path),
+        final_staging.clone(),
+    ]);
     let has_embedded_captions = request
         .caption_srt
         .as_ref()
@@ -951,17 +1102,13 @@ fn finalize_canvas_export_blocking(
         ]);
     }
 
-    args.push(settings.output_path.clone());
+    args.push(final_staging.to_string_lossy().to_string());
 
     eprintln!(
         "[Snap Export] Finalize FFmpeg command: ffmpeg {}",
         args.join(" ")
     );
 
-    let mut incomplete_output = IncompleteExportOutput {
-        path: std::path::PathBuf::from(&settings.output_path),
-        armed: !std::path::Path::new(&settings.output_path).exists(),
-    };
     let output = run_ffmpeg(&args)?;
     let status = output.status;
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -971,9 +1118,16 @@ fn finalize_canvas_export_blocking(
         return Err(format!("FFmpeg exited with error: {status}\n{stderr}"));
     }
 
+    let finalized_metrics = probe_video_metrics(&final_staging)?;
+    validate_video_metrics(
+        finalized_metrics,
+        request.export_duration_seconds,
+        settings.fps,
+        true,
+    )?;
+    replace_export_output(&final_staging, &destination)?;
     let output = request.export_settings.output_path.clone();
     let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
-    incomplete_output.armed = false;
 
     eprintln!(
         "[Snap Export] Canvas export done — {} bytes written to {}",
@@ -1013,6 +1167,51 @@ mod tests {
         assert!(write_click_track(&path, &[f64::NAN], 1.0).is_err());
         assert!(write_click_track(&path, &[1_001.0], 1.0).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn export_validation_rejects_header_only_video() {
+        let result = validate_video_metrics(
+            VideoProbeMetrics {
+                duration_seconds: 0.016,
+                packets: 2,
+                bytes: 7_308,
+            },
+            20.0,
+            60,
+            true,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn export_validation_accepts_complete_video() {
+        validate_video_metrics(
+            VideoProbeMetrics {
+                duration_seconds: 19.98,
+                packets: 1_199,
+                bytes: 42_000_000,
+            },
+            20.0,
+            60,
+            true,
+        )
+        .expect("complete export");
+    }
+
+    #[test]
+    fn capture_validation_accepts_stream_without_container_duration() {
+        validate_video_metrics(
+            VideoProbeMetrics {
+                duration_seconds: 0.0,
+                packets: 1_199,
+                bytes: 42_000_000,
+            },
+            20.0,
+            60,
+            false,
+        )
+        .expect("complete streaming capture");
     }
 
     #[test]

@@ -130,7 +130,10 @@ export interface MaskLayer extends BaseLayer {
   borderWidth?: number;
   borderColor?: string;
   focusCamera?: boolean;
+  focusStrength?: number;
   transitionDuration?: number;
+  exitTransitionDuration?: number;
+  transitionCurve?: Keyframe["easing"];
 }
 
 export interface ImageLayer extends BaseLayer {
@@ -138,6 +141,15 @@ export interface ImageLayer extends BaseLayer {
   path: string;
   fit?: "cover" | "contain";
   cornerRadius?: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  blur?: number;
+  hue?: number;
+  grayscale?: number;
+  borderWidth?: number;
+  borderColor?: string;
+  blendMode?: "source-over" | "multiply" | "screen" | "overlay" | "soft-light";
 }
 
 export interface VideoLayer extends BaseLayer {
@@ -183,12 +195,13 @@ export interface AutoZoomConfig {
   typingSensitivity: number;
   scrollSensitivity: number;
   edgePadding: number;
+  curve: Keyframe["easing"];
 }
 
 export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<AutoZoomConfig, "preset">> = {
-  gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025 },
-  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015 },
-  dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01 },
+  gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025, curve: "sine" },
+  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out" },
+  dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01, curve: "smoother" },
 };
 
 export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
@@ -370,6 +383,7 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     typingSensitivity: 4,
     scrollSensitivity: 2,
     edgePadding: 0.015,
+    curve: "ease-in-out",
   },
   audio: {
     systemVolume: 100,

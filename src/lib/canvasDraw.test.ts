@@ -102,6 +102,14 @@ describe("mask camera transitions", () => {
     expect(focus?.mix).toBe(1);
   });
 
+  it("supports independent cinematic mask entrance and exit curves", () => {
+    const curved = { ...mask, transitionDuration: 1, exitTransitionDuration: .5, transitionCurve: "smoother" as const };
+    expect(resolveLayerFade(curved, 2)).toBe(0);
+    expect(resolveLayerFade(curved, 2.5)).toBeCloseTo(.5, 5);
+    expect(resolveLayerFade(curved, 5.75)).toBeCloseTo(.5, 5);
+    expect(resolveLayerFade(curved, 6)).toBe(0);
+  });
+
   it("samples a smaller centered region for a real magnifier effect", () => {
     const sample = resolveMagnifierSample(
       { x: 0, y: 0, w: 1920, h: 1080 },

@@ -117,6 +117,7 @@ export default function Timeline({
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
+  const [aspectMenuPosition, setAspectMenuPosition] = useState({ x: 8, y: 8 });
   const [waveforms, setWaveforms] = useState<Record<string, number[] | undefined>>({});
   const [waveformErrors, setWaveformErrors] = useState<Set<string>>(() => new Set());
   const [contentWidth, setContentWidth] = useState(600);
@@ -135,6 +136,8 @@ export default function Timeline({
   const timeAreaRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const aspectButtonRef = useRef<HTMLButtonElement>(null);
+  const aspectMenuRef = useRef<HTMLDivElement>(null);
 
   // Clean up drag listeners on unmount
   useEffect(() => {
@@ -158,6 +161,20 @@ export default function Timeline({
       window.removeEventListener("resize", close);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!showAspectMenu) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!aspectButtonRef.current?.contains(target) && !aspectMenuRef.current?.contains(target)) setShowAspectMenu(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setShowAspectMenu(false); };
+    const closeOnResize = () => setShowAspectMenu(false);
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("resize", closeOnResize);
+    return () => { window.removeEventListener("pointerdown", close); window.removeEventListener("keydown", escape); window.removeEventListener("resize", closeOnResize); };
+  }, [showAspectMenu]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -621,8 +638,13 @@ export default function Timeline({
         <div className="tb-left-group">
           <div className="aspect-menu-wrap">
             <button
+              ref={aspectButtonRef}
               className="ss-tb-btn aspect-btn"
-              onClick={() => setShowAspectMenu(!showAspectMenu)}
+              onClick={() => {
+                const rect = aspectButtonRef.current?.getBoundingClientRect();
+                if (rect) setAspectMenuPosition({ x: rect.left, y: rect.top - 7 });
+                setShowAspectMenu(!showAspectMenu);
+              }}
               title={`Aspect ratio: ${currentAspectLabel}`}
               aria-label={`Aspect ratio: ${currentAspectLabel}`}
             >
@@ -631,8 +653,8 @@ export default function Timeline({
               {showAspectMenu ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
 
-            {showAspectMenu && (
-              <div className="aspect-dropdown-menu">
+            {showAspectMenu && createPortal(
+              <div ref={aspectMenuRef} className={`aspect-dropdown-menu aspect-dropdown-portal theme-${editorTheme}`} style={{ left: aspectMenuPosition.x, top: aspectMenuPosition.y }}>
                 {ASPECT_RATIOS.map((ar) => (
                   <button
                     key={ar.label}
@@ -645,7 +667,7 @@ export default function Timeline({
                     {ar.label}
                   </button>
                 ))}
-              </div>
+              </div>, document.body
             )}
           </div>
 

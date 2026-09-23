@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-7.0.5-10b981?style=flat-square" alt="Version 7.0.5" />
+    <img src="https://img.shields.io/badge/version-8.0.0-10b981?style=flat-square" alt="Version 8.0.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,13 +22,30 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 7.0.5
+## Snap 8.0.0
 
-Snap 7 combines lightweight recording and reliable recovery with a calmer,
-glass-inspired interface across the recorder, editor, teleprompter, settings,
-window picker, and media library. The focused preview now behaves like a
-dedicated video player with auto-hiding controls and independent volume. It also
-includes the earlier recording, editing, caption, and camera improvements:
+Snap 8 focuses on a denser, more legible editor and dependable local export.
+The complete editor toolset keeps its full-size left rail while each selected
+tool opens a purpose-built panel with consistent controls, menus, spacing, and
+light/dark styling. This release includes:
+
+- A hardened canvas-to-FFmpeg export path that explicitly submits every rendered
+  frame on WebView2, validates input and output duration/frame counts, and never
+  replaces an existing export with a truncated file.
+- Clear export completion actions for opening the rendered file or exporting
+  again, with a single progress percentage throughout the render.
+- A richer media library with drag-and-drop import, image editing, duplicate-file
+  handling, timeline-aware deletion, and contextual actions.
+- Expanded canvas, cursor, layers, motion, audio, captions, mask, and Auto Zoom
+  controls with consistent type scale, custom menus, smoother curves, and
+  conditional advanced options.
+- Twenty-four backgrounds per palette, custom gradients and colors, image
+  backgrounds, improved transparent menus, and corrected light-theme surfaces.
+- Offline caption-model download sizes, installation and cancellation states,
+  plus clearer handling when a selected model is not installed.
+
+Snap also retains the lightweight recording and recovery work introduced in
+Snap 7:
 
 - Automatic recording uses hardware encoding with a conservative 720p/30 profile;
   CPU compatibility recording is available only when explicitly selected.

@@ -1302,3 +1302,7 @@
 .screenstudio-editor-layout[data-theme="light"] .media-search,
 .screenstudio-editor-layout[data-theme="light"] .media-new-folder input { color: #24221e; background: #eeece6; border-color: rgba(44,41,35,.12); }
 .screenstudio-editor-layout[data-theme="light"] .media-asset-name strong { color: #292722; }
+.screenstudio-editor-layout[data-theme="light"] .media-kind-tabs { background: #e9e7e2; border-color: rgba(44,41,35,.1); }
+.screenstudio-editor-layout[data-theme="light"] .media-kind-tabs button { color: #6c6860; }
+.screenstudio-editor-layout[data-theme="light"] .media-kind-tabs button:hover { color: #272521; background: rgba(255,255,255,.55); }
+.screenstudio-editor-layout[data-theme="light"] .media-kind-tabs button.active { color: #fff; background: #292724; }
