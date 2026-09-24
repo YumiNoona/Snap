@@ -281,10 +281,12 @@ export default function Timeline({
     [layers]
   );
   const visibleCaptionTracks = captionTracks.filter((track) => track.segments.length > 0);
+  const showActionTrack = config.actionOverlay.enabled && resolvedActionEvents.length > 0;
 
   const visibleTrackCount = 1
     + timelineAudioTracks.length
     + (zoomSegments.length > 0 ? 1 : 0)
+    + (showActionTrack ? 1 : 0)
     + visibleCaptionTracks.length
     + visibleLayerTypes.length;
   const { minimum: minimumTimelineHeight, maximum: maximumTimelineHeight } = timelineHeightBounds(visibleTrackCount);
@@ -846,6 +848,7 @@ export default function Timeline({
             </div>;
           })}
           {zoomSegments.length > 0 && <div className="track-label zoom-label" title="Zoom"><Sparkles size={14} /></div>}
+          {showActionTrack && <div className="track-label action-label" title="Keys & Clicks"><Keyboard size={14} /></div>}
           {visibleCaptionTracks.map((track) => <div className="track-label caption-label" title="Captions" key={track.id}><Captions size={14} /></div>)}
           {visibleLayerTypes.map((type) => (
             <div key={type} className={`track-label layer-label ${type}-label`} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : type === "video" ? "Video overlays" : "Text"}>
@@ -939,8 +942,7 @@ export default function Timeline({
             ))}
           </div>}
 
-          {config.actionOverlay.enabled && resolvedActionEvents.length > 0 && <div className="ss-track-row action-track" title="Keys and clicks overlay layer">
-            <div className="action-track-label"><Keyboard size={11} /><span>Actions</span></div>
+          {showActionTrack && <div className="ss-track-row action-track" title="Keys and clicks overlay layer">
             {resolvedActionEvents.map((action) => (
               <div
                 key={action.id}

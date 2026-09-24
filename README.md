@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-8.1.0-10b981?style=flat-square" alt="Version 8.1.0" />
+    <img src="https://img.shields.io/badge/version-8.1.1-10b981?style=flat-square" alt="Version 8.1.1" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,7 +22,12 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 8.1.0
+## Snap 8.1.1
+
+Snap 8.1.1 gives Keys & Clicks its own correctly aligned timeline track header,
+keeping action clips separate from captions and every later overlay lane.
+
+### Snap 8.1
 
 Snap 8.1 turns recorded keyboard and pointer activity into a first-class editing
 workflow while expanding the tools used to finish tutorial and product videos:

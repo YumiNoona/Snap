@@ -42,7 +42,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 8.1 adds a first-class Keys & Clicks timeline layer with editable keyboard, mouse, and scroll clips, privacy-safe shortcut capture, per-action timing and labels, and matching preview/export rendering. It also introduces Auto Zoom 2.0 controls, Webcam Studio, freeze frames, thumbnails, moving masks, snap-to-click annotations, layer-style copy/paste, comparison mode, delivery packages, and MP4, WebM, or looping GIF export.
+            Snap 8.1.1 separates Keys & Clicks into its own correctly aligned timeline track, while retaining editable keyboard, mouse, and scroll clips, privacy-safe shortcut capture, per-action timing and labels, and matching preview/export rendering.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

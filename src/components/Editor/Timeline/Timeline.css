@@ -355,6 +355,8 @@
 .track-label.video-label { flex-basis: 64px; }
 .track-label.audio-label { flex-basis: 32px; }
 .track-label.zoom-label { flex-basis: 30px; }
+.track-label.action-label { flex-basis: 38px; color: #68e0b0; }
+.track-label.caption-label { flex-basis: 34px; }
 .track-label.layer-label { flex-basis: 28px; }
 
 .track-label.audio-label {
@@ -1036,7 +1038,6 @@
 .zoom-empty-action { font-size: 11px; }
 .timeline-context-title { font-size: 11px; }
 .action-track { position: relative; min-height: 38px; overflow: hidden; background: color-mix(in srgb, #68e0b0 5%, transparent); }
-.action-track-label { position: absolute; z-index: 0; top: 4px; left: 5px; display: flex; align-items: center; gap: 4px; padding: 3px 5px; color: color-mix(in srgb, #68e0b0 68%, transparent); font-size: 8px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; pointer-events: none; }
 .action-event-bar { position: absolute; z-index: 1; top: 5px; height: calc(100% - 10px); min-width: 28px; display: flex; align-items: center; gap: 4px; overflow: hidden; padding: 0 9px; color: #dffcef; background: color-mix(in srgb, #133b2c 92%, transparent); border: 1px solid color-mix(in srgb, #68e0b0 60%, transparent); border-radius: 6px; cursor: grab; user-select: none; transition: opacity 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
 .action-event-bar:hover { z-index: 3; border-color: #8af3c9; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
 .action-event-bar.selected { z-index: 4; border-color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, #68e0b0 35%, transparent), 0 5px 14px rgba(0,0,0,.35); }
