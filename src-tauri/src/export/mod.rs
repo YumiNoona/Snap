@@ -20,6 +20,46 @@ fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, Stri
         .map_err(|error| format!("Failed while waiting for FFmpeg: {error}"))
 }
 
+#[tauri::command]
+pub async fn extract_video_frame(
+    app: tauri::AppHandle,
+    input_path: String,
+    output_path: String,
+    time_seconds: f64,
+) -> std::result::Result<String, String> {
+    crate::access::require(&app, std::path::Path::new(&input_path))?;
+    crate::access::require(&app, std::path::Path::new(&output_path))?;
+    if !time_seconds.is_finite() || time_seconds < 0.0 {
+        return Err("Invalid frame time".into());
+    }
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Unable to create frame folder: {error}"))?;
+    }
+    let args = vec![
+        "-y".into(),
+        "-ss".into(),
+        format!("{time_seconds:.3}"),
+        "-i".into(),
+        input_path,
+        "-frames:v".into(),
+        "1".into(),
+        "-update".into(),
+        "1".into(),
+        output_path.clone(),
+    ];
+    let output = tauri::async_runtime::spawn_blocking(move || run_ffmpeg(&args))
+        .await
+        .map_err(|error| error.to_string())??;
+    if !output.status.success() || !std::path::Path::new(&output_path).is_file() {
+        return Err(format!(
+            "Could not extract frame: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output_path)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VideoProbeMetrics {
     duration_seconds: f64,
@@ -180,6 +220,8 @@ pub struct ExportSettings {
     pub audio_mode: String,
     #[serde(rename = "normalizeAudio", default)]
     pub normalize_audio: bool,
+    #[serde(rename = "loop", default)]
+    pub loop_output: bool,
 }
 
 fn default_audio_mode() -> String {
@@ -798,7 +840,7 @@ fn finalize_canvas_export_blocking(
     {
         return Err("Export cannot overwrite the original recording".into());
     }
-    if !["mp4", "gif"].contains(&settings.format.as_str())
+    if !["mp4", "webm", "gif"].contains(&settings.format.as_str())
         || !(1..=60).contains(&settings.fps)
         || !(2..=7680).contains(&settings.width)
         || !(2..=4320).contains(&settings.height)
@@ -915,7 +957,16 @@ fn finalize_canvas_export_blocking(
         args.push("fps=15,scale=iw:-1:flags=lanczos".into());
         args.push("-f".into());
         args.push("gif".into());
+        if settings.loop_output {
+            args.push("-loop".into());
+            args.push("0".into());
+        }
     } else {
+        let audio_codec = if settings.format == "webm" {
+            "libopus"
+        } else {
+            "aac"
+        };
         // The canvas WebM has already been recorded at the selected clip
         // speed. Source WAVs still use original recording time, so retime only
         // those tracks; generated click audio is already placed in output time.
@@ -1035,7 +1086,7 @@ fn finalize_canvas_export_blocking(
                 args.push(format!("[a{slot}]"));
             }
             args.push("-c:a".into());
-            args.push("aac".into());
+            args.push(audio_codec.into());
             args.push("-b:a".into());
             args.push("192k".into());
             for (slot, (_, _, label, _)) in audio_sources.iter().enumerate() {
@@ -1071,7 +1122,7 @@ fn finalize_canvas_export_blocking(
             args.push("-map".into());
             args.push("[a]".into());
             args.push("-c:a".into());
-            args.push("aac".into());
+            args.push(audio_codec.into());
             args.push("-b:a".into());
             args.push("192k".into());
         } else if let Some((idx, volume, _, retime)) = audio_sources.first() {
@@ -1094,7 +1145,7 @@ fn finalize_canvas_export_blocking(
             args.push("-map".into());
             args.push("[a]".into());
             args.push("-c:a".into());
-            args.push("aac".into());
+            args.push(audio_codec.into());
             args.push("-b:a".into());
             args.push("192k".into());
         } else {
@@ -1107,22 +1158,40 @@ fn finalize_canvas_export_blocking(
             args.push("-map".into());
             args.push(format!("{index}:s:0"));
             args.push("-c:s".into());
-            args.push("mov_text".into());
+            args.push(if settings.format == "webm" {
+                "webvtt".into()
+            } else {
+                "mov_text".into()
+            });
             args.push("-metadata:s:s:0".into());
             args.push("language=und".into());
         }
 
-        args.extend_from_slice(&[
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            "medium".into(),
-            "-crf".into(),
-            crf.into(),
-            "-pix_fmt".into(),
-            "yuv420p".into(),
-            "-shortest".into(),
-        ]);
+        if settings.format == "webm" {
+            args.extend_from_slice(&[
+                "-c:v".into(),
+                "libvpx-vp9".into(),
+                "-crf".into(),
+                crf.into(),
+                "-b:v".into(),
+                "0".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                "-shortest".into(),
+            ]);
+        } else {
+            args.extend_from_slice(&[
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "medium".into(),
+                "-crf".into(),
+                crf.into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
+                "-shortest".into(),
+            ]);
+        }
     }
 
     args.push(final_staging.to_string_lossy().to_string());

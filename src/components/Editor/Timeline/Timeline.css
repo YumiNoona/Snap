@@ -1035,3 +1035,16 @@
 .layer-clip-bar > span,
 .zoom-empty-action { font-size: 11px; }
 .timeline-context-title { font-size: 11px; }
+.action-track { position: relative; min-height: 38px; overflow: hidden; background: color-mix(in srgb, #68e0b0 5%, transparent); }
+.action-track-label { position: absolute; z-index: 0; top: 4px; left: 5px; display: flex; align-items: center; gap: 4px; padding: 3px 5px; color: color-mix(in srgb, #68e0b0 68%, transparent); font-size: 8px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; pointer-events: none; }
+.action-event-bar { position: absolute; z-index: 1; top: 5px; height: calc(100% - 10px); min-width: 28px; display: flex; align-items: center; gap: 4px; overflow: hidden; padding: 0 9px; color: #dffcef; background: color-mix(in srgb, #133b2c 92%, transparent); border: 1px solid color-mix(in srgb, #68e0b0 60%, transparent); border-radius: 6px; cursor: grab; user-select: none; transition: opacity 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+.action-event-bar:hover { z-index: 3; border-color: #8af3c9; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.action-event-bar.selected { z-index: 4; border-color: #fff; box-shadow: 0 0 0 2px color-mix(in srgb, #68e0b0 35%, transparent), 0 5px 14px rgba(0,0,0,.35); }
+.action-event-bar.editing { cursor: grabbing; transition: none; }
+.action-event-bar.hidden { opacity: .3; filter: saturate(.25); background-image: repeating-linear-gradient(135deg,transparent 0 5px,rgba(255,255,255,.08) 5px 7px); }
+.action-event-bar.mouse { color: #e5efff; background-color: color-mix(in srgb, #173653 92%, transparent); border-color: #4c9fe7; }
+.action-event-bar.scroll { color: #fff0db; background-color: color-mix(in srgb, #503216 92%, transparent); border-color: #db9345; }
+.action-event-bar span { min-width: 0; overflow: hidden; font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.action-bar-handle { position: absolute; z-index: 2; top: 0; bottom: 0; width: 7px; padding: 0; background: transparent; border: 0; cursor: ew-resize; }
+.action-bar-handle.left { left: 0; }.action-bar-handle.right { right: 0; }
+.action-event-bar.selected .action-bar-handle::after { content: ""; position: absolute; top: 6px; bottom: 6px; left: 3px; width: 1px; background: rgba(255,255,255,.72); }

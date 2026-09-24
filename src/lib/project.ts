@@ -80,6 +80,12 @@ export function migrateProject(value: unknown): SnapProject {
       cursorMovement: { ...defaults.cursorMovement, ...(raw.editor?.cursorMovement ?? {}) },
       zoomMovement: { ...defaults.zoomMovement, ...(raw.editor?.zoomMovement ?? {}) },
       autoZoom: { ...defaults.autoZoom, ...(raw.editor?.autoZoom ?? {}) },
+      actionOverlay: {
+        ...defaults.actionOverlay,
+        ...(raw.editor?.actionOverlay ?? {}),
+        eventEdits: { ...defaults.actionOverlay.eventEdits, ...(raw.editor?.actionOverlay?.eventEdits ?? {}) },
+      },
+      cameraOverlay: { ...defaults.cameraOverlay, ...(raw.editor?.cameraOverlay ?? {}) },
       audio: { ...defaults.audio, ...(raw.editor?.audio ?? {}) },
       layers: Array.isArray(raw.editor?.layers) ? raw.editor.layers : [],
       cuts: Array.isArray(raw.editor?.cuts) ? raw.editor.cuts : [],

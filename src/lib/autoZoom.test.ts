@@ -63,4 +63,16 @@ describe("Auto Zoom", () => {
     const frames = generateKeyframes(typing, 1920, 1080, 5_000, 600, { typingSensitivity: 6 });
     expect(frames.every((frame) => frame.scale === 1)).toBe(true);
   });
+
+  it("supports deliberate activity-follow shots without treating tiny pointer drift as a cut", () => {
+    const moves = [event(500, "mousemove", 100, 100), event(1_100, "mousemove", 980, 520), event(1_700, "mousemove", 1_020, 540)];
+    const frames = generateKeyframes(moves, 1920, 1080, 5_000, 600, { focusMode: "follow", deadZone: .1 });
+    expect(frames.some((frame) => frame.scale > 1.02)).toBe(true);
+    expect(new Set(frames.filter((frame) => frame.scale > 1.02).map((frame) => frame.regionId)).size).toBeLessThanOrEqual(2);
+  });
+
+  it("uses independent click framing strength", () => {
+    const frames = generateKeyframes([event(800, "mousedown", 960, 540)], 1920, 1080, 4_000, 500, { singleClickScale: 2.1, maxScale: 2.2 });
+    expect(Math.max(...frames.map((frame) => frame.scale))).toBeCloseTo(2.1);
+  });
 });

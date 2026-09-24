@@ -134,6 +134,7 @@ export interface MaskLayer extends BaseLayer {
   transitionDuration?: number;
   exitTransitionDuration?: number;
   transitionCurve?: Keyframe["easing"];
+  followCursor?: boolean;
 }
 
 export interface ImageLayer extends BaseLayer {
@@ -196,13 +197,64 @@ export interface AutoZoomConfig {
   scrollSensitivity: number;
   edgePadding: number;
   curve: Keyframe["easing"];
+  focusMode: "clicks" | "follow" | "hybrid";
+  deadZone: number;
+  idleResetMs: number;
+  singleClickScale: number;
+  typingScale: number;
+  minimumShotMs: number;
 }
 
 export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<AutoZoomConfig, "preset">> = {
-  gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025, curve: "sine" },
-  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out" },
-  dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01, curve: "smoother" },
+  gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025, curve: "sine", focusMode: "clicks", deadZone: .16, idleResetMs: 4200, singleClickScale: 1.42, typingScale: 1.22, minimumShotMs: 1250 },
+  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out", focusMode: "hybrid", deadZone: .11, idleResetMs: 3000, singleClickScale: 1.62, typingScale: 1.3, minimumShotMs: 900 },
+  dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01, curve: "smoother", focusMode: "follow", deadZone: .07, idleResetMs: 2200, singleClickScale: 1.95, typingScale: 1.42, minimumShotMs: 620 },
 };
+
+export interface ActionOverlayConfig {
+  enabled: boolean;
+  showKeyboard: boolean;
+  showMouse: boolean;
+  showScroll: boolean;
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right";
+  style: "minimal" | "keys" | "tutorial";
+  scale: number;
+  textColor: string;
+  backgroundColor: string;
+  accentColor: string;
+  holdMs: number;
+  fadeMs: number;
+  maxItems: number;
+  hiddenEventIds: string[];
+  eventEdits: Record<string, ActionEventEdit>;
+}
+
+export interface ActionEventEdit {
+  /** Milliseconds added to the timestamp captured in the input sidecar. */
+  offsetMs?: number;
+  /** Time the action remains fully visible before the global fade begins. */
+  durationMs?: number;
+  /** Optional editor-authored label. The source sidecar remains untouched. */
+  label?: string;
+  hidden?: boolean;
+}
+
+export interface CameraOverlayConfig {
+  enabled: boolean;
+  x: number;
+  y: number;
+  width: number;
+  shape: "circle" | "rounded" | "square";
+  cornerRadius: number;
+  cropZoom: number;
+  cropX: number;
+  cropY: number;
+  mirror: boolean;
+  opacity: number;
+  borderWidth: number;
+  borderColor: string;
+  shadow: number;
+}
 
 export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 
@@ -303,11 +355,13 @@ export interface EditorConfig {
   cursorMovement: MovementConfig;
   zoomMovement: MovementConfig;
   autoZoom: AutoZoomConfig;
+  actionOverlay: ActionOverlayConfig;
+  cameraOverlay: CameraOverlayConfig;
   audio: AudioMixConfig;
 }
 
 export interface ExportSettings {
-  format: "mp4" | "gif";
+  format: "mp4" | "webm" | "gif";
   fps: number;
   width: number;
   height: number;
@@ -316,6 +370,8 @@ export interface ExportSettings {
   captions: "none" | "burned" | "srt" | "vtt" | "embedded" | "burned-srt";
   audioMode: "mixed" | "separate";
   normalizeAudio: boolean;
+  deliveryPackage: boolean;
+  loop: boolean;
 }
 
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
@@ -384,6 +440,45 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     scrollSensitivity: 2,
     edgePadding: 0.015,
     curve: "ease-in-out",
+    focusMode: "hybrid",
+    deadZone: .11,
+    idleResetMs: 3000,
+    singleClickScale: 1.62,
+    typingScale: 1.3,
+    minimumShotMs: 900,
+  },
+  actionOverlay: {
+    enabled: false,
+    showKeyboard: true,
+    showMouse: true,
+    showScroll: true,
+    position: "bottom-center",
+    style: "keys",
+    scale: 1,
+    textColor: "#ffffff",
+    backgroundColor: "#0f0f12",
+    accentColor: "#68e0b0",
+    holdMs: 1100,
+    fadeMs: 260,
+    maxItems: 3,
+    hiddenEventIds: [],
+    eventEdits: {},
+  },
+  cameraOverlay: {
+    enabled: true,
+    x: .82,
+    y: .79,
+    width: .24,
+    shape: "rounded",
+    cornerRadius: 18,
+    cropZoom: 1,
+    cropX: .5,
+    cropY: .5,
+    mirror: false,
+    opacity: 1,
+    borderWidth: 2,
+    borderColor: "#ffffff",
+    shadow: 24,
   },
   audio: {
     systemVolume: 100,

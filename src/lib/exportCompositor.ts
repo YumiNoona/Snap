@@ -3,6 +3,7 @@ import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
+import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
@@ -150,7 +151,8 @@ export async function createExportCompositor(
     cleanup();
     throw error;
   }
-  const { mouseMoveEvents, clickEvents, region } = inputLog;
+  const { allEvents, mouseMoveEvents, clickEvents, region } = inputLog;
+  const displayActions = buildDisplayActions(allEvents);
   if (camera) {
     await Promise.race([
       new Promise<void>((resolve) => {
@@ -422,7 +424,7 @@ export async function createExportCompositor(
         camera.playbackRate = video.playbackRate;
         if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
         if (!video.paused && camera.paused) void camera.play().catch(() => {});
-        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay);
       } else if (!camera.paused) {
         camera.pause();
       }
@@ -437,11 +439,15 @@ export async function createExportCompositor(
       maskSourceCtx.drawImage(canvas, 0, 0);
       for (const layer of activeLayers) {
         if (layer.type !== "mask") continue;
+        const trackedCursor = layer.followCursor ? getCursorAt(ts) : null;
+        const trackedPoint = trackedCursor ? screenToVideo(trackedCursor.x, trackedCursor.y, vw, vh) : null;
+        const trackedX = trackedPoint ? Math.max(0, Math.min(1 - layer.w, trackedPoint.x / vw - layer.w / 2)) : layer.x;
+        const trackedY = trackedPoint ? Math.max(0, Math.min(1 - layer.h, trackedPoint.y / vh - layer.h / 2)) : layer.y;
         const layerFade = resolveLayerFade(layer, videoTs);
         const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
         const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
-        const lx = offsetX + (layer.x + (.5 - layer.w / 2 - layer.x) * centerShift) * videoW;
-        const ly = offsetY + (layer.y + (.5 - layer.h / 2 - layer.y) * centerShift) * videoH;
+        const lx = offsetX + (trackedX + (.5 - layer.w / 2 - trackedX) * centerShift) * videoW;
+        const ly = offsetY + (trackedY + (.5 - layer.h / 2 - trackedY) * centerShift) * videoH;
         const lw = layer.w * videoW;
         const lh = layer.h * videoH;
         drawMaskLayer(
@@ -470,6 +476,7 @@ export async function createExportCompositor(
     for (const track of captionTracks) {
       if (track.burnedIn) drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     }
+    drawActionOverlay(ctx, displayActions, ts, config.actionOverlay, { x: offsetX, y: offsetY, w: videoW, h: videoH });
 
     // Chromium/WebView2 may aggressively coalesce frames for an offscreen
     // canvas. Export uses a zero-rate capture track and explicitly requests a

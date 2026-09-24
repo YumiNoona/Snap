@@ -1,16 +1,19 @@
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon, Keyboard } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
-import type { AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
+import type { ActionEventEdit, AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
 import { collectZoomRegions } from "../../../lib/zoomRegions";
 import { timelineHeightBounds } from "../../../lib/timelineLayout";
+import { loadInputLog } from "../../../lib/inputLog";
+import { buildDisplayActions, resolveDisplayActions, type DisplayAction, type ResolvedDisplayAction } from "../../../lib/actionOverlay";
 import "./Timeline.css";
 
 interface Props {
   editorTheme: "dark" | "light";
+  inputLogPath: string;
   audioTracks: AudioTrack[];
   duration: number;
   currentTime: number;
@@ -38,6 +41,9 @@ interface Props {
   onAudioTrackChange: (track: AudioTrack) => void;
   onAudioTrackRemove: (trackId: string) => void;
   onPlaybackRateChange: (rate: number) => void;
+  selectedActionId: string | null;
+  onActionSelect: (id: string) => void;
+  onActionEdit: (id: string, patch: ActionEventEdit) => void;
   selectedZoomRegion: ZoomRegionSelection | null;
   onZoomRegionSelect: (region: ZoomRegionSelection) => void;
   onZoomRegionDuplicate: (region: ZoomRegionSelection) => void;
@@ -70,6 +76,7 @@ interface ZoomSegment {
 
 export default function Timeline({
   editorTheme,
+  inputLogPath,
   audioTracks,
   duration,
   currentTime,
@@ -97,6 +104,9 @@ export default function Timeline({
   onAudioTrackChange,
   onAudioTrackRemove,
   onPlaybackRateChange,
+  selectedActionId,
+  onActionSelect,
+  onActionEdit,
   selectedZoomRegion,
   onZoomRegionSelect,
   onZoomRegionDuplicate,
@@ -114,6 +124,17 @@ export default function Timeline({
   onCaptionSegmentDuplicate,
   onCaptionSegmentDelete,
 }: Props) {
+  const [actionEvents, setActionEvents] = useState<DisplayAction[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!inputLogPath || !config.actionOverlay.enabled) { setActionEvents([]); return; }
+    void loadInputLog(inputLogPath).then((log) => { if (!cancelled) setActionEvents(buildDisplayActions(log.allEvents)); }).catch(() => { if (!cancelled) setActionEvents([]); });
+    return () => { cancelled = true; };
+  }, [config.actionOverlay.enabled, inputLogPath]);
+  const resolvedActionEvents = useMemo(
+    () => resolveDisplayActions(actionEvents, config.actionOverlay),
+    [actionEvents, config.actionOverlay],
+  );
   const [dragging, setDragging] = useState<"playhead" | "trim-start" | "trim-end" | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [showAspectMenu, setShowAspectMenu] = useState(false);
@@ -129,6 +150,7 @@ export default function Timeline({
     | { kind: "caption"; x: number; y: number; trackId: string; segment: CaptionSegment }
     | { kind: "audio"; x: number; y: number; track: AudioTrack; muted: boolean; label: string }
     | { kind: "clip"; x: number; y: number }
+    | { kind: "action"; x: number; y: number; action: ResolvedDisplayAction }
     | null
   >(null);
 
@@ -455,6 +477,70 @@ export default function Timeline({
       cleanup();
       bar.style.left = `${x(initialStart)}px`;
       bar.style.width = `${Math.max(18, w(layerDuration))}px`;
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+    dragCleanupRef.current = cleanup;
+  };
+
+  const beginActionEdit = (event: React.PointerEvent, action: ResolvedDisplayAction, mode: "move" | "start" | "end") => {
+    if (event.button !== 0 || duration <= 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onActionSelect(action.id);
+    const bar = (event.currentTarget as HTMLElement).closest<HTMLElement>(".action-event-bar");
+    if (!bar) return;
+    const startX = event.clientX;
+    const initialStart = action.ts / 1000;
+    const initialEnd = initialStart + action.durationMs / 1000;
+    const minTime = Math.max(0, config.trimStart);
+    const maxTime = Math.max(minTime + .15, config.trimEnd || duration);
+    let visualStart = initialStart;
+    let visualEnd = initialEnd;
+    let pending: ActionEventEdit | null = null;
+    let animationFrame = 0;
+    bar.classList.add("editing");
+
+    const paint = () => {
+      animationFrame = 0;
+      bar.style.left = `${x(visualStart)}px`;
+      bar.style.width = `${Math.max(28, w(visualEnd - visualStart))}px`;
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      const area = timeAreaRef.current;
+      if (!area) return;
+      const delta = ((moveEvent.clientX - startX) / area.getBoundingClientRect().width) * duration;
+      if (mode === "move") {
+        const bounded = Math.max(minTime - initialStart, Math.min(maxTime - initialEnd, delta));
+        visualStart = initialStart + bounded;
+        visualEnd = initialEnd + bounded;
+      } else if (mode === "start") {
+        visualStart = Math.max(minTime, Math.min(initialEnd - .15, initialStart + delta));
+        visualEnd = initialEnd;
+      } else {
+        visualStart = initialStart;
+        visualEnd = Math.max(initialStart + .15, Math.min(maxTime, initialEnd + delta));
+      }
+      pending = {
+        offsetMs: Math.round(visualStart * 1000 - action.sourceTs),
+        durationMs: Math.max(150, Math.round((visualEnd - visualStart) * 1000)),
+      };
+      if (!animationFrame) animationFrame = requestAnimationFrame(paint);
+    };
+    const cleanup = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      bar.classList.remove("editing");
+      dragCleanupRef.current = null;
+    };
+    const onUp = () => { cleanup(); if (pending) onActionEdit(action.id, pending); };
+    const onCancel = () => {
+      cleanup();
+      bar.style.left = `${x(initialStart)}px`;
+      bar.style.width = `${Math.max(28, w(initialEnd - initialStart))}px`;
     };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
@@ -853,6 +939,25 @@ export default function Timeline({
             ))}
           </div>}
 
+          {config.actionOverlay.enabled && resolvedActionEvents.length > 0 && <div className="ss-track-row action-track" title="Keys and clicks overlay layer">
+            <div className="action-track-label"><Keyboard size={11} /><span>Actions</span></div>
+            {resolvedActionEvents.map((action) => (
+              <div
+                key={action.id}
+                className={`action-event-bar ${action.kind} ${action.hidden ? "hidden" : ""} ${selectedActionId === action.id ? "selected" : ""}`}
+                style={{ left: x(action.ts / 1000), width: Math.max(28, w(action.durationMs / 1000)) }}
+                onPointerDown={(event) => beginActionEdit(event, action, "move")}
+                onClick={(event) => { event.stopPropagation(); onActionSelect(action.id); onSeek(action.ts / 1000); }}
+                onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ kind: "action", ...menuPosition(event), action }); }}
+                title={`${action.label} · ${(action.ts / 1000).toFixed(2)}s · drag to move, resize from either edge`}
+              >
+                <button className="action-bar-handle left" onPointerDown={(event) => beginActionEdit(event, action, "start")} aria-label="Change action start" />
+                <Keyboard size={10} /><span>{action.label}</span>
+                <button className="action-bar-handle right" onPointerDown={(event) => beginActionEdit(event, action, "end")} aria-label="Change action duration" />
+              </div>
+            ))}
+          </div>}
+
           {visibleCaptionTracks.map((track) => (
             <div className="ss-track-row caption-track" key={track.id}>
               {track.segments.map((segment) => (
@@ -946,8 +1051,20 @@ export default function Timeline({
               : contextMenu.kind === "layer" ? `${contextMenu.layer.type} layer`
                 : contextMenu.kind === "caption" ? "Caption segment"
                   : contextMenu.kind === "audio" ? contextMenu.label
+                    : contextMenu.kind === "action" ? contextMenu.action.label
                     : "Video clip"}
           </div>
+          {contextMenu.kind === "action" && <>
+            <button role="menuitem" onClick={() => { onActionSelect(contextMenu.action.id); onSeek(contextMenu.action.ts / 1000); setContextMenu(null); }}>
+              <SlidersHorizontal size={15} /> Go to and edit
+            </button>
+            <button role="menuitem" onClick={() => { onActionEdit(contextMenu.action.id, { hidden: !contextMenu.action.hidden }); setContextMenu(null); }}>
+              {contextMenu.action.hidden ? <Keyboard size={15} /> : <VolumeX size={15} />}{contextMenu.action.hidden ? "Show action" : "Hide action"}
+            </button>
+            <button role="menuitem" onClick={() => { onActionEdit(contextMenu.action.id, { offsetMs: 0, durationMs: config.actionOverlay.holdMs, label: actionEvents.find((action) => action.id === contextMenu.action.id)?.label ?? contextMenu.action.label, hidden: false }); setContextMenu(null); }}>
+              <RotateCcw size={15} /> Reset action
+            </button>
+          </>}
           {(contextMenu.kind === "zoom" || contextMenu.kind === "layer") && <>
             <button role="menuitem" onClick={() => {
               if (contextMenu.kind === "zoom") onZoomRegionSelect(contextMenu.region);

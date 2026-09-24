@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
+import type { CameraOverlayConfig, CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
 export function drawCaptionTrack(
@@ -732,32 +732,45 @@ export function drawCameraBubble(
   ctx: CanvasRenderingContext2D,
   camera: HTMLVideoElement,
   area: { x: number; y: number; w: number; h: number },
+  config: CameraOverlayConfig,
 ) {
-  if (camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || camera.videoWidth <= 0) return;
-  const width = Math.min(area.w * 0.24, 320);
+  if (!config.enabled || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || camera.videoWidth <= 0) return;
+  const width = area.w * Math.max(.08, Math.min(.7, config.width));
   const aspect = camera.videoWidth / Math.max(1, camera.videoHeight);
-  const height = Math.min(width / aspect, area.h * 0.34);
-  const actualWidth = height * aspect;
-  const margin = Math.max(10, Math.min(area.w, area.h) * 0.025);
-  const x = area.x + area.w - actualWidth - margin;
-  const y = area.y + area.h - height - margin;
-  const radius = Math.min(18, actualWidth * 0.08, height * 0.16);
-  const source = computeCoverRect(0, 0, camera.videoWidth, camera.videoHeight, actualWidth, height);
+  const circle = config.shape === "circle";
+  const height = circle ? width : Math.min(width / aspect, area.h * .65);
+  const actualWidth = circle ? width : height * aspect;
+  const x = Math.max(area.x, Math.min(area.x + area.w - actualWidth, area.x + Math.max(0, Math.min(1, config.x)) * area.w - actualWidth / 2));
+  const y = Math.max(area.y, Math.min(area.y + area.h - height, area.y + Math.max(0, Math.min(1, config.y)) * area.h - height / 2));
+  const radius = circle ? Math.min(actualWidth, height) / 2 : config.shape === "square" ? 0 : Math.min(config.cornerRadius, actualWidth / 2, height / 2);
+  const cover = computeCoverRect(0, 0, camera.videoWidth, camera.videoHeight, actualWidth, height);
+  const zoom = Math.max(1, Math.min(3, config.cropZoom));
+  const sourceW = cover.w / zoom, sourceH = cover.h / zoom;
+  const sourceX = Math.max(0, Math.min(camera.videoWidth - sourceW, cover.x + (cover.w - sourceW) * config.cropX));
+  const sourceY = Math.max(0, Math.min(camera.videoHeight - sourceH, cover.y + (cover.h - sourceH) * config.cropY));
 
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,.42)";
-  ctx.shadowBlur = Math.max(8, actualWidth * 0.04);
+  ctx.shadowBlur = config.shadow;
+  ctx.globalAlpha = Math.max(0, Math.min(1, config.opacity));
   ctx.beginPath();
   roundRect(ctx, x, y, actualWidth, height, radius);
   ctx.fillStyle = "#05070a";
   ctx.fill();
   ctx.clip();
-  ctx.drawImage(camera, source.x, source.y, source.w, source.h, x, y, actualWidth, height);
+  if (config.mirror) {
+    ctx.translate(x + actualWidth, y);
+    ctx.scale(-1, 1);
+    ctx.drawImage(camera, sourceX, sourceY, sourceW, sourceH, 0, 0, actualWidth, height);
+  } else {
+    ctx.drawImage(camera, sourceX, sourceY, sourceW, sourceH, x, y, actualWidth, height);
+  }
   ctx.restore();
 
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,.7)";
-  ctx.lineWidth = Math.max(1, actualWidth / 180);
+  ctx.globalAlpha = Math.max(0, Math.min(1, config.opacity));
+  ctx.strokeStyle = config.borderColor;
+  ctx.lineWidth = config.borderWidth;
   ctx.beginPath();
   roundRect(ctx, x, y, actualWidth, height, radius);
   ctx.stroke();

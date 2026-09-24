@@ -5,6 +5,7 @@ on:
   push:
     tags:
       - "app-v*"
+      - "v*"
 
 jobs:
   publish-windows:
@@ -38,10 +39,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: app-v__VERSION__
+          tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 5 delivers a lighter hardware-encoded recording path and a redesigned editor with dependable timeline playback, native duration recovery, improved text, shapes, masks, gradients, camera curves, and motion blur. Offline captions now install once, remain cached on the PC, and align more closely with audible speech. File access, project saves, exports, and recording recovery also received security and reliability improvements.
+            Snap 8.1 adds a first-class Keys & Clicks timeline layer with editable keyboard, mouse, and scroll clips, privacy-safe shortcut capture, per-action timing and labels, and matching preview/export rendering. It also introduces Auto Zoom 2.0 controls, Webcam Studio, freeze frames, thumbnails, moving masks, snap-to-click annotations, layer-style copy/paste, comparison mode, delivery packages, and MP4, WebM, or looping GIF export.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

@@ -38,7 +38,7 @@ function formatEstimate(seconds: number) {
 export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, exportedPath, onClose, onCancel, onOpenFile, onExport }: Props) {
   const defaultPath = videoPath.replace(/\.[^\\/.]+$/i, "_edited.mp4");
   const [settings, setSettings] = useState<ExportSettings>({
-    format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false,
+    format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true,
   });
   const activeDuration = Math.max(0.01, (config.trimEnd || duration) - config.trimStart);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
@@ -88,9 +88,9 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
 
             <div className="export-options-row">
               <label>Format<select value={settings.format} onChange={(e) => {
-                const format = e.target.value as "mp4" | "gif";
-                setSettings({ ...settings, format, outputPath: settings.outputPath.replace(/\.(mp4|gif)$/i, `.${format}`) });
-              }}><option value="mp4">MP4 · H.264</option><option value="gif">Animated GIF</option></select></label>
+                const format = e.target.value as ExportSettings["format"];
+                setSettings({ ...settings, format, outputPath: settings.outputPath.replace(/\.(mp4|webm|gif)$/i, `.${format}`) });
+              }}><option value="mp4">MP4 · H.264</option><option value="webm">WebM · VP9</option><option value="gif">Animated GIF</option></select></label>
               <label>Quality<select value={settings.quality} onChange={(e) => setSettings({ ...settings, quality: e.target.value as ExportSettings["quality"] })}><option value="high">High</option><option value="medium">Balanced</option><option value="low">Small file</option></select></label>
             </div>
             {captionTrackCount > 0 && <div className="export-options-row">
@@ -104,6 +104,8 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
               </select></label>
               <label>Normalization<select value={settings.normalizeAudio ? "on" : "off"} onChange={(event) => setSettings({ ...settings, normalizeAudio: event.target.value === "on" })}><option value="off">Preserve levels</option><option value="on">Normalize loudness</option></select></label>
             </div>}
+            {settings.format === "gif" && <div className="export-options-row"><label>Loop<select value={settings.loop ? "forever" : "once"} onChange={(event) => setSettings({ ...settings, loop: event.target.value === "forever" })}><option value="forever">Loop forever</option><option value="once">Play once</option></select></label></div>}
+            <label className="export-path-label">Delivery package<select value={settings.deliveryPackage ? "on" : "off"} onChange={(event) => setSettings({ ...settings, deliveryPackage: event.target.value === "on" })}><option value="off">Video only</option><option value="on">Video + thumbnail + transcript + chapters</option></select></label>
 
             <label className="export-path-label">Save as<input value={settings.outputPath} onChange={(e) => setSettings({ ...settings, outputPath: e.target.value })} /></label>
           </div>

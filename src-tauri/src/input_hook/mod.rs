@@ -56,6 +56,9 @@ static EVENT_TX: OnceLock<SyncSender<WriterMessage>> = OnceLock::new();
 static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_FPS: AtomicU64 = AtomicU64::new(30);
+// Bitset: Ctrl=1, Shift=2, Alt=4, Meta=8. This is only used to identify
+// shortcuts. Ordinary text remains the privacy-safe "Typing" marker.
+static KEY_MODIFIERS: AtomicU8 = AtomicU8::new(0);
 
 fn active_session_elapsed_ms() -> Option<u64> {
     let session_start = (*SESSION_START.lock().ok()?)?;
@@ -107,9 +110,55 @@ enum WriterMessage {
     },
 }
 
-fn key_name(_key: &rdev::Key) -> String {
-    // Auto-zoom needs typing timing, never the password or text being typed.
-    "Typing".to_string()
+fn modifier_bit(name: &str) -> u8 {
+    if name.starts_with("Control") {
+        1
+    } else if name.starts_with("Shift") {
+        2
+    } else if name.starts_with("Alt") {
+        4
+    } else if name.starts_with("Meta") {
+        8
+    } else {
+        0
+    }
+}
+
+fn key_name(key: &rdev::Key) -> String {
+    let raw = format!("{key:?}");
+    let bit = modifier_bit(&raw);
+    if bit != 0 {
+        return match bit {
+            1 => "Ctrl",
+            2 => "Shift",
+            4 => "Alt",
+            _ => "Win",
+        }
+        .to_string();
+    }
+    let modifiers = KEY_MODIFIERS.load(Ordering::Relaxed);
+    let is_text_key = raw.starts_with("Key") || raw.starts_with("Num");
+    // Shift is common in ordinary text and passwords; it must not turn a
+    // character into a logged shortcut. Only Ctrl/Alt/Win combinations may
+    // expose the physical key name.
+    if is_text_key && modifiers & (1 | 4 | 8) == 0 {
+        return "Typing".to_string();
+    }
+    let mut parts = Vec::with_capacity(5);
+    if modifiers & 1 != 0 {
+        parts.push("Ctrl".to_string());
+    }
+    if modifiers & 2 != 0 {
+        parts.push("Shift".to_string());
+    }
+    if modifiers & 4 != 0 {
+        parts.push("Alt".to_string());
+    }
+    if modifiers & 8 != 0 {
+        parts.push("Win".to_string());
+    }
+    parts.push(raw);
+    parts.join("+")
 }
 
 fn button_name(btn: &rdev::Button) -> String {
@@ -213,22 +262,37 @@ fn ensure_hook_started() -> std::result::Result<(), String> {
                         button: None,
                     }
                 }
-                EventType::KeyPress(key) => LogEvent {
-                    ts: active_session_elapsed_ms().unwrap_or_default(),
-                    event_type: "keydown",
-                    x: None,
-                    y: None,
-                    key: Some(key_name(&key)),
-                    button: None,
-                },
-                EventType::KeyRelease(key) => LogEvent {
-                    ts: active_session_elapsed_ms().unwrap_or_default(),
-                    event_type: "keyup",
-                    x: None,
-                    y: None,
-                    key: Some(key_name(&key)),
-                    button: None,
-                },
+                EventType::KeyPress(key) => {
+                    let raw = format!("{key:?}");
+                    let bit = modifier_bit(&raw);
+                    if bit != 0 {
+                        KEY_MODIFIERS.fetch_or(bit, Ordering::Relaxed);
+                    }
+                    LogEvent {
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
+                        event_type: "keydown",
+                        x: None,
+                        y: None,
+                        key: Some(key_name(&key)),
+                        button: None,
+                    }
+                }
+                EventType::KeyRelease(key) => {
+                    let name = key_name(&key);
+                    let raw = format!("{key:?}");
+                    let bit = modifier_bit(&raw);
+                    if bit != 0 {
+                        KEY_MODIFIERS.fetch_and(!bit, Ordering::Relaxed);
+                    }
+                    LogEvent {
+                        ts: active_session_elapsed_ms().unwrap_or_default(),
+                        event_type: "keyup",
+                        x: None,
+                        y: None,
+                        key: Some(name),
+                        button: None,
+                    }
+                }
                 EventType::ButtonPress(btn) => {
                     // Attach last known mouse position to click events
                     let px = f64::from_bits(LAST_POSITION_X.load(Ordering::Relaxed));
@@ -336,6 +400,7 @@ pub async fn start_input_logging(
 
     EVENT_COUNT.store(0, Ordering::SeqCst);
     DROPPED_EVENTS.store(0, Ordering::SeqCst);
+    KEY_MODIFIERS.store(0, Ordering::SeqCst);
     SESSION_GENERATION.fetch_add(1, Ordering::SeqCst);
 
     // Reset session start time so timestamps begin from 0 for this recording

@@ -6,6 +6,7 @@ import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared, hasClickNear } from "../../../lib/inputLog";
 import { analyzeMobileVisualActivity } from "../../../lib/mobileAutoZoom";
+import { buildDisplayActions, drawActionOverlay, type DisplayAction } from "../../../lib/actionOverlay";
 import {
   loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
@@ -43,6 +44,7 @@ interface Props {
   captionTracks?: CaptionTrack[];
   hasExternalAudio?: boolean;
   cameraMedia?: { path: string; startOffsetMs: number } | null;
+  originalOnly?: boolean;
 }
 
 type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -118,6 +120,7 @@ export default function Preview({
   captionTracks = [],
   hasExternalAudio = false,
   cameraMedia = null,
+  originalOnly = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -140,6 +143,7 @@ export default function Preview({
   const sourceViewRef = useRef({ x: 0, y: 0, w: 1280, h: 720, baseX: 0, baseY: 0, baseW: 1280, baseH: 720 });
   const mouseMoveEvents = useRef<InputEvent[]>([]);
   const allEvents = useRef<InputEvent[]>([]);
+  const displayActions = useRef<DisplayAction[]>([]);
   const clickEvents = useRef<InputEvent[]>([]);
   const clickIdxRef = useRef(0);
   const regionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -235,6 +239,7 @@ export default function Preview({
     kfGenerated.current = false;
     mouseMoveEvents.current = [];
     allEvents.current = [];
+    displayActions.current = [];
     clickEvents.current = [];
     clickIdxRef.current = 0;
     regionRef.current = null;
@@ -249,6 +254,7 @@ export default function Preview({
   useEffect(() => {
     if (!inputLogPath) {
       allEvents.current = [];
+      displayActions.current = [];
       mouseMoveEvents.current = [];
       clickEvents.current = [];
       regionRef.current = null;
@@ -262,6 +268,7 @@ export default function Preview({
         const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } =
           await loadInputLog(inputLogPath);
         allEvents.current = aligned;
+        displayActions.current = buildDisplayActions(aligned);
         mouseMoveEvents.current = moves;
         clickEvents.current = clicks;
         regionRef.current = region;
@@ -480,6 +487,15 @@ export default function Preview({
     effectTimelineTsRef.current = ts;
 
     const { w: cw, h: ch } = canvasSize;
+    if (originalOnly && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      ctx.fillStyle = "#080a0d"; ctx.fillRect(0, 0, cw, ch);
+      const sourceAspect = video.videoWidth / Math.max(1, video.videoHeight);
+      const targetAspect = cw / Math.max(1, ch);
+      const w = targetAspect > sourceAspect ? ch * sourceAspect : cw;
+      const h = targetAspect > sourceAspect ? ch : cw / sourceAspect;
+      ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
+      return;
+    }
     const pad = config.padding;
     const br = config.borderRadius;
     const vw = video.videoWidth;
@@ -748,7 +764,7 @@ export default function Preview({
         }
         if (!video.paused && camera.paused) void camera.play().catch(() => {});
         if (video.paused && !camera.paused) camera.pause();
-        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay);
       }
     }
 
@@ -770,11 +786,15 @@ export default function Preview({
         maskCtx.drawImage(canvas, 0, 0);
         for (const layer of activeMasks) {
           if (layer.type !== "mask") continue;
+          const trackedCursor = layer.followCursor ? getCursorAt(ts) : null;
+          const trackedPoint = trackedCursor ? screenToVideo(trackedCursor.x, trackedCursor.y, vw, vh) : null;
+          const trackedX = trackedPoint ? Math.max(0, Math.min(1 - layer.w, trackedPoint.x / vw - layer.w / 2)) : layer.x;
+          const trackedY = trackedPoint ? Math.max(0, Math.min(1 - layer.h, trackedPoint.y / vh - layer.h / 2)) : layer.y;
           const layerFade = resolveLayerFade(layer, videoTs);
           const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
           const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
-          const lx = offsetX + (layer.x + (.5 - layer.w / 2 - layer.x) * centerShift) * videoW;
-          const ly = offsetY + (layer.y + (.5 - layer.h / 2 - layer.y) * centerShift) * videoH;
+          const lx = offsetX + (trackedX + (.5 - layer.w / 2 - trackedX) * centerShift) * videoW;
+          const ly = offsetY + (trackedY + (.5 - layer.h / 2 - trackedY) * centerShift) * videoH;
           const lw = layer.w * videoW;
           const lh = layer.h * videoH;
           drawMaskLayer(
@@ -809,6 +829,7 @@ export default function Preview({
     for (const track of captionTracks) {
       drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     }
+    drawActionOverlay(ctx, displayActions.current, ts, config.actionOverlay, { x: offsetX, y: offsetY, w: videoW, h: videoH });
 
     // Selection affordance is drawn last so every layer type can be moved and
     // resized even when its effect changes the underlying pixels.

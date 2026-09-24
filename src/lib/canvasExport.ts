@@ -63,7 +63,7 @@ export async function runCanvasExport(
     signal
   );
 
-  const stagingBasePath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "");
+  const stagingBasePath = exportSettings.outputPath.replace(/\.(mp4|webm|gif)$/i, "");
   let tempWebmPath = stagingBasePath + ".snapexport.ivf";
 
   let sinkOpen = false;
@@ -312,7 +312,7 @@ export async function runCanvasExport(
       },
     });
 
-    const basePath = exportSettings.outputPath.replace(/\.(mp4|gif)$/i, "");
+    const basePath = exportSettings.outputPath.replace(/\.(mp4|webm|gif)$/i, "");
     if (exportSettings.captions === "srt" || exportSettings.captions === "burned-srt") {
       await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(captionTracks, trimStart, trimEnd, playbackRate) });
     } else if (exportSettings.captions === "vtt") {

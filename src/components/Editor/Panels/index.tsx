@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -13,10 +13,13 @@ import { preloadImageAsset } from "../../../lib/canvasDraw";
 import { getTranscriptionEnvironment, transcribeTrack, updateCaptionTiming, type TranscriptionEnvironment, type TranscriptionLanguage, type TranscriptionModel } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
+import { loadInputLog } from "../../../lib/inputLog";
+import { buildDisplayActions, resolveDisplayActions, type DisplayAction } from "../../../lib/actionOverlay";
 import "./Panels.css";
 
 interface Props {
   config: EditorConfig;
+  inputLogPath: string;
   onConfigChange: (cfg: EditorConfig) => void;
   duration: number;
   currentTime: number;
@@ -43,6 +46,9 @@ interface Props {
   onCaptionTracksChange: (tracks: CaptionTrack[]) => void;
   selectedCaption: CaptionSegmentSelection | null;
   onSelectCaption: (selection: CaptionSegmentSelection | null) => void;
+  selectedActionId: string | null;
+  onSelectAction: (id: string | null) => void;
+  onSnapLayerToAction: (layerId: string) => Promise<void>;
 }
 const CLICK_EFFECTS: { value: ClickEffect; label: string }[] = [
   { value: "none", label: "None" },
@@ -125,17 +131,19 @@ const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
 };
 
 export default function Panels({
-  config, onConfigChange, duration, currentTime,
+  config, inputLogPath, onConfigChange, duration, currentTime,
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
-  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption,
+  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
+  const [recordedActions, setRecordedActions] = useState<DisplayAction[]>([]);
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
   const [customGradient, setCustomGradient] = useState({ start: "#7c3aed", middle: "#ec4899", end: "#f59e0b", angle: 135 });
   const annotationDrawerRef = useRef<HTMLDivElement>(null);
+  const copiedLayerStyleRef = useRef<Partial<Layer> | null>(null);
   const [captionSource, setCaptionSource] = useState("");
   const [captionLanguage, setCaptionLanguage] = useState<TranscriptionLanguage>("auto");
   const [captionModel, setCaptionModel] = useState<TranscriptionModel>("auto");
@@ -186,12 +194,36 @@ export default function Panels({
     onConfigChange({ ...config, zoomMovement: { ...config.zoomMovement, ...patch } });
   const updateAutoZoom = (patch: Partial<EditorConfig["autoZoom"]>) =>
     onConfigChange({ ...config, autoZoom: { ...config.autoZoom, ...patch, preset: patch.preset ?? "custom" } });
+  const updateActions = (patch: Partial<EditorConfig["actionOverlay"]>) =>
+    onConfigChange({ ...config, actionOverlay: { ...config.actionOverlay, ...patch } });
+  const updateActionEvent = (id: string, patch: EditorConfig["actionOverlay"]["eventEdits"][string]) =>
+    updateActions({ eventEdits: { ...config.actionOverlay.eventEdits, [id]: { ...config.actionOverlay.eventEdits[id], ...patch } } });
+  const resetActionEvent = (id: string) => {
+    const eventEdits = { ...config.actionOverlay.eventEdits };
+    delete eventEdits[id];
+    updateActions({ eventEdits, hiddenEventIds: config.actionOverlay.hiddenEventIds.filter((candidate) => candidate !== id) });
+  };
+  const updateCamera = (patch: Partial<EditorConfig["cameraOverlay"]>) =>
+    onConfigChange({ ...config, cameraOverlay: { ...config.cameraOverlay, ...patch } });
   const applyAutoZoomPreset = (preset: AutoZoomPreset) => {
     if (preset === "custom") return updateAutoZoom({ preset });
     onConfigChange({ ...config, autoZoom: { preset, ...AUTO_ZOOM_PRESETS[preset] } });
   };
   const updateAudio = (patch: Partial<EditorConfig["audio"]>) =>
     onConfigChange({ ...config, audio: { ...config.audio, ...patch } });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!inputLogPath) { setRecordedActions([]); return; }
+    void loadInputLog(inputLogPath).then((log) => { if (!cancelled) setRecordedActions(buildDisplayActions(log.allEvents)); }).catch(() => { if (!cancelled) setRecordedActions([]); });
+    return () => { cancelled = true; };
+  }, [inputLogPath]);
+
+  const resolvedRecordedActions = useMemo(
+    () => resolveDisplayActions(recordedActions, config.actionOverlay),
+    [recordedActions, config.actionOverlay],
+  );
+  const selectedRecordedAction = resolvedRecordedActions.find((action) => action.id === selectedActionId) ?? null;
 
   const applyAudioPreset = (preset: "balanced" | "voice" | "system" | "reset") => {
     const mix = preset === "voice"
@@ -561,6 +593,15 @@ export default function Panels({
     if (!selectedLayer) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
   };
+  const copySelectedLayerStyle = () => {
+    if (!selectedLayer) return;
+    const { id: _id, type: _type, start: _start, end: _end, x: _x, y: _y, w: _w, h: _h, ...style } = selectedLayer;
+    copiedLayerStyleRef.current = style as Partial<Layer>;
+  };
+  const pasteSelectedLayerStyle = () => {
+    if (!selectedLayer || !copiedLayerStyleRef.current) return;
+    updateSelectedLayer(copiedLayerStyleRef.current);
+  };
 
   useEffect(() => {
     if (selectedLayerId && annotationDrawerRef.current) annotationDrawerRef.current.scrollTop = 0;
@@ -794,6 +835,93 @@ export default function Panels({
         </div>
       )}
 
+      {activeTab === "actions" && (
+        <div className="ss-drawer-content">
+          <Section title="Keys & Clicks">
+            <CheckRow label="Show action overlay" checked={config.actionOverlay.enabled} onChange={(enabled) => updateActions({ enabled })} />
+            <p className="panel-help-text">Turns the privacy-safe input sidecar into clear keyboard, mouse, and scroll callouts. The overlay is rendered in both preview and export.</p>
+          </Section>
+          {config.actionOverlay.enabled && <>
+            {selectedRecordedAction && <Section title="Selected action">
+              <div className={`action-event-inspector ${selectedRecordedAction.kind}`}>
+                <div className="action-event-inspector-head">
+                  <span>{selectedRecordedAction.kind}</span>
+                  <strong>{(selectedRecordedAction.ts / 1000).toFixed(2)}s</strong>
+                </div>
+                <label className="action-event-label">
+                  <span>Label</span>
+                  <input value={selectedRecordedAction.label} maxLength={64} onChange={(event) => updateActionEvent(selectedRecordedAction.id, { label: event.target.value })} />
+                </label>
+                <Slider label="Start" value={selectedRecordedAction.ts / 1000} min={0} max={Math.max(.1, duration)} step={.05} unit="s" onChange={(seconds) => updateActionEvent(selectedRecordedAction.id, { offsetMs: Math.round(seconds * 1000 - selectedRecordedAction.sourceTs) })} />
+                <Slider label="Duration" value={selectedRecordedAction.durationMs} min={150} max={5000} step={50} unit="ms" onChange={(durationMs) => updateActionEvent(selectedRecordedAction.id, { durationMs })} />
+                <CheckRow label="Visible in video" checked={!selectedRecordedAction.hidden} onChange={(visible) => updateActionEvent(selectedRecordedAction.id, { hidden: !visible })} />
+                <div className="action-event-inspector-actions">
+                  <button type="button" onClick={() => resetActionEvent(selectedRecordedAction.id)}><RefreshCw size={13} /> Reset</button>
+                  <button type="button" className="danger" onClick={() => updateActionEvent(selectedRecordedAction.id, { hidden: true })}><Trash2 size={13} /> Hide action</button>
+                </div>
+              </div>
+            </Section>}
+            <Section title="Content">
+              <CheckRow label="Keyboard actions" checked={config.actionOverlay.showKeyboard} onChange={(showKeyboard) => updateActions({ showKeyboard })} />
+              <CheckRow label="Mouse clicks" checked={config.actionOverlay.showMouse} onChange={(showMouse) => updateActions({ showMouse })} />
+              <CheckRow label="Scrolling" checked={config.actionOverlay.showScroll} onChange={(showScroll) => updateActions({ showScroll })} />
+              <Slider label="Visible actions" value={config.actionOverlay.maxItems} min={1} max={5} step={1} unit="" onChange={(maxItems) => updateActions({ maxItems })} />
+            </Section>
+            <Section title="Appearance">
+              <SelectRow label="Style" value={config.actionOverlay.style} options={["minimal", "keys", "tutorial"]} optionLabels={{ minimal: "Minimal", keys: "Key caps", tutorial: "Tutorial" }} onChange={(style) => updateActions({ style: style as EditorConfig["actionOverlay"]["style"] })} />
+              <SelectRow label="Position" value={config.actionOverlay.position} options={["top-left", "top-right", "bottom-left", "bottom-center", "bottom-right"]} optionLabels={{ "top-left": "Top left", "top-right": "Top right", "bottom-left": "Bottom left", "bottom-center": "Bottom center", "bottom-right": "Bottom right" }} onChange={(position) => updateActions({ position: position as EditorConfig["actionOverlay"]["position"] })} />
+              <Slider label="Scale" value={config.actionOverlay.scale * 100} min={60} max={200} step={5} unit="%" onChange={(scale) => updateActions({ scale: scale / 100 })} />
+              <ColorInput label="Text" value={config.actionOverlay.textColor} onChange={(textColor) => updateActions({ textColor })} />
+              <ColorInput label="Accent" value={config.actionOverlay.accentColor} onChange={(accentColor) => updateActions({ accentColor })} />
+              <ColorInput label="Background" value={config.actionOverlay.backgroundColor} onChange={(backgroundColor) => updateActions({ backgroundColor })} />
+            </Section>
+            <Section title="Timing">
+              <Slider label="Hold" value={config.actionOverlay.holdMs} min={300} max={3000} step={50} unit="ms" onChange={(holdMs) => updateActions({ holdMs })} />
+              <Slider label="Fade" value={config.actionOverlay.fadeMs} min={0} max={1000} step={25} unit="ms" onChange={(fadeMs) => updateActions({ fadeMs })} />
+            </Section>
+            <Section title="Recorded actions">
+              <div className="recorded-action-list">
+                {resolvedRecordedActions.slice(0, 120).map((action) => {
+                  return <button key={action.id} className={`${action.hidden ? "hidden" : ""} ${selectedActionId === action.id ? "selected" : ""}`} onClick={() => onSelectAction(action.id)}><span>{(action.ts / 1000).toFixed(1)}s</span><strong>{action.label}</strong><small>{action.hidden ? "Hidden" : action.kind}</small></button>;
+                })}
+                {!recordedActions.length && <p className="panel-help-text">No keyboard or pointer actions were found in this recording.</p>}
+              </div>
+              {recordedActions.length > 120 && <p className="panel-help-text">Showing the first 120 actions. All actions still render on the video.</p>}
+            </Section>
+          </>}
+        </div>
+      )}
+
+      {activeTab === "camera" && (
+        <div className="ss-drawer-content">
+          <Section title="Webcam Studio">
+            <CheckRow label="Show webcam" checked={config.cameraOverlay.enabled} onChange={(enabled) => updateCamera({ enabled })} />
+            <div className="focus-preset-grid" aria-label="Webcam position presets">
+              {([[.18,.2,"Top left"],[.5,.2,"Top"],[.82,.2,"Top right"],[.18,.79,"Bottom left"],[.5,.79,"Bottom"],[.82,.79,"Bottom right"]] as const).map(([x,y,label]) => <button key={label} title={label} aria-label={label} className={Math.abs(config.cameraOverlay.x-x)<.04 && Math.abs(config.cameraOverlay.y-y)<.04 ? "active" : ""} onClick={() => updateCamera({x,y})}><i /></button>)}
+            </div>
+          </Section>
+          {config.cameraOverlay.enabled && <>
+            <Section title="Frame">
+              <SelectRow label="Shape" value={config.cameraOverlay.shape} options={["circle", "rounded", "square"]} optionLabels={{ circle: "Circle", rounded: "Rounded", square: "Square" }} onChange={(shape) => updateCamera({ shape: shape as EditorConfig["cameraOverlay"]["shape"] })} />
+              <Slider label="Size" value={config.cameraOverlay.width * 100} min={8} max={60} step={1} unit="%" onChange={(width) => updateCamera({ width: width / 100 })} />
+              {config.cameraOverlay.shape === "rounded" && <Slider label="Roundness" value={config.cameraOverlay.cornerRadius} min={0} max={80} step={1} unit="px" onChange={(cornerRadius) => updateCamera({ cornerRadius })} />}
+              <Slider label="Opacity" value={config.cameraOverlay.opacity * 100} min={10} max={100} step={1} unit="%" onChange={(opacity) => updateCamera({ opacity: opacity / 100 })} />
+              <CheckRow label="Mirror camera" checked={config.cameraOverlay.mirror} onChange={(mirror) => updateCamera({ mirror })} />
+            </Section>
+            <Section title="Crop & subject">
+              <Slider label="Crop zoom" value={config.cameraOverlay.cropZoom} min={1} max={3} step={.05} unit="×" onChange={(cropZoom) => updateCamera({ cropZoom })} />
+              <Slider label="Subject X" value={config.cameraOverlay.cropX * 100} min={0} max={100} step={1} unit="%" onChange={(cropX) => updateCamera({ cropX: cropX / 100 })} />
+              <Slider label="Subject Y" value={config.cameraOverlay.cropY * 100} min={0} max={100} step={1} unit="%" onChange={(cropY) => updateCamera({ cropY: cropY / 100 })} />
+            </Section>
+            <Section title="Finish">
+              <Slider label="Border" value={config.cameraOverlay.borderWidth} min={0} max={12} step={1} unit="px" onChange={(borderWidth) => updateCamera({ borderWidth })} />
+              <ColorInput label="Border color" value={config.cameraOverlay.borderColor} onChange={(borderColor) => updateCamera({ borderColor })} />
+              <Slider label="Shadow" value={config.cameraOverlay.shadow} min={0} max={80} step={2} unit="px" onChange={(shadow) => updateCamera({ shadow })} />
+            </Section>
+          </>}
+        </div>
+      )}
+
       {/* ═══ ANNOTATIONS TAB ═══════════════════════════════════════════ */}
       {activeTab === "annotations" && (
         <div ref={annotationDrawerRef} className={`ss-drawer-content ${selectedLayer ? "layer-inspector-mode" : ""}`}>
@@ -889,6 +1017,7 @@ export default function Panels({
                     <SelectRow label="Effect" value={selectedLayer.mask} options={["spotlight", "blur", "magnifier"]} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"] })} />
                     <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.1} onChange={(intensity) => updateSelectedLayer({ intensity })} />
                     <SelectRow label="Mask Shape" value={selectedLayer.shape ?? "ellipse"} options={["ellipse", "rectangle"]} onChange={(shape) => updateSelectedLayer({ shape: shape as MaskLayer["shape"] })} />
+                    <CheckRow label="Follow cursor" checked={selectedLayer.followCursor === true} onChange={(followCursor) => updateSelectedLayer({ followCursor })} />
                     {selectedLayer.mask !== "blur" && <CheckRow label="Camera focus" checked={selectedLayer.focusCamera !== false} onChange={(focusCamera) => updateSelectedLayer({ focusCamera })} />}
                     {selectedLayer.mask !== "blur" && selectedLayer.focusCamera !== false && <Slider label="Focus strength" value={Math.round((selectedLayer.focusStrength ?? .82) * 100)} min={20} max={100} step={5} unit="%" onChange={(focusStrength) => updateSelectedLayer({ focusStrength: focusStrength / 100 })} />}
                     <SelectRow label="Motion curve" value={selectedLayer.transitionCurve ?? "smoother"} options={["linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(transitionCurve) => updateSelectedLayer({ transitionCurve: transitionCurve as MaskLayer["transitionCurve"] })} />
@@ -934,6 +1063,11 @@ export default function Panels({
                 <Slider label="Start" value={selectedLayer.start} min={config.trimStart} max={Math.max(config.trimStart, selectedLayer.end - .2)} step={0.05} unit="s" onChange={(start) => updateSelectedLayer({ start: Math.min(start, selectedLayer.end - .2) })} />
                 <Slider label="End" value={selectedLayer.end} min={selectedLayer.start + .2} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(end) => updateSelectedLayer({ end: Math.max(end, selectedLayer.start + .2) })} />
                 <p className="panel-help-text">Drag the timeline bar to move it or trim either edge. On canvas, drag inside to move, use eight handles to scale, and drag the top handle to rotate. Hold Shift to snap rotation.</p>
+                <div className="layer-icon-pills">
+                  <button onClick={copySelectedLayerStyle} title="Copy appearance and effects"><Copy size={15} /><span>Copy style</span></button>
+                  <button onClick={pasteSelectedLayerStyle} disabled={!copiedLayerStyleRef.current} title="Paste copied appearance"><RefreshCw size={15} /><span>Paste style</span></button>
+                </div>
+                <button className="ss-drawer-action-btn" onClick={() => void onSnapLayerToAction(selectedLayer.id)}><LocateFixed size={14} /> Snap to nearest click</button>
                 <button className="ss-drawer-action-btn danger" onClick={() => deleteLayer(selectedLayer.id)}><Trash2 size={14} /> Delete Layer</button>
               </Section>
             </>
@@ -994,9 +1128,15 @@ export default function Panels({
             {config.zoomMode === "auto" && (
               <>
                 <SelectRow label="Camera Style" value={config.autoZoom.preset} options={["gentle", "balanced", "dynamic", "custom"]} optionLabels={{ gentle: "Gentle", balanced: "Balanced", dynamic: "Dynamic", custom: "Custom" }} onChange={(value) => applyAutoZoomPreset(value as AutoZoomPreset)} />
+                <SelectRow label="Focus logic" value={config.autoZoom.focusMode} options={["clicks", "hybrid", "follow"]} optionLabels={{ clicks: "Clicks only", hybrid: "Clicks + intent", follow: "Follow activity" }} onChange={(focusMode) => updateAutoZoom({ focusMode: focusMode as EditorConfig["autoZoom"]["focusMode"] })} />
                 <Slider label="Maximum Zoom" value={config.autoZoom.maxScale} min={1.2} max={3} step={0.05} unit="×" onChange={(maxScale) => updateAutoZoom({ maxScale })} />
+                <Slider label="Single-click Zoom" value={config.autoZoom.singleClickScale} min={config.autoZoom.minScale} max={config.autoZoom.maxScale} step={0.05} unit="×" onChange={(singleClickScale) => updateAutoZoom({ singleClickScale })} />
+                <Slider label="Typing Zoom" value={config.autoZoom.typingScale} min={config.autoZoom.minScale} max={config.autoZoom.maxScale} step={0.05} unit="×" onChange={(typingScale) => updateAutoZoom({ typingScale })} />
                 <Slider label="Hold Time" value={config.autoZoom.holdMs} min={300} max={2500} step={50} unit="ms" onChange={(holdMs) => updateAutoZoom({ holdMs })} />
+                <Slider label="Minimum shot" value={config.autoZoom.minimumShotMs} min={350} max={3000} step={50} unit="ms" onChange={(minimumShotMs) => updateAutoZoom({ minimumShotMs })} />
                 <Slider label="Camera Cooldown" value={config.autoZoom.cooldownMs} min={0} max={1800} step={50} unit="ms" onChange={(cooldownMs) => updateAutoZoom({ cooldownMs })} />
+                <Slider label="Idle reset" value={config.autoZoom.idleResetMs} min={900} max={8000} step={100} unit="ms" onChange={(idleResetMs) => updateAutoZoom({ idleResetMs })} />
+                <Slider label="Focus dead zone" value={Math.round(config.autoZoom.deadZone * 100)} min={2} max={35} step={1} unit="%" onChange={(deadZone) => updateAutoZoom({ deadZone: deadZone / 100 })} />
                 <Slider label="Typing Intent" value={config.autoZoom.typingSensitivity} min={2} max={12} step={1} unit=" keys" onChange={(typingSensitivity) => updateAutoZoom({ typingSensitivity })} />
                 <Slider label="Scroll Intent" value={config.autoZoom.scrollSensitivity} min={1} max={8} step={1} unit=" ticks" onChange={(scrollSensitivity) => updateAutoZoom({ scrollSensitivity })} />
                 <SelectRow label="Auto curve" value={config.autoZoom.curve ?? "ease-in-out"} options={["linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(curve) => updateAutoZoom({ curve: curve as EditorConfig["autoZoom"]["curve"] })} />

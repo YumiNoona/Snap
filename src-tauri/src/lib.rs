@@ -1646,6 +1646,7 @@ pub fn run() {
             export::close_export_sink,
             export::discard_canvas_export,
             export::finalize_canvas_export,
+            export::extract_video_frame,
             open_editor_window,
             set_editor_suspended_for_recording,
             open_teleprompter_window,

@@ -6,13 +6,13 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
 import DonateButton from "../shared/DonateButton";
-import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, Keyframe, ExportSettings, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
+import type { ActionEventEdit, AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, Keyframe, ExportSettings, ImageLayer, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
 import { runCanvasExport } from "../../lib/canvasExport";
 import { collectZoomRegions, findZoomRegion } from "../../lib/zoomRegions";
@@ -23,6 +23,7 @@ import { discoverAudioTracks, findAvailableCaptionStart, mergeAudioTracks } from
 import { loadProjectAtPath } from "../../lib/project";
 import { recordingDataPaths } from "../../lib/recordingPaths";
 import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
+import { loadInputLog } from "../../lib/inputLog";
 import "./Editor.css";
 
 interface Props {
@@ -33,7 +34,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "uploads" | "canvas" | "cursor" | "annotations" | "motion" | "captions" | "audio";
+export type SidebarToolTab = "uploads" | "canvas" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_THEME_STORAGE_KEY = "snap.editorTheme.v1";
@@ -70,11 +71,17 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedZoomRegion, setSelectedZoomRegion] = useState<ZoomRegionSelection | null>(null);
   const [selectedCaption, setSelectedCaption] = useState<CaptionSegmentSelection | null>(null);
+  const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
   const [editorTheme, setEditorTheme] = useState<"dark" | "light">(() => localStorage.getItem(EDITOR_THEME_STORAGE_KEY) === "light" ? "light" : "dark");
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
   const [showExport, setShowExport] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [showProjectHealth, setShowProjectHealth] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [fileActionStatus, setFileActionStatus] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
   const [lastExportPath, setLastExportPath] = useState("");
@@ -413,7 +420,51 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     return () => window.removeEventListener("keydown", onProjectShortcut);
   }, [handleOpenProject, handleSaveProject, handleSaveProjectAs, isBrowserPreview]);
 
+  useEffect(() => {
+    const onCommandKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault(); setShowCommandPalette((open) => !open); setCommandQuery("");
+      } else if (event.key === "Escape") {
+        setShowCommandPalette(false); setShowProjectHealth(false);
+      }
+    };
+    window.addEventListener("keydown", onCommandKey);
+    return () => window.removeEventListener("keydown", onCommandKey);
+  }, []);
+
   const handleToggleCrop = useCallback(() => setCropMode((m) => !m), []);
+
+  const extractFrame = useCallback(async (purpose: "freeze" | "thumbnail") => {
+    pausePlayback();
+    const stamp = Math.round(currentTime * 1000);
+    let outputPath = `${recordingDataPaths(videoPath).dataDir}\\${purpose}-${stamp}.png`;
+    if (purpose === "thumbnail") {
+      const selected = await saveDialog({ title: "Save thumbnail", defaultPath: videoPath.replace(/\.[^\\/.]+$/i, `-thumbnail-${stamp}.png`), filters: [{ name: "PNG image", extensions: ["png"] }] });
+      if (!selected) return;
+      outputPath = selected.toLowerCase().endsWith(".png") ? selected : `${selected}.png`;
+    }
+    const path = await invoke<string>("extract_video_frame", { inputPath: videoPath, outputPath, timeSeconds: currentTime });
+    if (purpose === "freeze") {
+      const end = Math.min(config.trimEnd || duration, currentTime + 2.5);
+      const layer: ImageLayer = { id: `freeze-${Date.now()}`, type: "image", path, fit: "cover", start: currentTime, end: Math.max(currentTime + .25, end), x: 0, y: 0, w: 1, h: 1, opacity: 1, rotation: 0, flipX: false, flipY: false, cornerRadius: 0 };
+      setConfig((current) => ({ ...current, layers: [...current.layers, layer] }));
+      setSelectedLayerId(layer.id); setActiveTool("annotations");
+    } else {
+      setFileActionStatus(`Thumbnail saved: ${path.split(/[\\/]/).pop()}`);
+    }
+  }, [config.trimEnd, currentTime, duration, pausePlayback, videoPath]);
+
+  const snapLayerToAction = useCallback(async (layerId: string) => {
+    if (!inputLogPath) return;
+    const log = await loadInputLog(inputLogPath);
+    const candidates = log.clickEvents.length ? log.clickEvents : log.mouseMoveEvents;
+    const targetMs = currentTime * 1000;
+    const event = candidates.reduce<typeof candidates[number] | null>((best, candidate) => Math.abs(candidate.ts - targetMs) < Math.abs((best?.ts ?? Number.POSITIVE_INFINITY) - targetMs) ? candidate : best, null);
+    if (!event || event.x == null || event.y == null) return;
+    const x = log.region ? (event.x - log.region.x) / log.region.w : event.x;
+    const y = log.region ? (event.y - log.region.y) / log.region.h : event.y;
+    setConfig((current) => ({ ...current, layers: current.layers.map((layer) => layer.id === layerId ? { ...layer, x: Math.max(0, Math.min(1 - layer.w, x - layer.w / 2)), y: Math.max(0, Math.min(1 - layer.h, y - layer.h / 2)) } : layer) }));
+  }, [currentTime, inputLogPath]);
 
   const handleCropApply = useCallback(
     (crop: { x: number; y: number; w: number; h: number } | null) => {
@@ -472,6 +523,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setExportStatus(`Done: ${settings.outputPath}`);
       setExportProgress(1);
       setLastExportPath(settings.outputPath);
+      if (settings.deliveryPackage) {
+        const base = settings.outputPath.replace(/\.[^\\/.]+$/i, "");
+        const transcript = captionTracks.flatMap((track) => track.visible ? track.segments : []).sort((a, b) => a.startMs - b.startMs).map((segment) => segment.text.trim()).filter(Boolean).join("\n");
+        const chapters = collectZoomRegions(keyframes, Math.round((config.trimEnd || duration) * 1000)).map((region, index) => ({ title: `Chapter ${index + 1}`, startSeconds: Math.max(0, (region.startMs / 1000 - config.trimStart) / config.playbackRate), endSeconds: Math.max(0, (region.endMs / 1000 - config.trimStart) / config.playbackRate) }));
+        await invoke("write_text_file_atomic", { path: `${base}.transcript.txt`, contents: transcript || "No captions were available for this export." });
+        await invoke("write_text_file_atomic", { path: `${base}.chapters.json`, contents: JSON.stringify(chapters, null, 2) });
+        const exportedDuration = Math.max(.1, ((config.trimEnd || duration) - config.trimStart) / config.playbackRate);
+        await invoke("extract_video_frame", { inputPath: settings.outputPath, outputPath: `${base}.thumbnail.png`, timeSeconds: exportedDuration * .35 });
+      }
       void result;
     } catch (e) {
       setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${e}`);
@@ -772,6 +832,17 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     };
   }, [previewFocusMode, revealPreviewControls]);
 
+  const commandItems = [
+    { label: "Freeze frame at playhead", detail: "Adds a still image layer for 2.5 seconds", icon: Snowflake, run: () => void extractFrame("freeze") },
+    { label: "Save current frame as thumbnail", detail: "Exports a full-resolution PNG", icon: ImageIcon, run: () => void extractFrame("thumbnail") },
+    { label: showOriginal ? "Return to edited preview" : "Compare with original", detail: "Toggle the unedited source preview", icon: Play, run: () => setShowOriginal((value) => !value) },
+    { label: "Project health", detail: "Review media, timing, captions, and export readiness", icon: Activity, run: () => setShowProjectHealth(true) },
+    { label: "Keys & Clicks", detail: "Open tutorial action overlays", icon: Keyboard, run: () => setActiveTool("actions") },
+    ...(cameraMedia ? [{ label: "Webcam Studio", detail: "Frame and style the camera track", icon: Camera, run: () => setActiveTool("camera" as const) }] : []),
+    { label: "Export", detail: "Open video, GIF, and delivery settings", icon: Upload, run: () => setShowExport(true) },
+  ];
+  const filteredCommands = commandItems.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(commandQuery.trim().toLowerCase()));
+
   return (
     <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} onPointerMove={revealPreviewControls}>
       {/* ── Top Bar ────────────────────────────────────────────── */}
@@ -824,6 +895,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
+          <button className={`ss-theme-toggle ${showOriginal ? "active" : ""}`} onClick={() => setShowOriginal((value) => !value)} title={showOriginal ? "Show edited preview" : "Compare with original"} aria-label={showOriginal ? "Show edited preview" : "Compare with original"}><Play size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl K)" aria-label="Open command palette"><Command size={16} /></button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -891,6 +964,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           >
             <MousePointer2 size={20} /><span className="ss-tool-label">Cursor</span>
           </button>
+
+          <button className={`ss-tool-icon-btn ${activeTool === "actions" ? "active" : ""}`} onClick={() => setActiveTool("actions")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "actions"} title="Keys and Clicks">
+            <Keyboard size={20} /><span className="ss-tool-label">Actions</span>
+          </button>
+
+          {cameraMedia && <button className={`ss-tool-icon-btn ${activeTool === "camera" ? "active" : ""}`} onClick={() => setActiveTool("camera")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "camera"} title="Webcam Studio">
+            <Camera size={20} /><span className="ss-tool-label">Camera</span>
+          </button>}
 
           <button
             className={`ss-tool-icon-btn ${activeTool === "annotations" ? "active" : ""}`}
@@ -993,6 +1074,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
             captionTracks={captionTracks}
             hasExternalAudio={audioTracks.length > 0}
+            originalOnly={showOriginal}
           />
           {previewFocusMode && <div className="ss-preview-player" role="group" aria-label="Preview playback controls">
             <div className="ss-preview-player-time"><span>{formatPlayerTime(currentTime)}</span><span>{formatPlayerTime(duration)}</span></div>
@@ -1012,6 +1094,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         {/* Right Tool Settings Panel Drawer */}
         {activeTool && <Panels
           config={config}
+          inputLogPath={inputLogPath}
           onConfigChange={setConfig}
           duration={duration}
           currentTime={currentTime}
@@ -1046,12 +1129,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onCaptionTracksChange={setCaptionTracks}
           selectedCaption={selectedCaption}
           onSelectCaption={setSelectedCaption}
+          selectedActionId={selectedActionId}
+          onSelectAction={setSelectedActionId}
+          onSnapLayerToAction={snapLayerToAction}
         />}
       </div>
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
       <Timeline
         editorTheme={editorTheme}
+        inputLogPath={isBrowserPreview ? "" : inputLogPath}
         audioTracks={audioTracks}
         duration={duration}
         currentTime={currentTime}
@@ -1102,6 +1189,26 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onAddCaptionAtTime={addManualCaptionAt}
         onAudioTrackChange={(updated) => setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track))}
         onAudioTrackRemove={(trackId) => setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId))}
+        selectedActionId={selectedActionId}
+        onActionSelect={(id) => {
+          pausePlayback();
+          setSelectedActionId(id);
+          setSelectedLayerId(null);
+          setSelectedCaption(null);
+          setSelectedZoomRegion(null);
+          setZoomTargetMode(false);
+          setActiveTool("actions");
+        }}
+        onActionEdit={(id, patch: ActionEventEdit) => setConfig((current) => ({
+          ...current,
+          actionOverlay: {
+            ...current.actionOverlay,
+            eventEdits: {
+              ...current.actionOverlay.eventEdits,
+              [id]: { ...current.actionOverlay.eventEdits[id], ...patch },
+            },
+          },
+        }))}
         layers={config.layers}
         selectedLayerId={selectedLayerId}
         onLayerSelect={(id) => {
@@ -1163,6 +1270,32 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
       />
+      {showCommandPalette && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowCommandPalette(false)}>
+        <section className="ss-command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+          <div className="ss-command-search"><Command size={18} /><input autoFocus value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((index) => Math.max(0, Math.min(filteredCommands.length - 1, index + 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); } else if (event.key === "Enter" && filteredCommands[commandIndex]) { filteredCommands[commandIndex].run(); setShowCommandPalette(false); } }} placeholder="Search tools and actions…" /></div>
+          <div className="ss-command-list">
+            {filteredCommands.map(({ label, detail, icon: Icon, run }, index) => <button key={label} className={index === commandIndex ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => { run(); setShowCommandPalette(false); }}><Icon size={17} /><span><strong>{label}</strong><small>{detail}</small></span></button>)}
+            {!filteredCommands.length && <p>No matching actions</p>}
+          </div>
+          <footer><span><kbd>Ctrl K</kbd> open anywhere</span><span><kbd>Esc</kbd> close</span></footer>
+        </section>
+      </div>}
+      {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
+        <section className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
+          <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>
+          <div className="ss-health-score"><strong>{duration > 0 && (config.trimEnd || duration) > config.trimStart ? "Ready" : "Needs attention"}</strong><span>{Math.max(0, (config.trimEnd || duration) - config.trimStart).toFixed(1)}s edited duration</span></div>
+          <ul>
+            <li className={duration > 0 ? "ok" : "warn"}><span>Source video</span><strong>{duration > 0 ? "Loaded" : "Metadata missing"}</strong></li>
+            <li className={inputLogPath ? "ok" : "warn"}><span>Input actions</span><strong>{inputLogPath ? "Available" : "Imported video"}</strong></li>
+            <li className={cameraMedia ? "ok" : "neutral"}><span>Webcam track</span><strong>{cameraMedia ? "Connected" : "Not recorded"}</strong></li>
+            <li className="ok"><span>Visual layers</span><strong>{config.layers.length}</strong></li>
+            <li className="ok"><span>Audio tracks</span><strong>{audioTracks.length}</strong></li>
+            <li className={captionTracks.length ? "ok" : "neutral"}><span>Captions</span><strong>{captionTracks.reduce((sum, track) => sum + track.segments.length, 0)} segments</strong></li>
+            <li className={projectDirty ? "warn" : "ok"}><span>Project file</span><strong>{projectDirty ? "Unsaved changes" : "Saved"}</strong></li>
+          </ul>
+          <button className="ss-health-export" onClick={() => { setShowProjectHealth(false); setShowExport(true); }}><Upload size={16} /> Continue to export</button>
+        </section>
+      </div>}
       {showExport && (
         <ExportModal
           videoPath={videoPath}

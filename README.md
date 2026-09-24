@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-8.0.0-10b981?style=flat-square" alt="Version 8.0.0" />
+    <img src="https://img.shields.io/badge/version-8.1.0-10b981?style=flat-square" alt="Version 8.1.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,7 +22,23 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 8.0.0
+## Snap 8.1.0
+
+Snap 8.1 turns recorded keyboard and pointer activity into a first-class editing
+workflow while expanding the tools used to finish tutorial and product videos:
+
+- A dedicated Keys & Clicks timeline layer with separate keyboard, mouse, and
+  scroll clips, direct selection, drag-to-retime, edge trimming, and contextual
+  show, hide, reset, and edit actions.
+- Per-action controls for label, start time, duration, and visibility. Every edit
+  is non-destructive, saved in the project, and shared by preview and export.
+- Privacy-safe shortcut capture: ordinary text remains anonymous while useful
+  modifier shortcuts, clicks, and scroll direction stay available for tutorials.
+- Auto Zoom 2.0 intent controls, Webcam Studio framing, freeze frames, thumbnails,
+  moving masks, snap-to-click annotations, layer-style copy/paste, comparison mode,
+  delivery packages, and MP4, WebM, or looping GIF export.
+
+### Snap 8 foundation
 
 Snap 8 focuses on a denser, more legible editor and dependable local export.
 The complete editor toolset keeps its full-size left rail while each selected
@@ -71,11 +87,19 @@ Snap 7:
 - Offline English, Hindi, and multilingual transcription with editable captions
 - Burned-in captions plus SRT, VTT, and embedded MP4 subtitle export
 - Editable Auto Zoom plus manual zoom regions with focus points and easing
+- Auto Zoom 2.0 focus modes, dead zones, intent-aware typing/scroll shots, idle
+  resets, minimum shot length, and independent click/typing zoom levels
 - Timeline clips for zoom, text, shapes, masks, video, and separate audio
 - Cursor themes, click effects, cursor smoothing, and motion blur
+- Privacy-safe keyboard shortcuts, mouse clicks, and scroll callouts with
+  configurable placement, styling, timing, and preview/export parity
+- Webcam Studio framing with six placements, circle/rounded/square crops,
+  subject reframe, mirror, opacity, border, and shadow controls
 - Canvas backgrounds, crop, aspect ratio, padding, corners, inset, and shadow
-- Presets, undo/redo, keyboard transport controls, trimming, and layer actions
-- FFmpeg-based MP4 export with progress, size, and time estimates
+- Freeze frames, PNG thumbnails, cursor-following masks, snap-to-click layers,
+  copied layer styles, original/edited comparison, and a command palette
+- MP4, WebM, and looping GIF export plus optional transcript, chapter, and
+  thumbnail delivery packages and pre-export project health checks
 - Editing for ordinary videos not recorded with Snap, including manual zoom and CC
 - Versioned projects, autosave, backup recovery, and missing-sidecar handling
 - Disconnect-safe mobile recording recovery and automatic mobile zoom analysis
