@@ -14,7 +14,6 @@ import {
   Frame,
   Minimize2,
   Minus,
-  PanelTopOpen,
   RefreshCw,
   Timer,
   WandSparkles,
@@ -193,7 +192,6 @@ export default function SettingsWindow() {
                 <SettingsToggle icon={<Gauge size={18} />} title="Compatibility encoder fallback" checked={settings.allowSoftwareEncoder} onChange={(value) => change("allowSoftwareEncoder", value)} />
                 <SettingsToggle icon={<Timer size={18} />} title="3–2–1 countdown" checked={settings.countdown} onChange={(value) => change("countdown", value)} />
                 <SettingsToggle icon={<Minimize2 size={18} />} title="Minimize while recording" checked={settings.minimizeWhileRecording} onChange={(value) => change("minimizeWhileRecording", value)} />
-                <SettingsToggle icon={<PanelTopOpen size={18} />} title="Open editor after recording" checked={settings.autoOpenEditor} onChange={(value) => change("autoOpenEditor", value)} />
                 <SettingsToggle icon={<Database size={18} />} title="Show recording support files" checked={settings.showRecordingDataFiles} onChange={(value) => change("showRecordingDataFiles", value)} />
               </div>
             </>

@@ -16,6 +16,7 @@ export function generateMetadata(): Metadata {
     title,
     description,
     metadataBase: siteUrl,
+    icons: { icon: "/snap-logo.png", shortcut: "/snap-logo.png", apple: "/snap-logo.png" },
     openGraph: { title, description, type: "website", images: [{ url: ogImage, width: 1920, height: 1032, alt: "Snap screen recorder and editor" }] },
     twitter: { card: "summary_large_image", title, description, images: [ogImage] },
   };

@@ -169,11 +169,11 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
   }, [recordingActive, status.startedAtMs]);
 
   useEffect(() => {
-    if (status.state !== "saved" || !status.outputPath || !appSettings.autoOpenEditor) return;
+    if (status.state !== "saved" || !status.outputPath) return;
     if (openedOutputRef.current === status.outputPath) return;
     openedOutputRef.current = status.outputPath;
     onOpenEditor(status.outputPath, recordingDataPaths(status.outputPath).logPath);
-  }, [appSettings.autoOpenEditor, onOpenEditor, status.outputPath, status.state]);
+  }, [onOpenEditor, status.outputPath, status.state]);
 
   const installAndroidSupport = async () => {
     setInstalling(true);

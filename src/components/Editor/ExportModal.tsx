@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle2, Clock3, Download, ExternalLink, HardDrive, MonitorPlay, RefreshCw, X } from "lucide-react";
 import type { EditorConfig, ExportSettings } from "../../lib/types";
+import { defaultExportPath, pathFileName, recordingExportDirectory } from "../../lib/exportPaths";
 import "./ExportModal.css";
 
 interface Props {
@@ -36,10 +38,24 @@ function formatEstimate(seconds: number) {
 }
 
 export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, exportedPath, onClose, onCancel, onOpenFile, onExport }: Props) {
-  const defaultPath = videoPath.replace(/\.[^\\/.]+$/i, "_edited.mp4");
+  const fallbackExportsDir = recordingExportDirectory(videoPath);
+  const [exportsDir, setExportsDir] = useState(fallbackExportsDir);
+  const defaultPath = defaultExportPath(videoPath, fallbackExportsDir, "edited", "mp4");
   const [settings, setSettings] = useState<ExportSettings>({
     format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true,
   });
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<string>("get_exports_dir").then((directory) => {
+      if (cancelled) return;
+      setExportsDir(directory);
+      setSettings((current) => ({
+        ...current,
+        outputPath: `${directory.replace(/[\\/]$/, "")}\\${pathFileName(current.outputPath)}`,
+      }));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
   const activeDuration = Math.max(0.01, (config.trimEnd || duration) - config.trimStart);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
   const fpsFactor = Math.sqrt(settings.fps / 60);
@@ -62,7 +78,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
       width: preset.width,
       height: preset.height,
       fps: preset.fps,
-      outputPath: videoPath.replace(/\.[^\\/.]+$/i, `_${preset.id}.${extension}`),
+      outputPath: defaultExportPath(videoPath, exportsDir, preset.id, extension),
     }));
   };
 

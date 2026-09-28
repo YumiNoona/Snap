@@ -109,7 +109,7 @@ pub fn enumerate_audio_devices() -> std::result::Result<Vec<AudioDevice>, String
     let default_output_name = enumerator
         .get_default_device_for_role(&Direction::Render, &Role::Console)
         .and_then(|device| device.get_friendlyname())
-        .map(|name| format!("System default — {name}"))
+        .map(|name| format!("System default {name}"))
         .unwrap_or_else(|_| "System default output".to_string());
     devices.push(AudioDevice {
         id: "default".to_string(),

@@ -15,9 +15,8 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
 
   const refresh = async () => {
     try {
-      const dir = await invoke<string>("get_videos_dir");
-      const listed = await invoke<MediaFile[]>("list_directory", { path: dir });
-      setFiles(listed.filter((file) => !file.is_dir && /\.(mp4|mov|mkv|webm)$/i.test(file.name)));
+      const listed = await invoke<MediaFile[]>("list_recordings");
+      setFiles(listed);
     } catch (cause) { setError(String(cause)); }
   };
   useEffect(() => { void refresh(); }, []);
@@ -72,7 +71,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
           <span className="library-media-open">Open <ArrowUpRight size={13} /></span>
         </button>
         <div className="library-media-info"><span className="media-icon"><Film size={15} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span></div>
-      </article>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No videos found</strong></div>}</div>
+      </article>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No recordings found</strong></div>}</div>
       {error && <p className="module-error">{error}</p>}
     </main>
   </div>;

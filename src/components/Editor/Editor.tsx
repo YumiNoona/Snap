@@ -6,7 +6,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -81,7 +81,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [showProjectHealth, setShowProjectHealth] = useState(false);
-  const [showOriginal, setShowOriginal] = useState(false);
   const [fileActionStatus, setFileActionStatus] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
   const [lastExportPath, setLastExportPath] = useState("");
@@ -113,6 +112,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   useEffect(() => {
     localStorage.setItem(EDITOR_THEME_STORAGE_KEY, editorTheme);
   }, [editorTheme]);
+
+  // The file menu and floating tool inspector occupy the same left-side
+  // workspace. Keep them mutually exclusive so neither can cover the other.
+  useEffect(() => {
+    if (activeTool) setShowFileMenu(false);
+  }, [activeTool]);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
     config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
@@ -835,11 +840,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const commandItems = [
     { label: "Freeze frame at playhead", detail: "Adds a still image layer for 2.5 seconds", icon: Snowflake, run: () => void extractFrame("freeze") },
     { label: "Save current frame as thumbnail", detail: "Exports a full-resolution PNG", icon: ImageIcon, run: () => void extractFrame("thumbnail") },
-    { label: showOriginal ? "Return to edited preview" : "Compare with original", detail: "Toggle the unedited source preview", icon: Play, run: () => setShowOriginal((value) => !value) },
     { label: "Project health", detail: "Review media, timing, captions, and export readiness", icon: Activity, run: () => setShowProjectHealth(true) },
     { label: "Keys & Clicks", detail: "Open tutorial action overlays", icon: Keyboard, run: () => setActiveTool("actions") },
     ...(cameraMedia ? [{ label: "Webcam Studio", detail: "Frame and style the camera track", icon: Camera, run: () => setActiveTool("camera" as const) }] : []),
-    { label: "Export", detail: "Open video, GIF, and delivery settings", icon: Upload, run: () => setShowExport(true) },
   ];
   const filteredCommands = commandItems.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(commandQuery.trim().toLowerCase()));
 
@@ -858,7 +861,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             <button
               className={`ss-file-menu-trigger ${showFileMenu ? "active" : ""}`}
               type="button"
-              onClick={() => setShowFileMenu((open) => !open)}
+              onClick={() => {
+                if (!showFileMenu) setActiveTool(null);
+                setShowFileMenu(!showFileMenu);
+              }}
               aria-haspopup="menu"
               aria-expanded={showFileMenu}
               aria-label="Project file menu"
@@ -895,7 +901,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
-          <button className={`ss-theme-toggle ${showOriginal ? "active" : ""}`} onClick={() => setShowOriginal((value) => !value)} title={showOriginal ? "Show edited preview" : "Compare with original"} aria-label={showOriginal ? "Show edited preview" : "Compare with original"}><Play size={16} /></button>
           <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl K)" aria-label="Open command palette"><Command size={16} /></button>
           <button
             className="ss-theme-toggle"
@@ -1074,7 +1079,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
             captionTracks={captionTracks}
             hasExternalAudio={audioTracks.length > 0}
-            originalOnly={showOriginal}
+            originalOnly={false}
           />
           {previewFocusMode && <div className="ss-preview-player" role="group" aria-label="Preview playback controls">
             <div className="ss-preview-player-time"><span>{formatPlayerTime(currentTime)}</span><span>{formatPlayerTime(duration)}</span></div>
@@ -1272,12 +1277,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       />
       {showCommandPalette && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowCommandPalette(false)}>
         <section className="ss-command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
-          <div className="ss-command-search"><Command size={18} /><input autoFocus value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((index) => Math.max(0, Math.min(filteredCommands.length - 1, index + 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); } else if (event.key === "Enter" && filteredCommands[commandIndex]) { filteredCommands[commandIndex].run(); setShowCommandPalette(false); } }} placeholder="Search tools and actions…" /></div>
+          <header className="ss-command-header"><span><Command size={16} /></span><div><strong>Quick actions</strong><small>Jump to an editor tool</small></div><kbd>Esc</kbd></header>
+          <div className="ss-command-search"><Search size={17} /><input autoFocus value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((index) => Math.max(0, Math.min(filteredCommands.length - 1, index + 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); } else if (event.key === "Enter" && filteredCommands[commandIndex]) { filteredCommands[commandIndex].run(); setShowCommandPalette(false); } }} placeholder="Search actions" aria-label="Search quick actions" /></div>
           <div className="ss-command-list">
-            {filteredCommands.map(({ label, detail, icon: Icon, run }, index) => <button key={label} className={index === commandIndex ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => { run(); setShowCommandPalette(false); }}><Icon size={17} /><span><strong>{label}</strong><small>{detail}</small></span></button>)}
+            {filteredCommands.map(({ label, detail, icon: Icon, run }, index) => <button key={label} className={index === commandIndex ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => { run(); setShowCommandPalette(false); }}><i><Icon size={17} /></i><span><strong>{label}</strong><small>{detail}</small></span><em>Open</em></button>)}
             {!filteredCommands.length && <p>No matching actions</p>}
           </div>
-          <footer><span><kbd>Ctrl K</kbd> open anywhere</span><span><kbd>Esc</kbd> close</span></footer>
+          <footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> select</span></footer>
         </section>
       </div>}
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>

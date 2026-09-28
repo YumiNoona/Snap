@@ -17,6 +17,10 @@ use std::sync::Mutex;
 use tauri::webview::Color;
 use tauri::Emitter;
 use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
 };
@@ -48,6 +52,108 @@ struct EditorPaths(Mutex<Option<(String, String)>>);
 
 /// Live state mirrored to the floating recording dock window.
 struct DockState(Mutex<DockStateSnapshot>);
+
+struct TrayMenuState {
+    start_recording: MenuItem<tauri::Wry>,
+}
+
+fn show_recorder(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn build_system_tray(app: &tauri::App) -> tauri::Result<()> {
+    let start_recording = MenuItem::with_id(
+        app,
+        "start-recording",
+        "Start recording",
+        true,
+        None::<&str>,
+    )?;
+    let open_editor = MenuItem::with_id(app, "open-editor", "Open editor", true, None::<&str>)?;
+    let show_recorder_item =
+        MenuItem::with_id(app, "show-recorder", "Show recorder", true, None::<&str>)?;
+    let open_recordings = MenuItem::with_id(
+        app,
+        "open-recordings",
+        "Open recordings",
+        true,
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Snap", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &start_recording,
+            &open_editor,
+            &show_recorder_item,
+            &open_recordings,
+            &separator,
+            &quit,
+        ],
+    )?;
+
+    let mut builder = TrayIconBuilder::with_id("snap-tray")
+        .tooltip("Snap screen recorder")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "start-recording" => {
+                show_recorder(app);
+                let _ = app.emit("tray-start-recording", ());
+            }
+            "open-editor" => {
+                if let Some(editor) = app.get_webview_window("editor") {
+                    let _ = editor.show();
+                    let _ = editor.set_focus();
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.hide();
+                    }
+                } else {
+                    let _ = app.emit("tray-open-editor", ());
+                }
+            }
+            "show-recorder" => show_recorder(app),
+            "open-recordings" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = open_library_window(app).await;
+                });
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_recorder(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    app.manage(TrayMenuState { start_recording });
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_to_tray(window: tauri::Window) -> Result<(), String> {
+    window.hide().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn quit_snap(app: tauri::AppHandle) {
+    app.exit(0);
+}
 
 /// The dock should remain on-screen for the entire recording lifecycle.
 /// Only an explicit recording stop (or the user's own minimize action) may
@@ -130,6 +236,9 @@ async fn open_editor_window(
         let _ = win.emit("editor-open", (video, log));
         let _ = win.show();
         let _ = win.set_focus();
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.hide();
+        }
         return Ok(());
     }
 
@@ -218,6 +327,11 @@ fn set_editor_suspended_for_recording(
 /// eliminating any white pre-content frame.
 #[tauri::command]
 fn window_ready(window: tauri::Window) -> Result<(), String> {
+    if window.label() == "editor" {
+        if let Some(main) = window.app_handle().get_webview_window("main") {
+            let _ = main.hide();
+        }
+    }
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
@@ -550,8 +664,15 @@ fn set_dock_compact(app: tauri::AppHandle, compact: bool) -> Result<(), String> 
 fn update_dock_state(
     app: tauri::AppHandle,
     state: tauri::State<DockState>,
+    tray_menu: tauri::State<TrayMenuState>,
     snapshot: DockStateSnapshot,
 ) -> Result<(), String> {
+    let _ = tray_menu.start_recording.set_text(if snapshot.recording {
+        "Recording in progress"
+    } else {
+        "Start recording"
+    });
+    let _ = tray_menu.start_recording.set_enabled(!snapshot.recording);
     *state.0.lock().map_err(|e| e.to_string())? = snapshot.clone();
     if let Some(dock) = app.get_webview_window("dock") {
         let _ = dock.emit("dock-state", snapshot);
@@ -1199,6 +1320,70 @@ fn list_directory(
     Ok(entries)
 }
 
+fn is_snap_recording(path: &Path) -> bool {
+    if !path.is_file()
+        || !path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                ["mp4", "mov", "mkv", "webm"]
+                    .iter()
+                    .any(|extension| value.eq_ignore_ascii_case(extension))
+            })
+    {
+        return false;
+    }
+    let (data_dir, preferred_log) = recording_data_paths(path);
+    if preferred_log.is_file() || path.with_extension("json").is_file() {
+        return true;
+    }
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    [
+        data_dir.join(format!("{stem}.json")),
+        data_dir.join("recording-session.json"),
+        data_dir.join("system_audio.wav"),
+        data_dir.join("mic_audio.wav"),
+        data_dir.join("device_audio.wav"),
+        data_dir.join("mobile-recording.json"),
+    ]
+    .iter()
+    .any(|asset| asset.is_file())
+}
+
+/// Lists only videos created by Snap's recorder. Rendered exports and arbitrary
+/// videos may share the same parent folder, but they do not own recording
+/// sidecars/session data and therefore never appear in Open Media.
+#[tauri::command]
+fn list_recordings(app: tauri::AppHandle) -> std::result::Result<Vec<FileEntry>, String> {
+    let library = PathBuf::from(capture::get_videos_dir()?);
+    access::require(&app, &library)?;
+    let mut entries: Vec<_> = std::fs::read_dir(&library)
+        .map_err(|error| format!("Unable to scan recording library: {error}"))?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !is_snap_recording(&path) {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata
+                .modified()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            Some((
+                modified,
+                FileEntry {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    path: path.to_string_lossy().to_string(),
+                    is_dir: false,
+                    size: metadata.len(),
+                },
+            ))
+        })
+        .collect();
+    entries.sort_by(|left, right| right.0.cmp(&left.0));
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecordingDataPaths {
@@ -1606,7 +1791,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
+        .setup(|app| {
+            build_system_tray(app)?;
+            Ok(())
+        })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 export::discard_export_sink_for_window(window.label());
             }
@@ -1615,6 +1810,7 @@ pub fn run() {
             capture::enumerate_targets,
             capture::get_target_bounds,
             capture::get_videos_dir,
+            capture::get_exports_dir,
             capture::recording_preflight,
             capture::recommend_recording_options,
             capture::install_ffmpeg,
@@ -1656,6 +1852,8 @@ pub fn run() {
             open_donate_window,
             open_window_picker_window,
             window_ready,
+            hide_to_tray,
+            quit_snap,
             get_pending_editor_paths,
             begin_region_selection,
             end_region_selection,
@@ -1675,6 +1873,7 @@ pub fn run() {
             prepare_editor_preview,
             write_text_file_atomic,
             list_directory,
+            list_recordings,
             import_audio_file,
             prepare_recording_data,
             update_recording_session,
@@ -1691,7 +1890,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod project_file_tests {
-    use super::persist_text_atomic;
+    use super::{is_snap_recording, persist_text_atomic};
     use std::path::PathBuf;
 
     #[test]
@@ -1720,6 +1919,35 @@ mod project_file_tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_file(format!("{path_text}.bak")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn recording_library_excludes_rendered_videos_without_capture_data() {
+        let root = std::env::temp_dir().join(format!(
+            "snap-library-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let recording = root.join("snap_123.mp4");
+        let exported = root.join("snap_123_edited.mp4");
+        std::fs::write(&recording, b"video").unwrap();
+        std::fs::write(&exported, b"video").unwrap();
+        let support = root.join("snap_123");
+        std::fs::create_dir(&support).unwrap();
+        std::fs::write(support.join("events.json"), b"[]").unwrap();
+
+        assert!(is_snap_recording(&recording));
+        assert!(!is_snap_recording(&exported));
+
+        std::fs::remove_file(support.join("events.json")).unwrap();
+        std::fs::remove_dir(support).unwrap();
+        std::fs::remove_file(recording).unwrap();
+        std::fs::remove_file(exported).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
 }

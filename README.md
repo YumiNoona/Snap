@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-8.1.1-10b981?style=flat-square" alt="Version 8.1.1" />
+    <img src="https://img.shields.io/badge/version-9.0.0-10b981?style=flat-square" alt="Version 9.0.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,7 +22,26 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 8.1.1
+## Snap 9.0.0
+
+Snap 9 moves Snap into a lightweight tray-first recording workflow and rounds
+out the tutorial editor with dedicated action overlays and safer long sessions:
+
+- A native tray menu can start a recording, reopen the recorder or editor, open
+  the recording library, and quit Snap without keeping the full launcher open.
+- Recording now prioritizes the Windows-scheduled hardware encoder and bounds
+  live GPU frame buffering so browser video, games, and capture can share the
+  display adapter without an ever-growing queue.
+- Completed recordings open directly in the editor while the recorder closes,
+  and exports are kept in their own `Exports` folder outside Recent Recordings.
+- Keys & Clicks has its own timeline lane with editable shortcut, mouse, and
+  scroll overlays, separate from generated caption tracks.
+- The editor has a clearer command palette, larger timeline zoom control,
+  cleaner menus and scrollbars, and coordinated panels that no longer overlap.
+- Desktop installers, application windows, and the product website now use the
+  same Snap avocado identity.
+
+### Snap 8.1.1
 
 Snap 8.1.1 gives Keys & Clicks its own correctly aligned timeline track header,
 keeping action clips separate from captions and every later overlay lane.

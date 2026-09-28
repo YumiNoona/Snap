@@ -263,9 +263,7 @@ function App() {
           className="open-last-btn"
           onClick={async () => {
             try {
-              const dir = await invoke<string>("get_videos_dir");
-              const files = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>("list_directory", { path: dir });
-              const mp4s = files.filter((f) => !f.is_dir && f.name.endsWith(".mp4"));
+              const mp4s = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>("list_recordings");
               if (mp4s.length > 0) {
                 const latest = mp4s[0];
                 const jsonPath = await invoke<string>("resolve_recording_log_path", { videoPath: latest.path }).catch(() => recordingDataPaths(latest.path).logPath);

@@ -22,7 +22,6 @@ export const AUTOMATIC_PROFILE_VERSION = 4;
 export interface AppSettings {
   borderStyle: BorderStyle;
   countdown: boolean;
-  autoOpenEditor: boolean;
   minimizeWhileRecording: boolean;
   autoCheckUpdates: boolean;
   showRecordingDataFiles: boolean;
@@ -39,7 +38,6 @@ export const SETTINGS_KEY = "snap.settings";
 export const DEFAULT_SETTINGS: AppSettings = {
   borderStyle: "off",
   countdown: true,
-  autoOpenEditor: true,
   minimizeWhileRecording: true,
   autoCheckUpdates: true,
   showRecordingDataFiles: false,

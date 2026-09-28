@@ -316,17 +316,18 @@
   background: var(--bg-app);
   z-index: 1;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, .42) transparent;
+  scrollbar-color: rgba(148, 163, 184, .24) transparent;
   overscroll-behavior-y: contain;
 }
 
-.ss-tracks-wrapper::-webkit-scrollbar { width: 6px; }
+.ss-tracks-wrapper::-webkit-scrollbar { width: 3px; }
 .ss-tracks-wrapper::-webkit-scrollbar-track { background: transparent; }
 .ss-tracks-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, .38);
+  background: rgba(148, 163, 184, .2);
   border-radius: 999px;
 }
-.ss-tracks-wrapper::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, .62); }
+.ss-tracks-wrapper:hover::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .34); }
+.ss-tracks-wrapper::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, .52); }
 
 .ss-labels-col {
   width: 88px;
@@ -979,7 +980,7 @@
 .timeline-context-menu.theme-light .timeline-context-speed button { background: #f4f3f0; border-color: rgba(0, 0, 0, .1); }
 .timeline-context-menu.theme-light .timeline-context-speed button.active { color: #fff; background: #292927; border-color: #292927; }
 .timeline-zoom-slider-wrap { height: 32px; padding: 0 3px; background: transparent; border: 0; }
-.timeline-zoom-slider-wrap input[type="range"] { width: 46px; }
+.timeline-zoom-slider-wrap input[type="range"] { width: 76px; }
 .zoom-step-btn { width: 28px; height: 28px; }
 .ss-tracks-wrapper {
   padding: 8px 10px 8px 6px;

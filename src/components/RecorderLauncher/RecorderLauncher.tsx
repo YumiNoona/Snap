@@ -147,6 +147,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   const pauseStartedAtRef = useRef(0);
   const pausedDurationRef = useRef(0);
   const windowTargetHandlerRef = useRef<(targetId: string) => void>(() => {});
+  const trayStartRecordingRef = useRef<() => void>(() => {});
+  const trayOpenEditorRef = useRef<() => void>(() => {});
 
   const beginElapsedClock = () => {
     if (elapsedRef.current) return;
@@ -218,6 +220,15 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   useEffect(() => {
     const unlisten = listen<string>("window-target-selected", ({ payload }) => windowTargetHandlerRef.current(payload));
     return () => { unlisten.then((stop) => stop()); };
+  }, []);
+
+  useEffect(() => {
+    const startListener = listen("tray-start-recording", () => trayStartRecordingRef.current());
+    const editorListener = listen("tray-open-editor", () => trayOpenEditorRef.current());
+    return () => {
+      void startListener.then((stop) => stop());
+      void editorListener.then((stop) => stop());
+    };
   }, []);
 
   useEffect(() => {
@@ -572,7 +583,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     const targetVideo = lastVideoRef.current || lastVideo;
     const targetLog = lastLogRef.current || lastLog;
     try {
-      if (failures.length === 0 && settings.autoOpenEditor && targetVideo && targetLog) {
+      if (failures.length === 0 && targetVideo && targetLog) {
         setProcessingMessage("Opening your recording in the editor…");
         await onOpenEditor(targetVideo, targetLog);
       } else {
@@ -662,10 +673,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     /* Legacy inline picker retained as a fallback implementation. */
     // eslint-disable-next-line no-unreachable
     try {
-      const dir = await invoke<string>("get_videos_dir");
-      const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_directory", { path: dir });
+      const files = await invoke<Array<{ name: string; path: string; is_dir: boolean; size: number }>>("list_recordings");
       const recordings = files
-        .filter((f) => !f.is_dir && f.name.endsWith(".mp4"))
         .map((f) => ({ name: f.name, path: f.path, size: f.size }))
         .sort((a, b) => b.name.localeCompare(a.name));
       setFileList(recordings);
@@ -681,6 +690,23 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     const fallback = recordingDataPaths(videoPath).logPath;
     const logPath = await invoke<string>("resolve_recording_log_path", { videoPath }).catch(() => fallback);
     onOpenEditor(videoPath, logPath);
+  };
+
+  trayStartRecordingRef.current = () => {
+    if (!recording && !startingRef.current && !processingRecording) void handleFullScreen();
+  };
+  trayOpenEditorRef.current = () => {
+    void (async () => {
+      const recent = await invoke<Array<{ path: string }>>("list_recordings").catch(() => []);
+      const videoPath = recent[0]?.path || lastVideoRef.current;
+      if (!videoPath) {
+        await invoke("open_library_window").catch(() => {});
+        return;
+      }
+      const logPath = await invoke<string>("resolve_recording_log_path", { videoPath })
+        .catch(() => recordingDataPaths(videoPath).logPath);
+      await Promise.resolve(onOpenEditor(videoPath, logPath)).catch(() => {});
+    })();
   };
 
   const microphones = audioDevices.filter((d) => d.device_type === "microphone");
@@ -799,7 +825,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
                   <FolderOpen size={16} /><span>Output folder</span>
                 </button>
                 <div className="dropdown-divider" />
-                <button className="dropdown-item danger" onClick={() => getCurrentWindow().close()}>
+                <button className="dropdown-item danger" onClick={() => invoke("quit_snap")}>
                   <LogOut size={16} /><span>Exit Snap</span>
                 </button>
               </div>
@@ -817,7 +843,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
             <button className="window-btn" title="Minimize" onClick={() => getCurrentWindow().minimize()}>
               <Minus size={15} />
             </button>
-            <button className="window-btn close-btn" title="Close" onClick={() => getCurrentWindow().close()}>
+            <button className="window-btn close-btn" title="Close to tray" onClick={() => invoke("hide_to_tray")}>
               <X size={15} />
             </button>
           </div>

@@ -119,15 +119,23 @@ pub struct RecordingRecommendation {
 
 impl GpuVendor {
     fn encoder_rank(self, name: &str) -> u8 {
+        // Media Foundation is the least intrusive live-recording path on
+        // Windows: the OS can schedule its hardware MFT alongside Chromium's
+        // video decoder/compositor instead of Snap opening a second vendor
+        // encoder session directly on the display adapter.  This matters on
+        // hybrid laptops and prevents long browser playback from being
+        // starved while recording. Vendor encoders remain hardware-only
+        // fallbacks when the display-remoting MFT cannot accept D3D11 frames.
+        if name.contains("Media Foundation") {
+            return 0;
+        }
         let preferred = match self {
             Self::Nvidia => "NVENC",
             Self::Amd => "AMD",
             Self::Intel => "Intel",
-            Self::Other => "Media Foundation",
+            Self::Other => "",
         };
-        if name.contains(preferred) {
-            0
-        } else if name.contains("Media Foundation") {
+        if !preferred.is_empty() && name.contains(preferred) {
             1
         } else if name.contains("compatibility") {
             3
@@ -180,6 +188,14 @@ pub fn get_videos_dir() -> std::result::Result<String, String> {
     std::fs::create_dir_all(&library)
         .map_err(|error| format!("Unable to create the Snap recording library: {error}"))?;
     Ok(library.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_exports_dir() -> std::result::Result<String, String> {
+    let exports = std::path::PathBuf::from(get_videos_dir()?).join("Exports");
+    std::fs::create_dir_all(&exports)
+        .map_err(|error| format!("Unable to create the Snap export folder: {error}"))?;
+    Ok(exports.to_string_lossy().to_string())
 }
 
 pub fn get_videos_root() -> std::path::PathBuf {
@@ -482,6 +498,7 @@ struct CaptureRuntime {
 
 static STATE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
 static GFXCAPTURE_AVAILABLE: OnceLock<bool> = OnceLock::new();
+static BOUNDED_FILTER_QUEUE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 const RESILIENT_MP4_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
 const EDITOR_READY_MOVFLAGS: &str = "+faststart";
 
@@ -532,6 +549,20 @@ fn has_gfxcapture() -> bool {
                 output.status.success()
                     && (stdout.contains("Filter gfxcapture")
                         || stderr.contains("Filter gfxcapture"))
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn has_bounded_filter_queue() -> bool {
+    *BOUNDED_FILTER_QUEUE_AVAILABLE.get_or_init(|| {
+        background_command("ffmpeg")
+            .args(["-hide_banner", "-h", "full"])
+            .stdin(Stdio::null())
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout).contains("filter_buffered_frames")
+                    || String::from_utf8_lossy(&output.stderr).contains("filter_buffered_frames")
             })
             .unwrap_or(false)
     })
@@ -1233,8 +1264,14 @@ fn spawn_gpu_capture(
                 "1",
                 "-scenario",
                 "display_remoting",
+                "-rate_control",
+                "cbr",
                 "-b:v",
                 &bitrate,
+                "-maxrate",
+                &maxrate,
+                "-bufsize",
+                &bufsize,
                 "-g",
                 &gop,
             ]
@@ -1292,9 +1329,18 @@ fn spawn_gpu_capture(
             "1",
             "-filter_complex_threads",
             "1",
-            "-filter_complex",
-            &capture_filter,
         ]);
+        // Never let a slow encoder build an unbounded queue of D3D11
+        // textures. A small live queue absorbs normal scheduling jitter but
+        // releases capture surfaces quickly enough for browsers and games to
+        // keep presenting frames on the same adapter. Older FFmpeg builds did
+        // not expose this guard, so keep the hardware path compatible with
+        // them rather than turning a performance safeguard into a startup
+        // failure.
+        if has_bounded_filter_queue() {
+            command.args(["-filter_buffered_frames", "4"]);
+        }
+        command.args(["-filter_complex", &capture_filter]);
         // Write independently decodable MP4 fragments as recording proceeds.
         // A normal MP4 stores its `moov` index only during clean shutdown, so
         // a driver/FFmpeg access violation at Stop turns the entire recording
@@ -1878,7 +1924,7 @@ mod tests {
 
     use super::{
         constrained_size, editor_ready_fps_filter, gfxcapture_region_source, gfxcapture_source,
-        parse_gpu_progress_line, validate_capture_segment, CropRect, RecordingOptions,
+        parse_gpu_progress_line, validate_capture_segment, CropRect, GpuVendor, RecordingOptions,
         EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
     };
 
@@ -1899,6 +1945,18 @@ mod tests {
             !RecordingOptions::default()
                 .sanitized()
                 .allow_software_encoder
+        );
+    }
+
+    #[test]
+    fn live_capture_prefers_the_windows_scheduled_hardware_encoder() {
+        assert!(
+            GpuVendor::Nvidia.encoder_rank("Media Foundation hardware")
+                < GpuVendor::Nvidia.encoder_rank("NVENC (GPU-resident)")
+        );
+        assert!(
+            GpuVendor::Intel.encoder_rank("Media Foundation hardware")
+                < GpuVendor::Intel.encoder_rank("Intel Quick Sync (GPU-mapped)")
         );
     }
 
