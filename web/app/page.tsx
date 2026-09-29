@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
-  ArrowRight, AudioLines, Check, ChevronLeft, ChevronRight, Copy, Download, Focus,
-  Heart, MonitorUp, ShieldCheck, X,
+  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp,
+  ShieldCheck, X,
 } from "lucide-react";
 
 const UPI_ID = "rushikeshingale2001@okicici";
@@ -43,17 +44,87 @@ const showcaseSlides = [
   },
 ] as const;
 
+const showcaseTransitions = ["horizontal", "diagonal", "zoom", "reveal"] as const;
+type ShowcaseTransition = (typeof showcaseTransitions)[number];
+
+function nextShowcaseTransition(current: ShowcaseTransition) {
+  const options = showcaseTransitions.filter((transition) => transition !== current);
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 export default function Home() {
   const [donateOpen, setDonateOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [activeSlide, setActiveSlide] = useState(0);
+  const [previousSlide, setPreviousSlide] = useState<number | null>(null);
+  const [slideDirection, setSlideDirection] = useState<"next" | "previous">("next");
+  const [slideTransition, setSlideTransition] = useState<ShowcaseTransition>("horizontal");
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const activeSlideRef = useRef(0);
+  const dragStartRef = useRef<number | null>(null);
+  const dragOffsetRef = useRef(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      setActiveSlide((current) => (current + 1) % showcaseSlides.length);
+      if (dragStartRef.current !== null) return;
+      const current = activeSlideRef.current;
+      const next = (current + 1) % showcaseSlides.length;
+      setPreviousSlide(current);
+      setSlideDirection("next");
+      setSlideTransition((transition) => nextShowcaseTransition(transition));
+      activeSlideRef.current = next;
+      setActiveSlide(next);
     }, 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  const showSlide = (requestedIndex: number, requestedDirection?: "next" | "previous") => {
+    const current = activeSlideRef.current;
+    const next = (requestedIndex + showcaseSlides.length) % showcaseSlides.length;
+    if (next === current) return;
+    setPreviousSlide(current);
+    setSlideDirection(requestedDirection ?? (next > current ? "next" : "previous"));
+    setSlideTransition((transition) => nextShowcaseTransition(transition));
+    activeSlideRef.current = next;
+    setActiveSlide(next);
+    dragOffsetRef.current = 0;
+    setDragOffset(0);
+  };
+
+  const startShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || event.button > 0) return;
+    dragStartRef.current = event.clientX;
+    dragOffsetRef.current = 0;
+    setDragOffset(0);
+    setIsDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartRef.current === null) return;
+    const offset = event.clientX - dragStartRef.current;
+    dragOffsetRef.current = offset;
+    setDragOffset(offset);
+  };
+
+  const finishShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartRef.current === null) return;
+    const offset = dragOffsetRef.current;
+    const threshold = Math.min(110, event.currentTarget.clientWidth * .1);
+    dragStartRef.current = null;
+    setIsDragging(false);
+    if (Math.abs(offset) >= threshold) {
+      const direction = offset < 0 ? "next" : "previous";
+      showSlide(activeSlideRef.current + (direction === "next" ? 1 : -1), direction);
+    } else {
+      dragOffsetRef.current = 0;
+      setDragOffset(0);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
 
   useEffect(() => {
     if (!donateOpen) return;
@@ -111,21 +182,31 @@ export default function Home() {
           </div>
 
           <div className="showcase-carousel" id="product" aria-label="Snap editor features">
-            <div className="showcase-stage" aria-live="polite">
+            <div
+              className={isDragging ? "showcase-stage is-dragging" : "showcase-stage"}
+              data-direction={slideDirection}
+              data-transition={slideTransition}
+              aria-live="polite"
+              onPointerDown={startShowcaseDrag}
+              onPointerMove={moveShowcaseDrag}
+              onPointerUp={finishShowcaseDrag}
+              onPointerCancel={finishShowcaseDrag}
+            >
               {showcaseSlides.map((slide, index) => (
                 <Image
-                  className={index === activeSlide ? "showcase-slide is-active" : "showcase-slide"}
+                  className={index === activeSlide ? "showcase-slide is-active" : index === previousSlide ? "showcase-slide is-previous" : "showcase-slide"}
                   src={slide.image}
                   alt={slide.alt}
                   width={1920}
                   height={1032}
                   priority={index === 0}
                   sizes="(max-width: 900px) 96vw, 1280px"
+                  draggable={false}
+                  style={index === activeSlide && isDragging ? { transform: `translate3d(${dragOffset}px, 0, 0)` } : undefined}
                   key={slide.image}
                 />
               ))}
-              <button className="showcase-arrow showcase-arrow-left" type="button" aria-label="Previous screenshot" onClick={() => setActiveSlide((activeSlide - 1 + showcaseSlides.length) % showcaseSlides.length)}><ChevronLeft size={20} /></button>
-              <button className="showcase-arrow showcase-arrow-right" type="button" aria-label="Next screenshot" onClick={() => setActiveSlide((activeSlide + 1) % showcaseSlides.length)}><ChevronRight size={20} /></button>
+              <span className="showcase-drag-hint" aria-hidden="true">Drag to explore</span>
             </div>
             <div className="showcase-tabs" role="tablist" aria-label="Choose a Snap feature">
               {showcaseSlides.map((slide, index) => (
@@ -134,7 +215,7 @@ export default function Home() {
                   type="button"
                   role="tab"
                   aria-selected={index === activeSlide}
-                  onClick={() => setActiveSlide(index)}
+                  onClick={() => showSlide(index)}
                   key={slide.label}
                 >
                   <span>{String(index + 1).padStart(2, "0")}</span>{slide.label}
