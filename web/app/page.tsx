@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp,
   ShieldCheck, X,
@@ -45,7 +45,7 @@ const showcaseSlides = [
 ] as const;
 
 const showcaseTransitions = ["horizontal", "diagonal", "zoom", "reveal"] as const;
-type ShowcaseTransition = (typeof showcaseTransitions)[number];
+type ShowcaseTransition = (typeof showcaseTransitions)[number] | "drag";
 
 function nextShowcaseTransition(current: ShowcaseTransition) {
   const options = showcaseTransitions.filter((transition) => transition !== current);
@@ -60,6 +60,7 @@ export default function Home() {
   const [slideDirection, setSlideDirection] = useState<"next" | "previous">("next");
   const [slideTransition, setSlideTransition] = useState<ShowcaseTransition>("horizontal");
   const [dragOffset, setDragOffset] = useState(0);
+  const [releaseOffset, setReleaseOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const activeSlideRef = useRef(0);
   const dragStartRef = useRef<number | null>(null);
@@ -79,13 +80,13 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const showSlide = (requestedIndex: number, requestedDirection?: "next" | "previous") => {
+  const showSlide = (requestedIndex: number, requestedDirection?: "next" | "previous", transitionOverride?: ShowcaseTransition) => {
     const current = activeSlideRef.current;
     const next = (requestedIndex + showcaseSlides.length) % showcaseSlides.length;
     if (next === current) return;
     setPreviousSlide(current);
     setSlideDirection(requestedDirection ?? (next > current ? "next" : "previous"));
-    setSlideTransition((transition) => nextShowcaseTransition(transition));
+    setSlideTransition((transition) => transitionOverride ?? nextShowcaseTransition(transition));
     activeSlideRef.current = next;
     setActiveSlide(next);
     dragOffsetRef.current = 0;
@@ -106,6 +107,10 @@ export default function Home() {
     const offset = event.clientX - dragStartRef.current;
     dragOffsetRef.current = offset;
     setDragOffset(offset);
+    if (Math.abs(offset) > 2) {
+      const adjacent = (activeSlideRef.current + (offset < 0 ? 1 : -1) + showcaseSlides.length) % showcaseSlides.length;
+      setPreviousSlide(adjacent);
+    }
   };
 
   const finishShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -116,7 +121,8 @@ export default function Home() {
     setIsDragging(false);
     if (Math.abs(offset) >= threshold) {
       const direction = offset < 0 ? "next" : "previous";
-      showSlide(activeSlideRef.current + (direction === "next" ? 1 : -1), direction);
+      setReleaseOffset(offset);
+      showSlide(activeSlideRef.current + (direction === "next" ? 1 : -1), direction, "drag");
     } else {
       dragOffsetRef.current = 0;
       setDragOffset(0);
@@ -186,6 +192,7 @@ export default function Home() {
               className={isDragging ? "showcase-stage is-dragging" : "showcase-stage"}
               data-direction={slideDirection}
               data-transition={slideTransition}
+              style={{ "--release-offset": `${releaseOffset}px` } as CSSProperties}
               aria-live="polite"
               onPointerDown={startShowcaseDrag}
               onPointerMove={moveShowcaseDrag}
@@ -236,8 +243,7 @@ export default function Home() {
         </section>
 
         <section className="closing shell">
-          <BrandMark />
-          <div><span className="section-kicker">Ready when you are</span><h2>Make the screen<br /><span className="accent-line">feel like a camera.</span></h2></div>
+          <div><h2>Make the screen<br /><span className="accent-line">feel like a camera.</span></h2></div>
           <div className="closing-actions">
             <p>Free to download for Windows. Local-first by design, with no account required.</p>
             <DownloadButton light />
@@ -247,7 +253,7 @@ export default function Home() {
       </main>
 
       <footer className="site-footer shell">
-        <a className="brand" href="#top"><BrandMark /><strong>Snap</strong></a>
+        <p>Made with <span aria-label="love">💙</span> By <a href="https://venusapp.in" target="_blank" rel="noreferrer">Veil</a> <span>(venusapp.in)</span></p>
       </footer>
 
       {donateOpen && (
