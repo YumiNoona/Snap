@@ -253,7 +253,7 @@ export default function Home() {
       </main>
 
       <footer className="site-footer shell">
-        <p>Made with <span aria-label="love">💙</span> By <a href="https://venusapp.in" target="_blank" rel="noreferrer">Veil</a> <span>(venusapp.in)</span></p>
+        <p>Made with <span aria-label="love">💙</span> By <a href="https://venusapp.in" target="_blank" rel="noreferrer">Veil</a></span></p>
       </footer>
 
       {donateOpen && (
