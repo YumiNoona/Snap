@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer } from "./types";
+import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer, VideoLayer } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
@@ -9,7 +9,7 @@ import {
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
   cursorIdleOpacity, drawVisualLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
-  drawCameraBubble,
+  drawCameraBubble, reconcileVideoLayers,
 } from "./canvasDraw";
 
 export interface ExportCompositor {
@@ -46,8 +46,8 @@ export async function createExportCompositor(
     try { await image.decode(); } catch { /* draw loop leaves an unreadable image empty */ }
   }));
   const layerVideoCache = new Map<string, HTMLVideoElement>();
-  await Promise.all(config.layers.filter((layer) => layer.type === "video").map((layer) => new Promise<void>((resolve) => {
-    const media = loadCachedVideo(layer.path, layerVideoCache);
+  await Promise.all(config.layers.filter((layer): layer is VideoLayer => layer.type === "video" && config.trimStart >= layer.start && config.trimStart < layer.end).map((layer) => new Promise<void>((resolve) => {
+    const media = loadCachedVideo(layer.path, layerVideoCache, layer.id);
     if (media.readyState >= 2) { resolve(); return; }
     const finish = () => { media.removeEventListener("canplay", finish); media.removeEventListener("error", finish); resolve(); };
     media.addEventListener("canplay", finish, { once: true });
@@ -423,7 +423,8 @@ export async function createExportCompositor(
         camera.defaultPlaybackRate = video.playbackRate;
         camera.playbackRate = video.playbackRate;
         if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
-        if (!video.paused && camera.paused) void camera.play().catch(() => {});
+        if (video.paused) camera.pause();
+        else if (camera.paused) void camera.play().catch(() => {});
         drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay);
       } else if (!camera.paused) {
         camera.pause();
@@ -434,6 +435,7 @@ export async function createExportCompositor(
     // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
     const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    reconcileVideoLayers(config.layers, videoTs, !video.paused, layerVideoCache);
     if (maskSourceCtx && activeLayers.some((layer) => layer.type === "mask")) {
       maskSourceCtx.clearRect(0, 0, outputW, outputH);
       maskSourceCtx.drawImage(canvas, 0, 0);
@@ -470,7 +472,7 @@ export async function createExportCompositor(
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
-      drawVisualLayer(ctx, layer, videoTs, true, layerVideoCache, lx, ly, lw, lh);
+      drawVisualLayer(ctx, layer, videoTs, !video.paused, layerVideoCache, lx, ly, lw, lh);
       ctx.restore();
     }
     for (const track of captionTracks) {

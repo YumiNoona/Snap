@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { userError } from "./lib/userError";
 
 const rootEl = document.getElementById("root") as HTMLElement;
 
@@ -23,19 +24,38 @@ document.body.classList.add(`window-${windowLabel}`);
 // captions, audio, and annotation layers. Suppress WebView2's browser menu so
 // production users never see Refresh / Print / Inspect chrome; preventDefault
 // does not stop Snap's own `contextmenu` handlers from opening their menus.
-document.addEventListener("contextmenu", (event) => event.preventDefault());
+document.addEventListener("contextmenu", (event) => {
+  if (event.target instanceof HTMLElement && event.target.closest("input, textarea, [contenteditable='true']")) return;
+  event.preventDefault();
+});
 
 
 function showError(label: string, err: unknown) {
-  const message = err instanceof Error ? `${err.message}\n\n${err.stack || ""}` : String(err);
+  const details = (err instanceof Error ? `${err.message}\n\n${err.stack || ""}` : String(err)).slice(0, 8192);
+  const message = userError(err);
   console.error(`[Snap] ${label}`, err);
 
+  document.getElementById("snap-error-banner")?.remove();
   const banner = document.createElement("div");
+  banner.id = "snap-error-banner";
+  banner.setAttribute("role", "alert");
   banner.style.cssText =
     "position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#1a0000;color:#ef4444;" +
     "font-family:Consolas,monospace;font-size:11px;padding:10px 14px;max-height:30vh;overflow-y:auto;" +
     "border-top:2px solid #ef4444;white-space:pre-wrap;line-height:1.5";
-  banner.textContent = `[${label}] ${message}`;
+  const text = document.createElement("span");
+  text.textContent = message;
+  banner.appendChild(text);
+  const copy = document.createElement("button");
+  copy.textContent = "Copy diagnostic details";
+  copy.style.marginLeft = "12px";
+  copy.onclick = () => { void navigator.clipboard.writeText(`[${label}] ${details}`).then(() => { copy.textContent = "Copied"; }, () => { copy.textContent = "Could not copy"; }); };
+  banner.appendChild(copy);
+  const dismiss = document.createElement("button");
+  dismiss.textContent = "Dismiss";
+  dismiss.style.marginLeft = "8px";
+  dismiss.onclick = () => banner.remove();
+  banner.appendChild(dismiss);
   document.body.appendChild(banner);
 
   if (!rootEl.textContent) {
@@ -43,7 +63,7 @@ function showError(label: string, err: unknown) {
       "display:flex;align-items:center;justify-content:center;height:100vh;" +
       "color:#f2f4f8;background:#0b0d12;font-family:Consolas,monospace;font-size:13px;" +
       "padding:32px;white-space:pre-wrap;line-height:1.6";
-    rootEl.textContent = `Snap failed to start.\n\n${message}`;
+    rootEl.textContent = `Snap could not start. Please close and reopen Snap.\n\n${message}`;
   }
 }
 

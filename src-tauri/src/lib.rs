@@ -15,12 +15,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::webview::Color;
-use tauri::Emitter;
 use tauri::Manager;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri::{Emitter, Listener};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
 };
@@ -107,6 +107,14 @@ fn build_system_tray(app: &tauri::App) -> tauri::Result<()> {
                 let _ = app.emit("tray-start-recording", ());
             }
             "open-editor" => {
+                if recording_session::get_recording_session_state()
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    show_recorder(app);
+                    return;
+                }
                 if let Some(editor) = app.get_webview_window("editor") {
                     let _ = editor.show();
                     let _ = editor.set_focus();
@@ -224,6 +232,9 @@ async fn open_editor_window(
     video: String,
     log: String,
 ) -> Result<(), String> {
+    if recording_session::get_recording_session_state()?.is_some() {
+        return Err("Finish the current recording before opening the editor".into());
+    }
     access::require(&app, Path::new(&video))?;
     access::grant_video(&app, Path::new(&video))?;
     access::require(&app, Path::new(&log))?;
@@ -301,11 +312,10 @@ async fn open_editor_window(
         .map_err(|e| format!("Editor window creation thread died: {e}"))?
 }
 
-/// Keep the heavy editor compositor out of the recording hot path. Hiding the
-/// WebView throttles its rendering while preserving the current project in
-/// memory; the editor is shown again when recording stops or startup fails.
+/// Save and release the editor media before capture. Hiding alone retains
+/// decoders and frame work that can compete with a game on the same adapter.
 #[tauri::command]
-fn set_editor_suspended_for_recording(
+async fn set_editor_suspended_for_recording(
     app: tauri::AppHandle,
     suspended: bool,
 ) -> Result<(), String> {
@@ -313,9 +323,45 @@ fn set_editor_suspended_for_recording(
         return Ok(());
     };
     if suspended {
-        let _ = window.emit("recording-starting", ());
+        let request_id = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let expected_id = request_id.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let sender = Mutex::new(Some(sender));
+        let listener = app.listen("editor-suspended", move |event| {
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+                return;
+            };
+            if payload["requestId"].as_str() == Some(expected_id.as_str()) {
+                if let Ok(mut sender) = sender.lock() {
+                    if let Some(sender) = sender.take() {
+                        let _ = sender.send(payload["ready"].as_bool() == Some(true));
+                    }
+                }
+            }
+        });
+        let emitted = window.emit("recording-starting", &request_id);
+        let ready = if emitted.is_ok() {
+            matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), receiver).await,
+                Ok(Ok(true))
+            )
+        } else {
+            false
+        };
+        app.unlisten(listener);
+        if !ready {
+            let _ = window.emit("recording-resuming", ());
+            return Err("Save your project and finish any active export before recording. If project recovery failed, use Save As first.".into());
+        }
         window.hide().map_err(|error| error.to_string())?;
     } else {
+        let _ = window.emit("recording-resuming", ());
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
     }
@@ -908,11 +954,20 @@ fn read_optional_text_file(app: tauri::AppHandle, path: String) -> Result<Option
 }
 
 #[tauri::command]
-fn read_input_log(app: tauri::AppHandle, path: String) -> Result<Vec<serde_json::Value>, String> {
+async fn read_input_log(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    access::require(&app, Path::new(&path))?;
+    tauri::async_runtime::spawn_blocking(move || read_input_log_blocking(path))
+        .await
+        .map_err(|error| format!("Input log worker failed: {error}"))?
+}
+
+fn read_input_log_blocking(path: String) -> Result<Vec<serde_json::Value>, String> {
     use std::io::BufRead;
     const MAX_BYTES: u64 = 512 * 1024 * 1024;
     const MAX_EVENTS: usize = 5_000_000;
-    access::require(&app, Path::new(&path))?;
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1843,6 +1898,7 @@ pub fn run() {
             export::discard_canvas_export,
             export::finalize_canvas_export,
             export::extract_video_frame,
+            export::write_delivery_package,
             open_editor_window,
             set_editor_suspended_for_recording,
             open_teleprompter_window,

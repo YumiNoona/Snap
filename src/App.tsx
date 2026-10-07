@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
+import { userError } from "./lib/userError";
 import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
 import DeviceView from "./components/RecorderLauncher/DeviceView";
 import RecordingDock from "./components/RecorderLauncher/RecordingDock";
@@ -43,7 +45,7 @@ class ErrorBoundary extends React.Component<
         <div className="error-boundary-screen">
           <h2>Something went wrong in the Editor</h2>
           <p className="error-boundary-message">
-            {this.state.error?.message}
+            {userError(this.state.error)}
           </p>
           <button
             className="error-boundary-btn"
@@ -94,6 +96,7 @@ function App() {
   const [editorLog, setEditorLog] = useState("");
   const [editorProjectPath, setEditorProjectPath] = useState("");
   const [editorReady, setEditorReady] = useState(!isEditorWindow);
+  const [editorSuspended, setEditorSuspended] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
 
   // Load the pending recording handed over by the launcher window.
@@ -116,11 +119,28 @@ function App() {
       setEditorVideo(video);
       setEditorLog(log);
       setEditorProjectPath("");
+      setEditorSuspended(false);
     });
     return () => {
       unlisten.then((fn) => fn());
     };
   }, [isEditorPreview, isEditorWindow]);
+
+  useEffect(() => {
+    if (!isEditorWindow) return;
+    const suspend = (event: Event) => {
+      const projectPath = (event as CustomEvent<string>).detail;
+      // Unmount synchronously before acknowledging native capture. Preview's
+      // cleanup releases decoders, audio contexts and frame callbacks.
+      flushSync(() => { setEditorProjectPath(projectPath); setEditorSuspended(true); });
+    };
+    window.addEventListener("snap-suspend-editor", suspend);
+    const unlisten = listen("recording-resuming", () => setEditorSuspended(false));
+    const idle = listen<string>("recording-starting", ({ payload }) => {
+      if (!editorVideo || editorSuspended) void emit("editor-suspended", { requestId: payload, ready: true });
+    });
+    return () => { window.removeEventListener("snap-suspend-editor", suspend); void unlisten.then((stop) => stop()); void idle.then((stop) => stop()); };
+  }, [editorSuspended, editorVideo, isEditorWindow]);
 
   const openInEditorWindow = useCallback(
     async (video: string, log: string) => {
@@ -129,7 +149,7 @@ function App() {
         await invoke("open_editor_window", { video, log });
       } catch (e) {
         console.error("open_editor_window failed:", e);
-        setEditorError(String(e));
+        setEditorError(userError(e));
         throw e;
       }
     },
@@ -229,6 +249,7 @@ function App() {
   }
 
   if (isEditorWindow) {
+    if (editorSuspended) return null;
     if (editorVideo) {
       return (
         <ErrorBoundary onReset={closeEditorWindow}>

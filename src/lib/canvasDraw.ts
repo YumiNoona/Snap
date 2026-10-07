@@ -107,6 +107,11 @@ export function assetSrc(path: string): string {
 
 const sharedImageCache = new Map<string, HTMLImageElement>();
 
+export function clearImageAssets(): void {
+  for (const image of sharedImageCache.values()) image.removeAttribute("src");
+  sharedImageCache.clear();
+}
+
 export function preloadImageAsset(path: string): HTMLImageElement {
   const src = assetSrc(path);
   const cached = sharedImageCache.get(src);
@@ -187,9 +192,27 @@ export function drawImageLayer(
   }
 }
 
-export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>): HTMLVideoElement {
+export function releaseVideo(video: HTMLVideoElement): void {
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+}
+
+export function reconcileVideoLayers(layers: Layer[], time: number, playing: boolean, cache: Map<string, HTMLVideoElement>): void {
+  const videos = new Map(layers.filter((layer): layer is VideoLayer => layer.type === "video").map((layer) => [layer.id, layer]));
+  for (const [id, media] of cache) {
+    const layer = videos.get(id);
+    const active = layer && time >= layer.start - .02 && time <= layer.end + .02;
+    if (!layer || media.getAttribute("src") !== assetSrc(layer.path) || (!active && cache.size > 8)) {
+      releaseVideo(media);
+      cache.delete(id);
+    } else if (!active || !playing) media.pause();
+  }
+}
+
+export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>, key = assetSrc(path)): HTMLVideoElement {
   const src = assetSrc(path);
-  const cached = cache.get(src);
+  const cached = cache.get(key);
   if (cached) return cached;
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
@@ -197,7 +220,7 @@ export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElemen
   video.muted = true;
   video.playsInline = true;
   video.preload = "auto";
-  cache.set(src, video);
+  cache.set(key, video);
   return video;
 }
 
@@ -212,7 +235,7 @@ export function drawVideoLayer(
   w: number,
   h: number,
 ): void {
-  const video = loadCachedVideo(layer.path, cache);
+  const video = loadCachedVideo(layer.path, cache, layer.id);
   if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
   const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), timeSeconds - layer.start));
   if (Math.abs(video.currentTime - localTime) > (playing ? .18 : .035) && !video.seeking) video.currentTime = localTime;

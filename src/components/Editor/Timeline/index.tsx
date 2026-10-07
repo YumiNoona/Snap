@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, Scissors, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon, Keyboard } from "lucide-react";
+import { RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, BookmarkPlus, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon, Keyboard } from "lucide-react";
 import type { TransportStatus } from "../hooks/usePlaybackController";
 import type { ActionEventEdit, AudioTrack, CaptionSegment, CaptionSegmentSelection, CaptionTrack, Keyframe, EditorConfig, ZoomRegionSelection, Layer } from "../../../lib/types";
 import { ASPECT_RATIOS } from "../../../lib/types";
@@ -624,7 +624,7 @@ export default function Timeline({
     }
   }, [currentTime, duration, effectiveWidth, playing, zoomScale]);
 
-  const handleScissorCut = () => {
+  const handleAddMarker = useCallback(() => {
     if (duration <= 0) return;
     const cutPoint = Math.round(currentTime * 100) / 100;
     if (cutPoint <= config.trimStart || cutPoint >= (config.trimEnd || duration)) return;
@@ -632,7 +632,18 @@ export default function Timeline({
 
     const newCuts = [...config.cuts, cutPoint].sort((a, b) => a - b);
     onCutsChange(newCuts);
-  };
+  }, [config.cuts, config.trimEnd, config.trimStart, currentTime, duration, onCutsChange]);
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "c" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.repeat) return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true'], [role='dialog']")) return;
+      event.preventDefault();
+      handleAddMarker();
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, [handleAddMarker]);
 
   const getTimeFromEvent = useCallback(
     (e: MouseEvent | React.MouseEvent): number => {
@@ -805,8 +816,8 @@ export default function Timeline({
 
         {/* Right Tools (Scissor cut & Zoom scale) */}
         <div className="tb-right-group">
-          <button className="ss-tb-btn primary-scissor-btn" onClick={handleScissorCut} title="Add timeline marker (C)" aria-label="Add timeline marker">
-            <Scissors size={16} />
+          <button className="ss-tb-btn primary-scissor-btn" onClick={handleAddMarker} title="Add timeline marker (C)" aria-label="Add timeline marker">
+            <BookmarkPlus size={16} />
           </button>
 
           <button className="zoom-step-btn history-btn" onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)"><Undo2 size={16} /></button>
@@ -885,7 +896,7 @@ export default function Timeline({
             </div>
 
             {config.cuts.map((cutTime, i) => (
-              <div key={i} className="cut-marker-line" style={{ left: x(cutTime) }}>
+              <div key={i} className="cut-marker-line" style={{ left: x(cutTime) }} title={`Marker at ${formatTimecode(cutTime)} — double-click to remove`} onDoubleClick={(event) => { event.stopPropagation(); onCutsChange(config.cuts.filter((time) => time !== cutTime)); }}>
                 <div className="cut-marker-head" />
               </div>
             ))}
@@ -1136,8 +1147,8 @@ export default function Timeline({
               </div>
             </div>
             <div className="timeline-context-separator" />
-            <button role="menuitem" onClick={() => { handleScissorCut(); setContextMenu(null); }}>
-              <Scissors size={15} /> Split at playhead
+            <button role="menuitem" onClick={() => { handleAddMarker(); setContextMenu(null); }}>
+              <BookmarkPlus size={15} /> Add marker at playhead
             </button>
             <button role="menuitem" onClick={() => { onAddCaptionAtTime(currentTime); setContextMenu(null); }}>
               <Captions size={15} /> Add caption at playhead

@@ -50,6 +50,8 @@ export function useProjectPersistence({
   const activePathRef = useRef(defaultPath);
   const lastSavedFingerprintRef = useRef("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const generationRef = useRef(0);
+  const recoveryFailedRef = useRef(false);
   const restoreRef = useRef(restore);
   const decorateRef = useRef(decorateRestoredConfig);
   const restoreAudioRef = useRef(restoreAudioTracks);
@@ -80,25 +82,34 @@ export function useProjectPersistence({
   }, []);
 
   const persist = useCallback((path: string) => {
+    const generation = generationRef.current;
     const operation = saveQueueRef.current.catch(() => undefined).then(async () => {
+      if (generation !== generationRef.current) throw new Error("The open project changed before saving");
+      if (recoveryFailedRef.current && path.replace(/\//g, "\\").toLowerCase() === activePathRef.current.replace(/\//g, "\\").toLowerCase()) {
+        throw new Error("Use Save As to preserve the original project and its recovery backup");
+      }
       const snapshot = snapshotProject();
       if (!snapshot) throw new Error("The editor project is not ready yet");
       setSaving(true);
       setStatus("Saving…");
       try {
         const saved = await saveProjectAtPath(snapshot, path);
+        if (generation !== generationRef.current) return saved;
+        const current = snapshotProject();
+        const stillDirty = !current || projectFingerprint(current) !== projectFingerprint(saved);
         projectRef.current = saved;
         lastSavedFingerprintRef.current = projectFingerprint(saved);
         activePathRef.current = path;
         setActivePath(path);
-        setDirty(false);
-        setStatus("Saved");
+        recoveryFailedRef.current = false;
+        setDirty(stillDirty);
+        setStatus(stillDirty ? "Unsaved changes" : "Saved");
         return saved;
       } catch (error) {
-        setStatus("Save failed");
+        if (generation === generationRef.current) setStatus("Save failed — use Save As if recovery failed");
         throw error;
       } finally {
-        setSaving(false);
+        if (generation === generationRef.current) setSaving(false);
       }
     });
     saveQueueRef.current = operation.then(() => undefined, () => undefined);
@@ -110,11 +121,15 @@ export function useProjectPersistence({
 
   useEffect(() => {
     if (disabled) return;
+    ++generationRef.current;
+    recoveryFailedRef.current = false;
+    projectRef.current = null;
     let cancelled = false;
     const path = initialProjectPath || projectPathForVideo(videoPath);
     activePathRef.current = path;
     setActivePath(path);
     setReady(false);
+    setSaving(false);
     setRestored(false);
     setDirty(false);
     setStatus("Opening project…");
@@ -131,6 +146,7 @@ export function useProjectPersistence({
             config: decorateRef.current?.(project.editor) ?? project.editor,
             keyframes: project.keyframes,
             captions: project.captions,
+            audioTracks: project.audioTracks,
           });
           setRestored(true);
           setStatus("Project restored");
@@ -138,19 +154,21 @@ export function useProjectPersistence({
           setStatus("New project");
         }
       } catch (error) {
+        if (cancelled) return;
         console.error("[Snap] Could not restore project:", error);
         projectRef.current = createProject(videoPath, inputLogPath);
         lastSavedFingerprintRef.current = "";
-        setStatus("Project recovery failed; editing a new project");
+        recoveryFailedRef.current = true;
+        setStatus("Recovery failed. Use Save As; your original files are preserved.");
       } finally {
         if (!cancelled) setReady(true);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; ++generationRef.current; };
   }, [disabled, initialProjectPath, inputLogPath, videoPath]);
 
   useEffect(() => {
-    if (!ready || disabled || !projectRef.current) return;
+    if (!ready || disabled || saving || !projectRef.current) return;
     const snapshot = snapshotProject();
     if (!snapshot) return;
     const fingerprint = projectFingerprint(snapshot);
@@ -159,15 +177,17 @@ export function useProjectPersistence({
       return;
     }
     setDirty(true);
+    if (recoveryFailedRef.current) return;
     setStatus("Unsaved changes");
+    const generation = generationRef.current;
     const timer = window.setTimeout(() => {
       void persist(activePathRef.current).catch((error) => {
         console.error("[Snap] Project autosave failed:", error);
-        setStatus("Autosave failed");
+        if (generation === generationRef.current) setStatus("Autosave failed");
       });
     }, 1_500);
     return () => window.clearTimeout(timer);
-  }, [audioTracks, captions, config, disabled, duration, keyframes, persist, ready, snapshotProject]);
+  }, [activePath, audioTracks, captions, config, disabled, duration, keyframes, persist, ready, saving, snapshotProject]);
 
   return {
     projectReady: ready,

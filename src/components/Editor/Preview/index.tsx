@@ -1,3 +1,4 @@
+import { userError } from "../../../lib/userError";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer, MaskLayer } from "../../../lib/types";
@@ -13,7 +14,7 @@ import {
   clickEffectDuration, cursorIdleOpacity, drawVisualLayer,
   drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
   drawCaptionTrack,
-  drawCameraBubble,
+  drawCameraBubble, reconcileVideoLayers, releaseVideo,
 } from "../../../lib/canvasDraw";
 import "./Preview.css";
 
@@ -197,6 +198,10 @@ export default function Preview({
   }, []);
 
   useEffect(() => {
+    reconcileVideoLayers(config.layers, videoRef.current?.currentTime ?? 0, playing, layerVideoCacheRef.current);
+  }, [config.layers, playing]);
+
+  useEffect(() => {
     setPlaybackPath(videoPath);
     setVideoReady(false);
     setLoadError("");
@@ -212,7 +217,7 @@ export default function Preview({
         setPlaybackPath(path);
         setLoadError("");
       })
-      .catch((error) => setLoadError(`Video preview could not be prepared: ${error}`));
+      .catch((error) => setLoadError(`Video preview could not be prepared: ${userError(error)}`));
   }, [videoPath]);
 
   useEffect(() => {
@@ -279,7 +284,7 @@ export default function Preview({
         effectTimelineTsRef.current = -1;
         setEventsReady(true);
       } catch (e) {
-        setLoadError(`Failed to load log: ${e}`);
+        setLoadError(`Failed to load log: ${userError(e)}`);
       }
     })();
   }, [inputLogPath]);
@@ -771,6 +776,7 @@ export default function Preview({
     // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
     const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    reconcileVideoLayers(config.layers, videoTs, playing, layerVideoCacheRef.current);
     const activeMasks = activeLayers.filter((layer) => layer.type === "mask");
 
     // Masks sample the already-composited preview, not the raw video. This
@@ -1320,9 +1326,14 @@ export default function Preview({
   }, [videoReady, computeCanvasSize]);
 
   const assignVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    if (!element && videoRef.current) releaseVideo(videoRef.current);
     videoRef.current = element;
     onMediaElementChange?.(element);
   }, [onMediaElementChange]);
+  const assignCameraElement = useCallback((element: HTMLVideoElement | null) => {
+    if (!element && cameraRef.current) releaseVideo(cameraRef.current);
+    cameraRef.current = element;
+  }, []);
   const videoUrl = playbackPath.startsWith("/") || /^https?:\/\//i.test(playbackPath) ? playbackPath : convertFileSrc(playbackPath);
 
   return (
@@ -1366,12 +1377,12 @@ export default function Preview({
           const el = e.currentTarget as HTMLVideoElement;
           const err = el.error;
           repairPreview();
-          setLoadError((current) => current || `Video failed to load: ${err?.message || err?.code || "unknown error"}`);
+          setLoadError((current) => current || "This video could not be played. Check that the file is available, then reopen it.");
           console.error("[Snap Preview] video load error:", err);
         }}
       />
       {cameraMedia && <video
-        ref={cameraRef}
+        ref={assignCameraElement}
         src={convertFileSrc(cameraMedia.path)}
         preload="auto"
         playsInline

@@ -42,7 +42,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 8.1.1 separates Keys & Clicks into its own correctly aligned timeline track, while retaining editable keyboard, mouse, and scroll clips, privacy-safe shortcut capture, per-action timing and labels, and matching preview/export rendering.
+            Snap 9.0.1 releases the heavy editor before capture, coordinates recording startup and stop, bounds export memory, protects project recovery and autosave, and fixes delivery packages, audio undo/redo, media cleanup, and user-facing errors. Hardware recording defaults remain unchanged.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

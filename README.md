@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.0.0-10b981?style=flat-square" alt="Version 9.0.0" />
+    <img src="https://img.shields.io/badge/version-9.0.1-10b981?style=flat-square" alt="Version 9.0.1" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -22,7 +22,11 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 9.0.0
+## Snap 9.0.1
+
+This maintenance release releases the heavy editor before capture, coordinates recording startup and stop, bounds export memory, protects failed project recovery, and fixes delivery packages, audio undo/redo, and user-facing errors. Recording hardware defaults remain unchanged.
+
+### Snap 9.0.0
 
 Snap 9 moves Snap into a lightweight tray-first recording workflow and rounds
 out the tutorial editor with dedicated action overlays and safer long sessions:
@@ -145,9 +149,23 @@ are missing. Verified caption binaries and the multilingual speech model are
 stored per user and reused instead of being downloaded for every project.
 
 Automatic performance mode is the default. It verifies a working hardware
-encoder and records at a conservative 720p/30 profile. Manual mode provides
+encoder and records at up to 1080p/30 and 10 Mbps, without upscaling smaller
+targets. Manual mode provides
 24/30/60 FPS, 2–50 Mbps bitrate, native/1080p/720p limits, and an explicit CPU
 compatibility option. Camera capture is opt-in and defaults off.
+
+Before recording, Snap saves and unmounts the editor preview to release its
+video decoders, audio contexts, cached images, and frame callbacks. Capture
+startup, pause/resume, and stop are serialized on a lifecycle lock outside the
+media loops. Device initialization and other blocking work run off the UI and
+async runtime threads. The live screen path keeps frames on the GPU and runs
+its encoder below normal CPU priority with bounded frame buffering where
+supported by FFmpeg; it does not silently switch to CPU frame readback.
+
+For older laptops, manual 720p/30 lowers the capture workload; selecting a
+smaller recording region can retain readable text without capturing a large
+desktop. Actual impact while gaming depends on available GPU headroom and
+drivers and should be measured on the recording PC.
 
 ### To develop Snap
 

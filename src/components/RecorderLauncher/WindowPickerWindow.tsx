@@ -1,3 +1,4 @@
+import { userError } from "../../lib/userError";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
@@ -25,7 +26,7 @@ export default function WindowPickerWindow() {
       const next = await invoke<DisplayTarget[]>("enumerate_targets");
       setTargets(next.filter((target) => target.target_type === "window"));
     } catch (reason) {
-      setError(`Unable to inspect open windows: ${reason}`);
+      setError(`Unable to inspect open windows: ${userError(reason)}`);
     } finally {
       setLoading(false);
     }
@@ -46,7 +47,7 @@ export default function WindowPickerWindow() {
       await getCurrentWindow().close();
     } catch (reason) {
       setSelecting("");
-      setError(`Unable to select ${target.name}: ${reason}`);
+      setError(`Unable to select ${target.name}: ${userError(reason)}`);
     }
   };
 

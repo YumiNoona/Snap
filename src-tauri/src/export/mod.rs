@@ -20,6 +20,73 @@ fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, Stri
         .map_err(|error| format!("Failed while waiting for FFmpeg: {error}"))
 }
 
+fn delivery_paths(output: &std::path::Path) -> [std::path::PathBuf; 3] {
+    [
+        output.with_extension("transcript.txt"),
+        output.with_extension("chapters.json"),
+        output.with_extension("thumbnail.png"),
+    ]
+}
+
+/// Derive exact companion paths from the user-selected export; never grant its
+/// parent directory or let the frontend supply arbitrary companion filenames.
+#[tauri::command]
+pub async fn write_delivery_package(
+    app: tauri::AppHandle,
+    output_path: String,
+    transcript: String,
+    chapters: String,
+    thumbnail_time_seconds: f64,
+) -> Result<(), String> {
+    let output = std::path::PathBuf::from(output_path);
+    crate::access::require(&app, &output)?;
+    if !output.is_file()
+        || transcript.len() > 4 * 1024 * 1024
+        || chapters.len() > 4 * 1024 * 1024
+        || !thumbnail_time_seconds.is_finite()
+        || !(0.0..=86400.0).contains(&thumbnail_time_seconds)
+    {
+        return Err("Invalid delivery package or missing exported video".into());
+    }
+    let chapter_data: serde_json::Value =
+        serde_json::from_str(&chapters).map_err(|_| "Invalid chapter document".to_string())?;
+    if !chapter_data
+        .as_array()
+        .is_some_and(|items| items.len() <= 10_000)
+    {
+        return Err("Invalid chapter document".into());
+    }
+    let paths = delivery_paths(&output);
+    for path in &paths {
+        app.asset_protocol_scope()
+            .allow_file(path)
+            .map_err(|error| error.to_string())?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::persist_text_atomic(paths[0].to_string_lossy().into_owned(), transcript)?;
+        crate::persist_text_atomic(paths[1].to_string_lossy().into_owned(), chapters)?;
+        let args = vec![
+            "-y".into(),
+            "-ss".into(),
+            format!("{thumbnail_time_seconds:.3}"),
+            "-i".into(),
+            output.to_string_lossy().into_owned(),
+            "-frames:v".into(),
+            "1".into(),
+            "-update".into(),
+            "1".into(),
+            paths[2].to_string_lossy().into_owned(),
+        ];
+        let result = run_ffmpeg(&args)?;
+        if !result.status.success() || !paths[2].is_file() {
+            return Err("Video saved, but its thumbnail could not be created".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub async fn extract_video_frame(
     app: tauri::AppHandle,
@@ -567,13 +634,19 @@ pub fn open_export_sink(
 #[tauri::command]
 pub fn write_export_chunk(
     window: tauri::Window,
-    bytes: Vec<u8>,
+    request: tauri::ipc::Request<'_>,
 ) -> std::result::Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Export frames require binary IPC".into());
+    };
+    if bytes.len() > 256 * 1024 {
+        return Err("Export frame chunk exceeds the IPC limit".into());
+    }
     let mut guard = export_sink().lock().map_err(|e| e.to_string())?;
     match guard.as_mut() {
         Some(sink) if sink.owner == window.label() => sink
             .writer
-            .write_all(&bytes)
+            .write_all(bytes)
             .map_err(|e| format!("Export write failed: {e}")),
         Some(_) => Err("Export sink belongs to another window".to_string()),
         None => Err("Export sink not open".to_string()),
@@ -1237,6 +1310,25 @@ fn finalize_canvas_export_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivery_companions_are_exact_siblings_of_the_selected_video() {
+        let output = std::path::Path::new(r"D:\Exports\demo.final.mp4");
+        let paths = delivery_paths(output);
+        assert_eq!(
+            paths[0],
+            std::path::PathBuf::from(r"D:\Exports\demo.final.transcript.txt")
+        );
+        assert_eq!(
+            paths[1],
+            std::path::PathBuf::from(r"D:\Exports\demo.final.chapters.json")
+        );
+        assert_eq!(
+            paths[2],
+            std::path::PathBuf::from(r"D:\Exports\demo.final.thumbnail.png")
+        );
+        assert!(paths.iter().all(|path| path.parent() == output.parent()));
+    }
 
     #[test]
     fn staging_path_accepts_webcodecs_ivf_and_rejects_unscoped_files() {

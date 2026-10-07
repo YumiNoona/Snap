@@ -26,6 +26,18 @@ pub async fn start_camera_capture(
     output_dir: String,
     recording_fps: u32,
 ) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_camera_capture_blocking(device_name, output_dir, recording_fps)
+    })
+    .await
+    .map_err(|error| format!("Camera startup worker failed: {error}"))?
+}
+
+fn start_camera_capture_blocking(
+    device_name: Option<String>,
+    output_dir: String,
+    recording_fps: u32,
+) -> Result<(), String> {
     let Some(device_name) = device_name.filter(|name| !name.trim().is_empty()) else {
         return Ok(());
     };
@@ -52,6 +64,11 @@ pub async fn start_camera_capture(
         let _ = done_tx.send(result);
     });
 
+    *guard = Some(CameraHandle {
+        is_recording: is_recording.clone(),
+        is_paused,
+        done_rx,
+    });
     match startup_rx.recv_timeout(Duration::from_secs(8)) {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
@@ -63,11 +80,6 @@ pub async fn start_camera_capture(
             return Err("Camera did not produce a frame within 8 seconds".to_string());
         }
     }
-    *guard = Some(CameraHandle {
-        is_recording,
-        is_paused,
-        done_rx,
-    });
     Ok(())
 }
 

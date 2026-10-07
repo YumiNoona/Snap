@@ -1,3 +1,4 @@
+import { userError } from "../../lib/userError";
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -212,7 +213,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         setProcessingRecording(true);
         setProcessingMessage("Building a smooth editor-ready video…");
       }
-      else if (payload.phase === "failed" && payload.error) setRecordStatus(`Error: ${payload.error}`);
+      else if (payload.phase === "failed" && payload.error) setRecordStatus(`Error: ${userError(payload.error)}`);
     });
     return () => { unlisten.then((stop) => stop()); };
   }, []);
@@ -522,7 +523,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       pauseStartedAtRef.current = 0;
       pausedDurationRef.current = 0;
       console.error("[Snap] startRecording failed:", e);
-      setRecordStatus(`Error: ${e}`);
+      setRecordStatus(`Error: ${userError(e)}`);
       if (lastDataDirRef.current && lastVideoRef.current) {
         await invoke("update_recording_session", { dataDir: lastDataDirRef.current, videoPath: lastVideoRef.current, status: "failed", error: String(e) }).catch(() => {});
       }
@@ -569,7 +570,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     pausedRef.current = false;
     pauseTransitionRef.current = false;
     activeSessionIdRef.current = "";
-    setRecordStatus(failures.length > 0 ? `Recording needs attention: ${failures.join(" · ")}` : completionNotice);
+    setRecordStatus(failures.length > 0 ? `Recording needs attention: ${userError(failures.join(" · "))}` : completionNotice ? "Recording saved with a track warning. Check audio and camera in the editor." : "");
     if (lastDataDirRef.current && lastVideoRef.current) {
       await invoke("update_recording_session", {
         dataDir: lastDataDirRef.current,
@@ -590,7 +591,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         await invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
       }
     } catch (error) {
-      setRecordStatus(`Recording saved, but the editor could not open: ${error}`);
+      setRecordStatus(`Recording saved, but the editor could not open: ${userError(error)}`);
       await invoke("set_editor_suspended_for_recording", { suspended: false }).catch(() => {});
     } finally {
       setProcessingRecording(false);
@@ -606,7 +607,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   };
 
   const handleWindow = () => {
-    invoke("open_window_picker_window").catch((error) => setRecordStatus(`Cannot open window picker: ${error}`));
+    invoke("open_window_picker_window").catch((error) => setRecordStatus(`Cannot open window picker: ${userError(error)}`));
   };
 
   const handlePickWindow = (id: string) => {
@@ -621,7 +622,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       setRegionScreen({ x: bounds.x, y: bounds.y, scale: window.devicePixelRatio || 1 });
       setShowRegionSelector(true);
     } catch (e) {
-      setRecordStatus(`Cannot open region selector: ${e}`);
+      setRecordStatus(`Cannot open region selector: ${userError(e)}`);
     }
   };
 
@@ -658,7 +659,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
   };
 
   const handleDevice = () => {
-    invoke("open_device_window").catch((error) => setRecordStatus(`Cannot open device capture: ${error}`));
+    invoke("open_device_window").catch((error) => setRecordStatus(`Cannot open device capture: ${userError(error)}`));
   };
 
   const handleOpenRecording = async () => {
@@ -667,7 +668,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       await invoke("open_library_window");
       return;
     } catch (e) {
-      setRecordStatus(`Cannot open media library: ${e}`);
+      setRecordStatus(`Cannot open media library: ${userError(e)}`);
       return;
     }
     /* Legacy inline picker retained as a fallback implementation. */
@@ -681,7 +682,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       setRecordingSearch("");
       setShowFileBrowser(true);
     } catch (e) {
-      setRecordStatus(`Cannot browse: ${e}`);
+      setRecordStatus(`Cannot browse: ${userError(e)}`);
     }
   };
 
@@ -734,7 +735,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       }
       setRecordStatus(next ? "Paused" : "Recording");
     } catch (error) {
-      setRecordStatus(`Pause failed: ${error}`);
+      setRecordStatus(`Pause failed: ${userError(error)}`);
     } finally {
       pauseTransitionRef.current = false;
     }

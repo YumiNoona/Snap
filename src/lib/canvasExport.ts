@@ -3,6 +3,8 @@ import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe }
 import { createExportCompositor } from "./exportCompositor";
 import { captionsToSrt, captionsToVtt } from "./captions";
 import { createIvfHeader, wrapIvfFrame, type IvfCodec } from "./ivf";
+import { exportPlaybackRate, outputDuration, renderProgress } from "./exportTiming";
+import { ExportWriteBudget } from "./exportWriteBudget";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
@@ -12,14 +14,26 @@ export interface ExportProgress {
 
 function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
+    const timeout = setTimeout(() => reject(new Error("Export frame encoding timed out")), 15_000);
+    try { canvas.toBlob((blob) => {
+      clearTimeout(timeout);
       if (!blob) {
         reject(new Error("Could not encode an export frame"));
         return;
       }
       void blob.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
-    }, "image/jpeg", 0.94);
+    }, "image/jpeg", 0.94); }
+    catch (error) { clearTimeout(timeout); reject(error); }
   });
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), 30_000);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 /**
@@ -70,12 +84,13 @@ export async function runCanvasExport(
   let completed = false;
   let encoder: VideoEncoder | null = null;
   let writeQueue: Promise<void> = Promise.resolve();
+  let jpegQueue: Promise<void> = Promise.resolve();
   try {
     throwIfAborted();
     const hasWebCodecs = typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
 
-    const playbackRate = Math.max(0.5, Math.min(2, config.playbackRate || 1));
-    const totalMs = Math.max(1, ((trimEnd - trimStart) / playbackRate) * 1000);
+    const playbackRate = exportPlaybackRate(config.playbackRate);
+    const totalMs = outputDuration(trimStart, trimEnd, playbackRate) * 1000;
     const fps = Math.max(1, Math.round(exportSettings.fps));
     const totalFrames = Math.max(1, Math.ceil((totalMs / 1000) * fps));
     const pixelsComparedWith1080p = (exportSettings.width * exportSettings.height) / (1920 * 1080);
@@ -114,6 +129,8 @@ export async function runCanvasExport(
     let writeError: string | null = null;
     const CHUNK_BYTES = 256 * 1024;
     const BATCH_BYTES = 1024 * 1024;
+    const writeBudget = new ExportWriteBudget();
+    let lastWriteAdvance = performance.now();
     let pendingParts: Uint8Array[] = [];
     let pendingBytes = 0;
     const flushPendingBytes = () => {
@@ -124,18 +141,29 @@ export async function runCanvasExport(
       pendingParts = [];
       pendingBytes = 0;
       writeQueue = writeQueue.then(async () => {
-        if (writeError) return;
         try {
+          if (writeError || signal?.aborted) return;
           for (let index = 0; index < combined.length; index += CHUNK_BYTES) {
+            throwIfAborted();
             const slice = combined.subarray(index, Math.min(combined.length, index + CHUNK_BYTES));
-            await invoke("write_export_chunk", { bytes: Array.from(slice) });
+            await withTimeout(invoke("write_export_chunk", slice), "The export destination stopped responding");
+            lastWriteAdvance = performance.now();
           }
         } catch (err) {
           writeError = String(err);
+        } finally {
+          writeBudget.release(combined.byteLength);
         }
       });
     };
     const queueBytes = (bytes: Uint8Array) => {
+      if (writeError || signal?.aborted) return;
+      const wasEmpty = writeBudget.bytes === 0;
+      if (!writeBudget.reserve(bytes.byteLength)) {
+        writeError = "The export destination cannot keep up. Choose a faster local drive or lower export quality.";
+        return;
+      }
+      if (wasEmpty) lastWriteAdvance = performance.now();
       pendingParts.push(bytes);
       pendingBytes += bytes.byteLength;
       if (pendingBytes >= BATCH_BYTES) flushPendingBytes();
@@ -146,7 +174,6 @@ export async function runCanvasExport(
 
     let encoderError: Error | null = null;
     let encodedFrames = 0;
-    let jpegQueue: Promise<void> = Promise.resolve();
     let jpegQueueDepth = 0;
     if (exportMode.format !== "mjpeg") {
       encoder = new VideoEncoder({
@@ -195,6 +222,8 @@ export async function runCanvasExport(
         submittedFrames = cappedTarget;
         jpegQueueDepth += 1;
         const snapshot = canvasToJpeg(compositor.canvas);
+        // Observe failures immediately while earlier frames are still draining.
+        void snapshot.catch(() => undefined);
         jpegQueue = jpegQueue
           .then(async () => {
             const payload = await snapshot;
@@ -209,8 +238,8 @@ export async function runCanvasExport(
         const timestamp = Math.round((submittedFrames * 1_000_000) / fps);
         const duration = Math.round(1_000_000 / fps);
         const frame = new VideoFrame(compositor.canvas, { timestamp, duration });
-        encoder!.encode(frame, { keyFrame: submittedFrames % Math.max(1, fps * 2) === 0 });
-        frame.close();
+        try { encoder!.encode(frame, { keyFrame: submittedFrames % Math.max(1, fps * 2) === 0 }); }
+        finally { frame.close(); }
         submittedFrames += 1;
       }
     };
@@ -229,6 +258,7 @@ export async function runCanvasExport(
       let lastTime = compositor.video.currentTime;
       let lastAdvance = performance.now();
       let heldForEncoder = false;
+      let heldSince = 0;
       const check = () => {
         if (signal?.aborted) {
           reject(new DOMException("Export cancelled", "AbortError"));
@@ -238,17 +268,27 @@ export async function runCanvasExport(
           reject(encoderError);
           return;
         }
+        if (writeError || (writeBudget.bytes > 0 && performance.now() - lastWriteAdvance > 30_000)) {
+          reject(new Error(writeError || "The export destination stopped responding"));
+          return;
+        }
         const encodeBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
         const pauseThreshold = encoder ? 24 : 4;
         const resumeThreshold = encoder ? 6 : 1;
-        if (!heldForEncoder && encodeBacklog > pauseThreshold) {
+        if (!heldForEncoder && (encodeBacklog > pauseThreshold || writeBudget.shouldPause)) {
           compositor.video.pause();
           heldForEncoder = true;
+          heldSince = performance.now();
+          flushPendingBytes();
         }
         if (heldForEncoder) {
           lastAdvance = performance.now();
           const currentBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
-          if (currentBacklog <= resumeThreshold) {
+          if (performance.now() - heldSince > 30_000) {
+            reject(new Error("The video encoder stopped responding. Try a lower resolution or frame rate."));
+            return;
+          }
+          if (currentBacklog <= resumeThreshold && writeBudget.canResume) {
             heldForEncoder = false;
             void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
           }
@@ -269,10 +309,9 @@ export async function runCanvasExport(
           resolve();
           return;
         }
-        const elapsedMs = Math.max(0, (compositor.video.currentTime - trimStart) * 1000);
         onProgress({
           phase: "recording",
-          progress: Math.min(0.97, elapsedMs / totalMs),
+          progress: renderProgress(compositor.video.currentTime, trimStart, trimEnd),
           message: "Recording composited frames…",
         });
         requestAnimationFrame(check);
@@ -281,7 +320,7 @@ export async function runCanvasExport(
     });
 
     submitFramesThrough(totalFrames);
-    if (encoder) await encoder.flush();
+    if (encoder) await withTimeout(encoder.flush(), "The video encoder stopped responding");
     await jpegQueue;
     flushPendingBytes();
     await writeQueue;
@@ -324,7 +363,9 @@ export async function runCanvasExport(
     return result;
   } finally {
     compositor.setFrameConsumer(null);
+    compositor.destroy();
     if (encoder && encoder.state !== "closed") encoder.close();
+    await jpegQueue.catch(() => {});
     await writeQueue.catch(() => {});
     if (sinkOpen) await invoke("close_export_sink").catch(() => {});
     if (!completed) {
@@ -333,6 +374,5 @@ export async function runCanvasExport(
         outputPath: exportSettings.outputPath,
       }).catch(() => {});
     }
-    compositor.destroy();
   }
 }

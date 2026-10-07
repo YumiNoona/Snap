@@ -1,3 +1,4 @@
+import { userError } from "../lib/userError";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,7 +18,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
     try {
       const listed = await invoke<MediaFile[]>("list_recordings");
       setFiles(listed);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(userError(cause)); }
   };
   useEffect(() => { void refresh(); }, []);
   const shown = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(search.toLowerCase())), [files, search]);
@@ -41,7 +42,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
     try {
       const selected = await openDialog({ multiple: false, directory: false, filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi"] }] });
       if (selected) await open(selected);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(userError(cause)); }
   };
 
   return <div className={`module-window ${dragOver ? "is-drag-over" : ""}`}>

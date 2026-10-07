@@ -1,3 +1,4 @@
+import { userError } from "../../lib/userError";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -182,7 +183,7 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
       await invoke("install_android_capture_support");
       await refreshConnections(true);
     } catch (error) {
-      setActionError(String(error));
+      setActionError(userError(error));
     } finally {
       setInstalling(false);
     }
@@ -222,7 +223,7 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
       });
       setStatus(nextStatus);
     } catch (error) {
-      setActionError(String(error));
+      setActionError(userError(error));
     } finally {
       setStarting(false);
     }
@@ -234,7 +235,7 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
       setStatus((current) => ({ ...current, state: "stopping", message: "Stopping safely…" }));
       setStatus(await invoke<RecordingStatus>("stop_mobile_recording"));
     } catch (error) {
-      setActionError(String(error));
+      setActionError(userError(error));
     }
   };
 
@@ -399,7 +400,7 @@ export default function DeviceView({ onBack, onOpenEditor }: Props) {
             {(actionError || status.state !== "idle") && (
               <div className={`mobile-status-panel ${actionError ? "error" : status.state}`}>
                 {actionError || status.state === "recoverable" || status.state === "error" ? <AlertTriangle size={19} /> : status.state === "saved" ? <CheckCircle2 size={19} /> : <LoaderCircle className={recordingActive ? "mobile-spin" : ""} size={19} />}
-                <div><strong>{actionError ? "Unable to start recording" : status.state === "saved" ? "Recording saved" : status.state === "recoverable" ? "Recording is recoverable" : status.state === "recording" ? "Recording mobile device" : "Finishing recording"}</strong><small>{actionError || status.message}</small>{status.recoveryPath && status.state === "recoverable" && <code>{status.recoveryPath}</code>}</div>
+                <div><strong>{actionError ? "Device action could not finish" : status.state === "saved" ? "Recording saved" : status.state === "recoverable" ? "Recording is recoverable" : status.state === "recording" ? "Recording mobile device" : "Finishing recording"}</strong><small>{actionError || (status.state === "error" || status.state === "recoverable" ? userError(status.message) : status.message)}</small>{status.recoveryPath && status.state === "recoverable" && <code>{status.recoveryPath}</code>}</div>
                 {status.state === "saved" && status.outputPath && <button onClick={() => openSavedRecording()}>Open editor</button>}
               </div>
             )}

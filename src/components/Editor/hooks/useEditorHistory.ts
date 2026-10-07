@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { CaptionTrack, EditorConfig, Keyframe } from "../../../lib/types";
+import type { AudioTrack, CaptionTrack, EditorConfig, Keyframe } from "../../../lib/types";
 
 export interface EditorSnapshot {
   config: EditorConfig;
   keyframes: Keyframe[];
   captions: CaptionTrack[];
+  audioTracks: AudioTrack[];
 }
 
 interface Options {
@@ -14,13 +15,15 @@ interface Options {
   setKeyframes: Dispatch<SetStateAction<Keyframe[]>>;
   captions: CaptionTrack[];
   setCaptions: Dispatch<SetStateAction<CaptionTrack[]>>;
+  audioTracks: AudioTrack[];
+  setAudioTracks: Dispatch<SetStateAction<AudioTrack[]>>;
   limit?: number;
 }
 
-export function useEditorHistory({ config, keyframes, captions, setConfig, setKeyframes, setCaptions, limit = 80 }: Options) {
+export function useEditorHistory({ config, keyframes, captions, audioTracks, setConfig, setKeyframes, setCaptions, setAudioTracks, limit = 80 }: Options) {
   const historyRef = useRef<EditorSnapshot[]>([]);
   const futureRef = useRef<EditorSnapshot[]>([]);
-  const lastSnapshotRef = useRef<EditorSnapshot>({ config, keyframes, captions });
+  const lastSnapshotRef = useRef<EditorSnapshot>({ config, keyframes, captions, audioTracks });
   const suppressNextCaptureRef = useRef(false);
   const [availability, setAvailability] = useState({ canUndo: false, canRedo: false });
 
@@ -29,7 +32,7 @@ export function useEditorHistory({ config, keyframes, captions, setConfig, setKe
   }, []);
 
   useEffect(() => {
-    const current = { config, keyframes, captions };
+    const current = { config, keyframes, captions, audioTracks };
     if (suppressNextCaptureRef.current) {
       suppressNextCaptureRef.current = false;
       lastSnapshotRef.current = current;
@@ -37,20 +40,21 @@ export function useEditorHistory({ config, keyframes, captions, setConfig, setKe
       return;
     }
     const previous = lastSnapshotRef.current;
-    if (previous.config === config && previous.keyframes === keyframes && previous.captions === captions) return;
+    if (previous.config === config && previous.keyframes === keyframes && previous.captions === captions && previous.audioTracks === audioTracks) return;
     historyRef.current.push(previous);
     if (historyRef.current.length > limit) historyRef.current.shift();
     futureRef.current = [];
     lastSnapshotRef.current = current;
     refreshAvailability();
-  }, [captions, config, keyframes, limit, refreshAvailability]);
+  }, [audioTracks, captions, config, keyframes, limit, refreshAvailability]);
 
   const restore = useCallback((snapshot: EditorSnapshot) => {
     suppressNextCaptureRef.current = true;
     setConfig(snapshot.config);
     setKeyframes(snapshot.keyframes);
     setCaptions(snapshot.captions);
-  }, [setCaptions, setConfig, setKeyframes]);
+    setAudioTracks(snapshot.audioTracks);
+  }, [setAudioTracks, setCaptions, setConfig, setKeyframes]);
 
   const undo = useCallback(() => {
     const snapshot = historyRef.current.pop();

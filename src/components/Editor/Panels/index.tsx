@@ -1,3 +1,4 @@
+import { userError } from "../../../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -384,7 +385,7 @@ export default function Panels({
     let alive = true;
     (async () => {
       try { const packs = await invoke<CursorPackInfo[]>("list_cursor_packs"); if (alive) setCursorPacks(packs); }
-      catch (e) { if (alive) setCursorPacksError(`Failed to load cursor packs: ${e}`); }
+      catch (e) { if (alive) setCursorPacksError(`Failed to load cursor packs: ${userError(e)}`); }
     })();
     return () => { alive = false; };
   }, []);
@@ -393,7 +394,7 @@ export default function Panels({
     if (activeTab !== "captions" || transcriptionEnv) return;
     void getTranscriptionEnvironment()
       .then(setTranscriptionEnv)
-      .catch((error) => setCaptionStatus(`Unable to inspect transcription engine: ${error}`));
+      .catch((error) => setCaptionStatus(`Unable to inspect transcription engine: ${userError(error)}`));
   }, [activeTab, transcriptionEnv]);
 
   useEffect(() => {
@@ -438,7 +439,7 @@ export default function Panels({
         setCaptionStatus(`Created ${track.segments.length} speech-synced caption segments`);
       }
     } catch (error) {
-      setCaptionStatus(`Transcription failed: ${error}`);
+      setCaptionStatus(`Transcription failed: ${userError(error)}`);
     } finally {
       setTranscribing(false);
     }
@@ -462,7 +463,7 @@ export default function Panels({
     } catch (error) {
       setCaptionStatus(String(error).toLowerCase().includes("cancel")
         ? "Model download cancelled. You can restart it whenever you are ready."
-        : `Installation failed: ${error}`);
+        : `Installation failed: ${userError(error)}`);
     } finally {
       unlisten();
       setInstallingTranscription(false);
@@ -477,7 +478,7 @@ export default function Panels({
       await invoke("cancel_transcription_install");
     } catch (error) {
       setCancellingTranscription(false);
-      setCaptionStatus(`Unable to cancel download: ${error}`);
+      setCaptionStatus(`Unable to cancel download: ${userError(error)}`);
     }
   };
 

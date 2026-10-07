@@ -1,3 +1,4 @@
+import { userError } from "../../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -99,7 +100,7 @@ export default function SettingsWindow() {
     } catch (error) {
       pendingUpdateRef.current = null;
       setUpdateState("error");
-      setUpdateMessage(`Could not check for updates: ${String(error)}`);
+      setUpdateMessage(`Could not check for updates: ${userError(error)}`);
     } finally {
       updateCheckRef.current = false;
     }
@@ -132,7 +133,7 @@ export default function SettingsWindow() {
       await relaunch();
     } catch (error) {
       setUpdateState("error");
-      setUpdateMessage(`Update failed: ${String(error)}`);
+      setUpdateMessage(`Update failed: ${userError(error)}`);
     }
   };
 

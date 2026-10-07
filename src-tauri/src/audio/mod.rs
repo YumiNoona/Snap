@@ -143,6 +143,19 @@ pub async fn start_audio_capture(
     output_dir: String,
     process_id: Option<u32>,
 ) -> std::result::Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_audio_capture_blocking(mic_device_id, speaker_device_id, output_dir, process_id)
+    })
+    .await
+    .map_err(|error| format!("Audio startup worker failed: {error}"))?
+}
+
+fn start_audio_capture_blocking(
+    mic_device_id: String,
+    speaker_device_id: String,
+    output_dir: String,
+    process_id: Option<u32>,
+) -> std::result::Result<(), String> {
     let mut guard = AUDIO_STATE.lock().map_err(|e| e.to_string())?;
     if guard.is_some() {
         return Err("Audio capture already in progress".to_string());
@@ -177,6 +190,12 @@ pub async fn start_audio_capture(
         let _ = done_tx.send(result);
     });
 
+    *guard = Some(AudioCaptureHandle {
+        is_recording: is_recording.clone(),
+        is_paused,
+        mic_muted,
+        done_rx,
+    });
     for _ in 0..expected_streams {
         match startup_rx.recv_timeout(Duration::from_secs(6)) {
             Ok(Ok(())) => {}
@@ -190,13 +209,6 @@ pub async fn start_audio_capture(
             }
         }
     }
-
-    *guard = Some(AudioCaptureHandle {
-        is_recording,
-        is_paused,
-        mic_muted,
-        done_rx,
-    });
 
     Ok(())
 }
@@ -497,13 +509,15 @@ const MIC_CHANNELS: u16 = 1;
 const BITS_PER_SAMPLE: u16 = 16;
 
 #[tauri::command]
-pub fn audio_waveform(
+pub async fn audio_waveform(
     app: tauri::AppHandle,
     path: String,
     buckets: Option<usize>,
 ) -> Result<Vec<f32>, String> {
     crate::access::require(&app, std::path::Path::new(&path))?;
-    read_audio_waveform(path, buckets)
+    tauri::async_runtime::spawn_blocking(move || read_audio_waveform(path, buckets))
+        .await
+        .map_err(|error| format!("Waveform worker failed: {error}"))?
 }
 
 fn read_audio_waveform(

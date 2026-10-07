@@ -46,6 +46,34 @@ struct ActiveSession {
 }
 
 static SESSION: Mutex<Option<ActiveSession>> = Mutex::new(None);
+// This lock is used only for lifecycle commands, never by capture/audio/input
+// loops. A Stop or Pause cannot finalize a participant while Start is creating it.
+static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct StartupGuard {
+    app: tauri::AppHandle,
+    session_id: String,
+    armed: bool,
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if self.armed
+            && get_recording_session_state()
+                .ok()
+                .flatten()
+                .is_some_and(|state| state.session_id == self.session_id)
+        {
+            let _ = crate::set_countdown_internal(self.app.clone(), None);
+            finish_session(
+                &self.app,
+                &self.session_id,
+                RecordingPhase::Failed,
+                Some("Recording preparation did not complete. Please try again.".into()),
+            );
+        }
+    }
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +192,9 @@ pub async fn start_recording_session(
     app: tauri::AppHandle,
     request: StartRecordingSessionRequest,
 ) -> Result<RecordingSessionSnapshot, String> {
+    let _operation = LIFECYCLE
+        .try_lock()
+        .map_err(|_| "Another recording operation is still finishing".to_string())?;
     for path in [&request.video_path, &request.log_path, &request.audio_dir] {
         crate::access::require(&app, std::path::Path::new(path))?;
     }
@@ -196,6 +227,11 @@ pub async fn start_recording_session(
         });
     }
     emit_snapshot(&app, &initial);
+    let mut startup_guard = StartupGuard {
+        app: app.clone(),
+        session_id: request.session_id.clone(),
+        armed: true,
+    };
 
     transition(&app, &request.session_id, RecordingPhase::Armed, None, None)?;
 
@@ -255,6 +291,7 @@ pub async fn start_recording_session(
     )
     .await
     {
+        let _ = crate::capture::stop_recording().await;
         let _ = crate::input_hook::stop_input_logging().await;
         finish_session(
             &app,
@@ -290,6 +327,7 @@ pub async fn start_recording_session(
     )
     .await
     {
+        let _ = crate::camera::stop_camera_capture().await;
         let _ = crate::capture::stop_recording().await;
         let _ = crate::input_hook::stop_input_logging().await;
         finish_session(
@@ -310,6 +348,7 @@ pub async fn start_recording_session(
     )
     .await
     {
+        let _ = crate::audio::stop_audio_capture().await;
         let _ = crate::camera::stop_camera_capture().await;
         let _ = crate::capture::stop_recording().await;
         let _ = crate::input_hook::stop_input_logging().await;
@@ -322,7 +361,10 @@ pub async fn start_recording_session(
         return Err(error);
     }
 
-    get_recording_session_state()?.ok_or_else(|| "Recording session disappeared".to_string())
+    let snapshot = get_recording_session_state()?
+        .ok_or_else(|| "Recording session disappeared".to_string())?;
+    startup_guard.armed = false;
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -333,11 +375,12 @@ pub fn cancel_recording_countdown(session_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn set_recording_session_paused(
+pub async fn set_recording_session_paused(
     app: tauri::AppHandle,
     session_id: String,
     paused: bool,
 ) -> Result<RecordingSessionSnapshot, String> {
+    let _operation = LIFECYCLE.lock().await;
     let current = get_recording_session_state()?
         .ok_or_else(|| "No recording session is active".to_string())?;
     if current.session_id != session_id {
@@ -367,7 +410,8 @@ pub fn set_recording_session_paused(
         None,
         None,
     )?;
-    let coordinated = (|| -> Result<(), String> {
+    let overlay_app = app.clone();
+    let coordinated = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         if paused {
             // Stop video first so no post-pause picture can be paired with
             // audio/input that the user expected to be omitted.
@@ -384,17 +428,22 @@ pub fn set_recording_session_paused(
             crate::input_hook::set_input_paused(false)?;
             crate::audio::set_audio_paused(false)?;
         }
-        let _ = crate::set_overlay_paused_internal(app.clone(), paused);
+        let _ = crate::set_overlay_paused_internal(overlay_app, paused);
         Ok(())
-    })();
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("Pause worker failed: {error}")));
     if let Err(error) = coordinated {
         // Keep the three streams in their last stable state if one participant
         // cannot acknowledge the transition. This avoids a half-paused session.
         let stable_paused = !paused;
-        let _ = crate::capture::set_paused(stable_paused);
-        let _ = crate::camera::set_camera_paused(stable_paused);
-        let _ = crate::audio::set_audio_paused(stable_paused);
-        let _ = crate::input_hook::set_input_paused(stable_paused);
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = crate::capture::set_paused(stable_paused);
+            let _ = crate::camera::set_camera_paused(stable_paused);
+            let _ = crate::audio::set_audio_paused(stable_paused);
+            let _ = crate::input_hook::set_input_paused(stable_paused);
+        })
+        .await;
         let _ = crate::set_overlay_paused_internal(app.clone(), stable_paused);
         transition(
             &app,
@@ -428,6 +477,7 @@ pub async fn stop_recording_session(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<RecordingSessionSnapshot, String> {
+    let _operation = LIFECYCLE.lock().await;
     let current = get_recording_session_state()?
         .ok_or_else(|| "No recording session is active".to_string())?;
     if current.session_id != session_id {
@@ -529,6 +579,31 @@ pub fn get_recording_session_state() -> Result<Option<RecordingSessionSnapshot>,
 #[cfg(test)]
 mod tests {
     use super::{can_transition, RecordingPhase};
+
+    #[test]
+    fn stop_and_pause_wait_for_startup_to_release_the_lifecycle_gate() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let startup = super::LIFECYCLE.lock().await;
+            assert!(super::LIFECYCLE.try_lock().is_err());
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                super::LIFECYCLE.lock()
+            )
+            .await
+            .is_err());
+            drop(startup);
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                super::LIFECYCLE.lock()
+            )
+            .await
+            .is_ok());
+        });
+    }
 
     #[test]
     fn lifecycle_accepts_the_normal_recording_path() {

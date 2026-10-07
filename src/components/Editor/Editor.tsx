@@ -1,7 +1,8 @@
+import { userError } from "../../lib/userError";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
@@ -23,7 +24,9 @@ import { discoverAudioTracks, findAvailableCaptionStart, mergeAudioTracks } from
 import { loadProjectAtPath } from "../../lib/project";
 import { recordingDataPaths } from "../../lib/recordingPaths";
 import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
-import { loadInputLog } from "../../lib/inputLog";
+import { clearInputLogCache, loadInputLog } from "../../lib/inputLog";
+import { clearImageAssets } from "../../lib/canvasDraw";
+import { buildDeliveryPackage } from "../../lib/deliveryPackage";
 import "./Editor.css";
 
 interface Props {
@@ -105,7 +108,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           return trimEnd === current.trimEnd ? current : { ...current, trimEnd };
         });
       })
-      .catch((error) => setAudioError((current) => current || `Could not read video duration: ${error}`));
+      .catch((error) => setAudioError((current) => current || `Could not read video duration: ${userError(error)}`));
     return () => { cancelled = true; };
   }, [duration, isBrowserPreview, videoPath]);
 
@@ -119,7 +122,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if (activeTool) setShowFileMenu(false);
   }, [activeTool]);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
-    config, keyframes, captions: captionTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
+    config, keyframes, captions: captionTracks, audioTracks, setAudioTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
   const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
@@ -154,7 +157,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setFileActionStatus("Project saved");
       setShowFileMenu(false);
     } catch (error) {
-      setFileActionStatus(`Could not save project: ${error}`);
+      setFileActionStatus(`Could not save project: ${userError(error)}`);
     }
   }, [saveProjectNow]);
 
@@ -171,7 +174,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setFileActionStatus(`Saved as ${target.split(/[\\/]/).pop()}`);
       setShowFileMenu(false);
     } catch (error) {
-      setFileActionStatus(`Could not save project: ${error}`);
+      setFileActionStatus(`Could not save project: ${userError(error)}`);
     }
   }, [saveProjectAs, videoPath]);
 
@@ -191,7 +194,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setShowFileMenu(false);
       onOpenProject?.(selected, project.media.videoPath, project.media.inputLogPath);
     } catch (error) {
-      setFileActionStatus(`Could not open project: ${error}`);
+      setFileActionStatus(`Could not open project: ${userError(error)}`);
     }
   }, [onOpenProject, pausePlayback, projectDirty, saveProjectNow]);
 
@@ -212,7 +215,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         await appWindow.close();
       } catch (error) {
         committingClose = false;
-        setFileActionStatus(`Could not save before closing: ${error}`);
+        setFileActionStatus(`Could not save before closing: ${userError(error)}`);
         setShowFileMenu(true);
       }
     });
@@ -223,14 +226,29 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   useEffect(() => {
     if (isBrowserPreview) return;
-    const unlisten = listen("recording-starting", () => {
+    let requestId: string | null = null;
+    let disposed = false;
+    const resume = listen("recording-resuming", () => { requestId = null; });
+    const unlisten = listen<string>("recording-starting", ({ payload }) => {
+      requestId = payload;
       pausePlayback();
-      void saveProjectNow().catch((error) => {
-        console.error("[Snap] Could not autosave before recording:", error);
-      });
+      void (async () => {
+        try {
+          if (exportAbortRef.current) throw new Error("Finish or cancel the export before recording");
+          await saveProjectNow();
+          if (disposed || requestId !== payload) return;
+          window.dispatchEvent(new CustomEvent("snap-suspend-editor", { detail: projectPath }));
+          clearInputLogCache();
+          clearImageAssets();
+          await emit("editor-suspended", { requestId: payload, ready: true });
+        } catch (error) {
+          console.error("[Snap] Could not save before recording:", error);
+          if (!disposed && requestId === payload) await emit("editor-suspended", { requestId: payload, ready: false });
+        }
+      })();
     });
-    return () => { void unlisten.then((stop) => stop()); };
-  }, [isBrowserPreview, pausePlayback, saveProjectNow]);
+    return () => { disposed = true; void unlisten.then((stop) => stop()); void resume.then((stop) => stop()); };
+  }, [isBrowserPreview, pausePlayback, projectPath, saveProjectNow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -239,7 +257,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       if (cancelled) return;
       setAudioTracks((current) => mergeAudioTracks(discovered, current));
     }).catch((error) => {
-      if (!cancelled) setAudioError(`Audio could not be loaded: ${error}`);
+      if (!cancelled) setAudioError(`Audio could not be loaded: ${userError(error)}`);
     });
     return () => { cancelled = true; };
   }, [videoPath]);
@@ -266,7 +284,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       });
       setActiveTool("audio");
     } catch (error) {
-      setAudioError(`Audio could not be added: ${error}`);
+      setAudioError(`Audio could not be added: ${userError(error)}`);
     }
   }, [videoPath]);
 
@@ -525,21 +543,24 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         },
         abortController.signal
       );
-      setExportStatus(`Done: ${settings.outputPath}`);
       setExportProgress(1);
       setLastExportPath(settings.outputPath);
       if (settings.deliveryPackage) {
-        const base = settings.outputPath.replace(/\.[^\\/.]+$/i, "");
-        const transcript = captionTracks.flatMap((track) => track.visible ? track.segments : []).sort((a, b) => a.startMs - b.startMs).map((segment) => segment.text.trim()).filter(Boolean).join("\n");
-        const chapters = collectZoomRegions(keyframes, Math.round((config.trimEnd || duration) * 1000)).map((region, index) => ({ title: `Chapter ${index + 1}`, startSeconds: Math.max(0, (region.startMs / 1000 - config.trimStart) / config.playbackRate), endSeconds: Math.max(0, (region.endMs / 1000 - config.trimStart) / config.playbackRate) }));
-        await invoke("write_text_file_atomic", { path: `${base}.transcript.txt`, contents: transcript || "No captions were available for this export." });
-        await invoke("write_text_file_atomic", { path: `${base}.chapters.json`, contents: JSON.stringify(chapters, null, 2) });
-        const exportedDuration = Math.max(.1, ((config.trimEnd || duration) - config.trimStart) / config.playbackRate);
-        await invoke("extract_video_frame", { inputPath: settings.outputPath, outputPath: `${base}.thumbnail.png`, timeSeconds: exportedDuration * .35 });
+        try {
+          await invoke("write_delivery_package", {
+            outputPath: settings.outputPath,
+            ...buildDeliveryPackage(captionTracks, keyframes, config.trimStart, config.trimEnd || duration, config.playbackRate),
+          });
+        } catch (error) {
+          console.error("[Snap] Delivery package failed:", error);
+          setExportStatus("Done — video saved; delivery package could not be completed. Export again to retry.");
+          return;
+        }
       }
+      setExportStatus("Done — export saved");
       void result;
     } catch (e) {
-      setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${e}`);
+      setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${userError(e)}`);
     } finally {
       exportAbortRef.current = null;
     }
@@ -1316,7 +1337,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onOpenFile={() => {
             if (!lastExportPath) return;
             void openPath(lastExportPath).catch((error) => {
-              setExportStatus(`Done: ${lastExportPath} · Could not open file: ${error instanceof Error ? error.message : String(error)}`);
+              setExportStatus(`Done — export saved. Could not open the file: ${userError(error)}`);
             });
           }}
           onExport={handleExport}

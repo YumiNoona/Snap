@@ -28,7 +28,26 @@ type RawInputEvent = InputEvent & {
  * and the export renderer (real-time playback capture) so both read the
  * exact same cursor data the exact same way.
  */
-export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog> {
+const logCache = new Map<string, Promise<LoadedInputLog>>();
+
+export function clearInputLogCache(): void { logCache.clear(); }
+
+export function loadInputLog(inputLogPath: string): Promise<LoadedInputLog> {
+  const existing = logCache.get(inputLogPath);
+  if (existing) return existing;
+  // Preview, timeline, action analysis and export share immutable sidecar
+  // data instead of each decoding and copying a long recording over IPC.
+  if (logCache.size >= 2) logCache.delete(logCache.keys().next().value!);
+  const promise = readInputLog(inputLogPath).catch((error) => {
+    if (logCache.get(inputLogPath) === promise) logCache.delete(inputLogPath);
+    throw error;
+  });
+  logCache.set(inputLogPath, promise);
+  return promise;
+}
+
+async function readInputLog(inputLogPath: string): Promise<LoadedInputLog> {
+  if (!inputLogPath) return { allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null };
   const raw = await invoke<RawInputEvent[]>("read_input_log", { path: inputLogPath });
   if (raw.length === 0) {
     // Imported videos do not have Snap's input-event sidecar. The editor is
@@ -56,15 +75,16 @@ export async function loadInputLog(inputLogPath: string): Promise<LoadedInputLog
     }
   }
 
-  const aligned: InputEvent[] = raw
-    .filter((e) => e.type !== "meta")
-    .map((e) => {
+  const clockScale = captureElapsedMs > 0 && videoDurationMs > 0 ? videoDurationMs / captureElapsedMs : 1;
+  // Reuse the parsed event objects instead of allocating a second full set.
+  const aligned: InputEvent[] = [];
+  for (const e of raw) {
+    if (e.type !== "meta") {
       const relativeTs = Math.max(0, e.ts - captureStartMs);
-      const clockScale = captureElapsedMs > 0 && videoDurationMs > 0
-        ? videoDurationMs / captureElapsedMs
-        : 1;
-      return { ...e, ts: relativeTs * clockScale };
-    });
+      e.ts = relativeTs * clockScale;
+      aligned.push(e);
+    }
+  }
 
   const mouseMoveEvents = aligned
     // Click events are authoritative cursor anchors. Including them prevents

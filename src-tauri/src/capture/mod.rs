@@ -789,6 +789,19 @@ pub async fn start_recording(
     region: Option<CaptureRegion>,
     options: Option<RecordingOptions>,
 ) -> std::result::Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_recording_blocking(target_id, output_path, region, options)
+    })
+    .await
+    .map_err(|error| format!("Capture startup worker failed: {error}"))?
+}
+
+fn start_recording_blocking(
+    target_id: String,
+    output_path: String,
+    region: Option<CaptureRegion>,
+    options: Option<RecordingOptions>,
+) -> std::result::Result<(), String> {
     if !Path::new(&output_path).is_absolute() || Path::new(&output_path).exists() {
         return Err("Recording requires a new absolute output path; existing recordings will not be overwritten".into());
     }
@@ -846,6 +859,14 @@ pub async fn start_recording(
         let _ = done_tx.send(result);
     });
 
+    *guard = Some(CaptureHandle {
+        is_recording: is_recording.clone(),
+        is_paused,
+        resume_ready,
+        done_rx,
+    });
+    // Keep the handle registered on startup failure so coordinated cleanup
+    // can await the worker before permitting another recording.
     match startup_rx.recv_timeout(Duration::from_secs(30)) {
         Ok(Ok(())) => {}
         Ok(Err(error)) => return Err(error),
@@ -854,13 +875,6 @@ pub async fn start_recording(
             return Err("Recorder failed to initialize within 30 seconds".to_string());
         }
     }
-
-    *guard = Some(CaptureHandle {
-        is_recording,
-        is_paused,
-        resume_ready,
-        done_rx,
-    });
 
     Ok(())
 }
@@ -1396,10 +1410,13 @@ fn spawn_gpu_capture(
 
             match first_frame_rx.recv_timeout(Duration::from_secs(4)) {
                 Ok(encoded_timeline) if matches!(child.try_wait(), Ok(None)) => {
-                    let stdin = child
-                        .stdin
-                        .take()
-                        .ok_or_else(|| "Desktop capture control pipe is unavailable".to_string())?;
+                    let Some(stdin) = child.stdin.take() else {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = progress_reader.join();
+                        let _ = stderr_reader.join();
+                        continue;
+                    };
                     return Ok(SpawnedCapture {
                         child,
                         control: stdin,

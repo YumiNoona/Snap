@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle2, Clock3, Download, ExternalLink, HardDrive, MonitorPlay, RefreshCw, X } from "lucide-react";
 import type { EditorConfig, ExportSettings } from "../../lib/types";
 import { defaultExportPath, pathFileName, recordingExportDirectory } from "../../lib/exportPaths";
 import "./ExportModal.css";
+import { outputDuration } from "../../lib/exportTiming";
 
 interface Props {
   videoPath: string;
@@ -56,7 +57,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
-  const activeDuration = Math.max(0.01, (config.trimEnd || duration) - config.trimStart);
+  const activeDuration = outputDuration(config.trimStart, config.trimEnd || duration, config.playbackRate);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
   const fpsFactor = Math.sqrt(settings.fps / 60);
   const baseMbps = settings.quality === "high" ? 12 : settings.quality === "medium" ? 8 : 5;
@@ -70,6 +71,28 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   const exporting = status.startsWith("Exporting") || status === "Finalizing..." || status.startsWith("Cancelling");
   const cancellable = status.startsWith("Exporting");
   const done = status.startsWith("Done");
+  const modalRef = useRef<HTMLElement>(null);
+  const actionsRef = useRef({ onClose, exporting });
+  actionsRef.current = { onClose, exporting };
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    const focusables = () => Array.from(modalRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']") ?? []).filter((element) => element.offsetParent !== null);
+    focusables()[0]?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopPropagation();
+        if (!actionsRef.current.exporting) actionsRef.current.onClose();
+      } else if (event.key === "Tab") {
+        const elements = focusables();
+        const first = elements[0], last = elements[elements.length - 1];
+        if (!first) { event.preventDefault(); return; }
+        if (event.shiftKey && (document.activeElement === first || !elements.includes(document.activeElement as HTMLElement))) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !elements.includes(document.activeElement as HTMLElement))) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", key);
+    return () => { document.removeEventListener("keydown", key); if (previous?.isConnected) previous.focus(); };
+  }, []);
 
   const selectPreset = (preset: typeof PRESETS[number]) => {
     const extension = settings.format;
@@ -84,14 +107,15 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
 
   return (
     <div className="export-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !exporting && onClose()}>
-      <section className="export-modal" role="dialog" aria-modal="true" aria-label="Export video">
+      <section ref={modalRef} className="export-modal" role="dialog" aria-modal="true" aria-label="Export video">
         <header className="export-modal-header">
           <div><span className="export-eyebrow">READY TO SHARE</span><h2>Export video</h2></div>
-          <button className="export-close" onClick={onClose} disabled={exporting}><X size={18} /></button>
+          <button className="export-close" onClick={onClose} disabled={exporting} aria-label="Close export dialog"><X size={18} /></button>
         </header>
 
         <div className="export-modal-body">
-          <div className="export-main-column">
+          <fieldset className="export-main-column" disabled={exporting}>
+            <legend hidden>Export options</legend>
             <div className="export-section-title">Resolution</div>
             <div className="export-preset-grid">
               {PRESETS.map((preset) => {
@@ -105,13 +129,13 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
             <div className="export-options-row">
               <label>Format<select value={settings.format} onChange={(e) => {
                 const format = e.target.value as ExportSettings["format"];
-                setSettings({ ...settings, format, outputPath: settings.outputPath.replace(/\.(mp4|webm|gif)$/i, `.${format}`) });
+                setSettings({ ...settings, format, captions: format === "gif" && settings.captions === "embedded" ? "burned" : settings.captions, outputPath: settings.outputPath.replace(/\.(mp4|webm|gif)$/i, `.${format}`) });
               }}><option value="mp4">MP4 · H.264</option><option value="webm">WebM · VP9</option><option value="gif">Animated GIF</option></select></label>
               <label>Quality<select value={settings.quality} onChange={(e) => setSettings({ ...settings, quality: e.target.value as ExportSettings["quality"] })}><option value="high">High</option><option value="medium">Balanced</option><option value="low">Small file</option></select></label>
             </div>
             {captionTrackCount > 0 && <div className="export-options-row">
               <label>Captions<select value={settings.captions} onChange={(event) => setSettings({ ...settings, captions: event.target.value as ExportSettings["captions"] })}>
-                <option value="burned">Burn into video</option><option value="embedded">Embedded MP4 track</option><option value="srt">SRT sidecar only</option><option value="vtt">WebVTT sidecar only</option><option value="burned-srt">Burned + SRT</option><option value="none">No captions</option>
+                <option value="burned">Burn into video</option>{settings.format !== "gif" && <option value="embedded">Embedded subtitle track</option>}<option value="srt">SRT sidecar only</option><option value="vtt">WebVTT sidecar only</option><option value="burned-srt">Burned + SRT</option><option value="none">No captions</option>
               </select></label>
             </div>}
             {settings.format === "mp4" && <div className="export-options-row">
@@ -124,7 +148,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
             <label className="export-path-label">Delivery package<select value={settings.deliveryPackage ? "on" : "off"} onChange={(event) => setSettings({ ...settings, deliveryPackage: event.target.value === "on" })}><option value="off">Video only</option><option value="on">Video + thumbnail + transcript + chapters</option></select></label>
 
             <label className="export-path-label">Save as<input value={settings.outputPath} onChange={(e) => setSettings({ ...settings, outputPath: e.target.value })} /></label>
-          </div>
+          </fieldset>
 
           <aside className="export-summary">
             <h3>Export summary</h3>

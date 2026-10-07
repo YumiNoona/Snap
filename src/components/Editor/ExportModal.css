@@ -27,3 +27,4 @@
 .export-start-button:hover,.export-open-button:hover,.export-secondary-button:hover { transform: translateY(-1px); }
 .export-start-button:disabled,.export-open-button:disabled,.export-secondary-button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
 @media (max-width: 720px) { .export-modal-body { grid-template-columns: 1fr; }.export-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }.export-summary h3,.export-estimate-note { grid-column: 1/-1; }.export-summary-row { margin: 4px 0; } }
+fieldset.export-main-column { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
