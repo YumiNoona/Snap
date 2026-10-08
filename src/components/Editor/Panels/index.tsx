@@ -1,3 +1,7 @@
+import { Section, SelectRow, CheckRow } from "./PanelControls";
+import ScreenTiltTools from "./ScreenTiltTools";
+import CameraAnimation from "./CameraAnimation";
+import "./Animation.css";
 import { userError } from "../../../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
@@ -136,7 +140,8 @@ export default function Panels({
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
-  audioTracks, audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
+  audioTracks,
+  audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
@@ -591,12 +596,12 @@ export default function Panels({
   const pendingRemovalLayerCount = pendingMediaRemoval ? config.layers.filter((layer) => (layer.type === "image" || layer.type === "video") && layer.path.toLowerCase() === pendingMediaRemoval.path.toLowerCase()).length : 0;
   const pendingRemovalAudioCount = pendingMediaRemoval ? audioTracks.filter((track) => track.path.toLowerCase() === pendingMediaRemoval.path.toLowerCase()).length : 0;
   const updateSelectedLayer = (patch: Partial<Layer>) => {
-    if (!selectedLayer) return;
+    if (!selectedLayer || config.lockedTracks?.includes("annotations")) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
   };
   const copySelectedLayerStyle = () => {
     if (!selectedLayer) return;
-    const { id: _id, type: _type, start: _start, end: _end, x: _x, y: _y, w: _w, h: _h, ...style } = selectedLayer;
+    const { id: _id, type: _type, start: _start, end: _end, x: _x, y: _y, w: _w, h: _h, animation: _animation, groupId: _groupId, screenAnchored: _anchor, ...style } = selectedLayer;
     copiedLayerStyleRef.current = style as Partial<Layer>;
   };
   const pasteSelectedLayerStyle = () => {
@@ -696,6 +701,11 @@ export default function Panels({
           </div>, document.body)}
         </div>
       )}
+      {activeTab === "tilt" && (
+        <div className="ss-drawer-content">
+          <ScreenTiltTools config={config} time={currentTime} onChange={onConfigChange}/>
+        </div>
+      )}
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
       {activeTab === "canvas" && (
         <div className="ss-drawer-content canvas-drawer-content">
@@ -735,7 +745,6 @@ export default function Panels({
                     {(["start", "middle", "end"] as const).map((stop) => <input key={stop} type="color" value={customGradient[stop]} onChange={(event) => applyCustomGradient({ [stop]: event.target.value })} aria-label={`${stop} gradient color`} />)}
                   </div>
                   <Slider label="Angle" value={customGradient.angle} min={0} max={360} step={5} unit="°" onChange={(angle) => applyCustomGradient({ angle })} />
-                  <button type="button" className="apply-gradient-button" onClick={() => applyCustomGradient()}>Apply custom gradient</button>
                 </div>
               </>
             )}
@@ -895,7 +904,7 @@ export default function Panels({
 
       {activeTab === "camera" && (
         <div className="ss-drawer-content">
-          <Section title="Webcam Studio">
+          <CameraAnimation config={config} time={currentTime} duration={duration} onChange={onConfigChange}/><Section title="Webcam Studio">
             <CheckRow label="Show webcam" checked={config.cameraOverlay.enabled} onChange={(enabled) => updateCamera({ enabled })} />
             <div className="focus-preset-grid" aria-label="Webcam position presets">
               {([[.18,.2,"Top left"],[.5,.2,"Top"],[.82,.2,"Top right"],[.18,.79,"Bottom left"],[.5,.79,"Bottom"],[.82,.79,"Bottom right"]] as const).map(([x,y,label]) => <button key={label} title={label} aria-label={label} className={Math.abs(config.cameraOverlay.x-x)<.04 && Math.abs(config.cameraOverlay.y-y)<.04 ? "active" : ""} onClick={() => updateCamera({x,y})}><i /></button>)}
@@ -1206,7 +1215,7 @@ export default function Panels({
               <span><strong>Caption</strong><small>{(selectedCaptionSegment.startMs / 1000).toFixed(1)}s–{(selectedCaptionSegment.endMs / 1000).toFixed(1)}s</small></span>
             </div>
             <div className="caption-copy-edit">
-              <textarea aria-label="Caption text" className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, userEdited: true } : segment) }))} />
+              <textarea spellCheck aria-label="Caption text" className="layer-textarea caption-copy-editor" rows={3} value={selectedCaptionSegment.text} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.map((segment) => segment.id === selectedCaptionSegment.id ? { ...segment, text: event.target.value, words: undefined, userEdited: true } : segment) }))} />
               <div className="caption-time-row caption-inspector-time">
                 <label><span>Start</span><div><input aria-label="Caption start time" type="number" step="0.05" value={(selectedCaptionSegment.startMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "start", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
                 <label><span>End</span><div><input aria-label="Caption end time" type="number" step="0.05" value={(selectedCaptionSegment.endMs / 1000).toFixed(2)} onChange={(event) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: updateCaptionTiming(track.segments, selectedCaptionSegment.id, "end", Number(event.target.value) * 1000, config.trimStart * 1000, (config.trimEnd || duration) * 1000) }))} /><em>s</em></div></label>
@@ -1315,44 +1324,6 @@ export default function Panels({
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="ss-section"><h4 className="ss-section-heading">{title}</h4><div className="ss-section-body">{children}</div></section>;
-}
-
-function SelectRow({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const optionLabel = (option: string) => optionLabels?.[option] ?? option.replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase());
-
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open]);
-
-  return (
-    <div className="field-row select-row custom-select-row" ref={rootRef}>
-      <span className="field-label">{label}</span>
-      <div className="custom-select">
-        <button type="button" className={`custom-select-trigger ${open ? "open" : ""}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
-          <span>{optionLabel(value)}</span><ChevronDown size={14} />
-        </button>
-        {open && <div className="custom-select-menu" role="listbox" aria-label={label}>
-          {options.map((option) => <button type="button" role="option" aria-selected={option === value} key={option} onClick={() => { onChange(option); setOpen(false); }}><span>{optionLabel(option)}</span>{option === value && <Check size={14} />}</button>)}
-        </div>}
-      </div>
-    </div>
-  );
-}
 
 const CAPTION_LANGUAGES: Array<{ value: TranscriptionLanguage; label: string; description: string }> = [
   { value: "auto", label: "Auto detect", description: "Detect multilingual speech" },
@@ -1515,15 +1486,6 @@ function CaptionModelPicker({ value, installedModels, engineAvailable, onChange 
 
 function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return <label className="layer-number-field"><span>{label}</span><div><input type="number" min={0} max={100} step={1} value={Math.round(value)} onChange={(event) => onChange(Number(event.target.value))} /><em>%</em></div></label>;
-}
-
-function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button type="button" className="field-row check-row" onClick={() => onChange(!checked)} aria-pressed={checked}>
-      <span className="field-label">{label}</span>
-      <span className={`pro-switch ${checked ? "checked" : ""}`} aria-hidden="true"><span /></span>
-    </button>
-  );
 }
 
 function EffectThumbnail({ effect }: { effect: ClickEffect }) {

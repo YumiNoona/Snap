@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { drawCaptionTrack, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
+import { drawCameraBubble, drawCaptionTrack, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
 import type { CaptionTrack } from "./types";
+import { DEFAULT_EDITOR_CONFIG } from "./types";
+
+it("isolates animated camera rotation from the rest of the canvas",()=>{
+  let depth=0;const rotations:number[]=[];
+  const context={save:()=>{depth++;},restore:()=>{depth--;expect(depth).toBeGreaterThanOrEqual(0);},translate:()=>{},rotate:(n:number)=>rotations.push(n),scale:()=>{},beginPath:()=>{},moveTo:()=>{},lineTo:()=>{},arcTo:()=>{},closePath:()=>{},fill:()=>{},clip:()=>{},drawImage:()=>{},stroke:()=>{}} as unknown as CanvasRenderingContext2D;
+  const previous=globalThis.HTMLMediaElement;
+  Object.assign(globalThis,{HTMLMediaElement:{HAVE_CURRENT_DATA:2}});
+  try {drawCameraBubble(context,{readyState:4,videoWidth:640,videoHeight:480} as HTMLVideoElement,{x:0,y:0,w:1000,h:500},{...DEFAULT_EDITOR_CONFIG.cameraOverlay,enabled:true,rotation:90});expect(depth).toBe(0);expect(rotations[0]).toBeCloseTo(Math.PI/2);}finally{Object.assign(globalThis,{HTMLMediaElement:previous});}
+});
 
 describe("caption canvas isolation", () => {
   it("starts a fresh path before filling the caption background", () => {

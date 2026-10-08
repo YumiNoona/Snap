@@ -1,3 +1,6 @@
+import { motionEase } from "./easing";
+export { motionEase } from "./easing";
+import { animatedLayer } from "./layerAnimation";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CameraOverlayConfig, CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
@@ -756,7 +759,9 @@ export function drawCameraBubble(
   camera: HTMLVideoElement,
   area: { x: number; y: number; w: number; h: number },
   config: CameraOverlayConfig,
+  time: number = 0,
 ) {
+  if(config.animation?.length) { const pose=animatedLayer({id:"camera",type:"shape",shape:"rectangle",color:"transparent",strokeWidth:0,start:0,end:Infinity,x:config.x,y:config.y,w:config.width,h:config.width,opacity:config.opacity,rotation:config.rotation,animation:config.animation},time);config={...config,x:pose.x,y:pose.y,width:pose.w,opacity:pose.opacity??1,rotation:pose.rotation}; }
   if (!config.enabled || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || camera.videoWidth <= 0) return;
   const width = area.w * Math.max(.08, Math.min(.7, config.width));
   const aspect = camera.videoWidth / Math.max(1, camera.videoHeight);
@@ -772,6 +777,8 @@ export function drawCameraBubble(
   const sourceX = Math.max(0, Math.min(camera.videoWidth - sourceW, cover.x + (cover.w - sourceW) * config.cropX));
   const sourceY = Math.max(0, Math.min(camera.videoHeight - sourceH, cover.y + (cover.h - sourceH) * config.cropY));
 
+  ctx.save();
+  ctx.translate(x+actualWidth/2,y+height/2);ctx.rotate((config.rotation??0)*Math.PI/180);ctx.translate(-x-actualWidth/2,-y-height/2);
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,.42)";
   ctx.shadowBlur = config.shadow;
@@ -798,6 +805,7 @@ export function drawCameraBubble(
   roundRect(ctx, x, y, actualWidth, height, radius);
   ctx.stroke();
   ctx.restore();
+  ctx.restore();
 }
 
 export function roundRect(
@@ -822,16 +830,6 @@ export function roundRect(
   ctx.lineTo(x, y + r);
   ctx.arcTo(x, y, x + r, y, r);
   ctx.closePath();
-}
-
-export function motionEase(t: number, curve: string = "ease-in-out"): number {
-  t = Math.max(0, Math.min(1, t));
-  if (curve === "linear") return t;
-  if (curve === "ease-in") return t * t * t;
-  if (curve === "ease-out") return 1 - (1 - t) ** 3;
-  if (curve === "sine") return (1 - Math.cos(Math.PI * t)) / 2;
-  if (curve === "smoother") return t * t * t * (t * (6 * t - 15) + 10);
-  return easeInOut(t);
 }
 
 export function easeInOut(t: number): number {

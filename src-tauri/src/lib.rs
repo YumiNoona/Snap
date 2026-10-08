@@ -4,6 +4,7 @@ mod camera;
 mod caption_install;
 mod capture;
 mod export;
+mod editor_cache;
 mod input_hook;
 mod mobile;
 mod process;
@@ -1435,7 +1436,7 @@ fn list_recordings(app: tauri::AppHandle) -> std::result::Result<Vec<FileEntry>,
             ))
         })
         .collect();
-    entries.sort_by(|left, right| right.0.cmp(&left.0));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     Ok(entries.into_iter().map(|(_, entry)| entry).collect())
 }
 
@@ -1891,13 +1892,15 @@ pub fn run() {
             recording_session::set_recording_session_paused,
             recording_session::stop_recording_session,
             recording_session::get_recording_session_state,
-            export::export_video,
             export::open_export_sink,
             export::write_export_chunk,
             export::close_export_sink,
             export::discard_canvas_export,
             export::finalize_canvas_export,
             export::extract_video_frame,
+            editor_cache::editor_cached_media,
+            editor_cache::editor_source_frame_rate,
+            editor_cache::cancel_editor_cached_media,
             export::write_delivery_package,
             open_editor_window,
             set_editor_suspended_for_recording,

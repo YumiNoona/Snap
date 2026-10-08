@@ -1,3 +1,7 @@
+import type { ScreenTiltConfig } from "./screenTilt";
+/** Non-destructive retained ranges in the original recording's clock. */
+export interface VideoClip { id: string; start: number; end: number; groupId?: string }
+
 export interface InputEvent {
   ts: number;
   type: string;
@@ -92,7 +96,11 @@ export interface BaseLayer {
   flipX?: boolean;
   flipY?: boolean;
   opacity?: number;
+  groupId?: string;
+  screenAnchored?: boolean;
+  animation?: LayerAnimationKey[];
 }
+export interface LayerAnimationKey { time: number; x: number; y: number; scale: number; opacity: number; rotation: number; easing: Keyframe["easing"] }
 
 export interface TextLayer extends BaseLayer {
   type: "text";
@@ -203,6 +211,9 @@ export interface AutoZoomConfig {
   singleClickScale: number;
   typingScale: number;
   minimumShotMs: number;
+  mergeGapMs?: number;
+  excludedRanges?: Array<{ start: number; end: number }>;
+  protectedAreas?: Array<{ x: number; y: number; w: number; h: number }>;
 }
 
 export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<AutoZoomConfig, "preset">> = {
@@ -240,6 +251,8 @@ export interface ActionEventEdit {
 }
 
 export interface CameraOverlayConfig {
+  animation?: LayerAnimationKey[];
+  rotation?: number;
   enabled: boolean;
   x: number;
   y: number;
@@ -265,6 +278,15 @@ export interface AudioTrack {
   label: string;
   muted: boolean;
   volume: number;
+  linked?: boolean;
+  start?: number;
+  sourceStart?: number;
+  sourceEnd?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  noiseReduction?: boolean;
+  ducking?: number;
+  volumeKeys?: Array<{ time: number; volume: number }>;
 }
 
 export interface CaptionWord {
@@ -332,6 +354,7 @@ export interface EditorConfig {
   wallpaperUrl: string;
   bgBlur: number;
   padding: number;
+  screenTilt?: ScreenTiltConfig;
   borderRadius: number;
   inset: number;
   insetColor: string;
@@ -350,6 +373,11 @@ export interface EditorConfig {
   /** Source playback/export speed. 1 is real time. */
   playbackRate: number;
   cuts: number[];
+  videoClips: VideoClip[] | null;
+  lockedTracks?: string[];
+  previewQuality?: "full" | "half" | "quarter";
+  simplifiedScrubbing?: boolean;
+  useProxy?: boolean;
   layers: Layer[];
   motionBlur: MotionBlurConfig;
   cursorMovement: MovementConfig;
@@ -413,6 +441,7 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   trimEnd: 0,
   playbackRate: 1,
   cuts: [],
+  videoClips: null,
   layers: [],
   motionBlur: {
     enabled: false,

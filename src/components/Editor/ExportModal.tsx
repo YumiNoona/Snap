@@ -5,6 +5,7 @@ import type { EditorConfig, ExportSettings } from "../../lib/types";
 import { defaultExportPath, pathFileName, recordingExportDirectory } from "../../lib/exportPaths";
 import "./ExportModal.css";
 import { outputDuration } from "../../lib/exportTiming";
+import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
 
 interface Props {
   videoPath: string;
@@ -57,7 +58,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
-  const activeDuration = outputDuration(config.trimStart, config.trimEnd || duration, config.playbackRate);
+  const activeDuration = outputDuration(0, sequenceDuration(retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration)), config.playbackRate);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
   const fpsFactor = Math.sqrt(settings.fps / 60);
   const baseMbps = settings.quality === "high" ? 12 : settings.quality === "medium" ? 8 : 5;

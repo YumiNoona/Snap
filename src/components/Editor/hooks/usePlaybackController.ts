@@ -1,9 +1,10 @@
+import { audioPosition, audioEnvelope } from "../../../lib/audioEditing";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { AudioMixConfig, AudioTrack } from "../../../lib/types";
+import type { AudioMixConfig, AudioTrack, VideoClip } from "../../../lib/types";
+import { retainedClips, sequenceTime, sequenceClip } from "../../../lib/videoEditing";
 import {
   clampPlaybackTime,
-  isAtPlaybackBoundary,
   shouldRecoverStalledPlayback,
   shouldResyncSidecar,
 } from "../../../lib/playbackTransport";
@@ -18,6 +19,8 @@ interface Options {
   audioMix: AudioMixConfig;
   previewMuted?: boolean;
   previewVolume?: number;
+  videoClips?: VideoClip[] | null;
+  frameRate?: number;
 }
 
 export type TransportStatus = "idle" | "paused" | "starting" | "playing" | "buffering" | "seeking" | "recovering" | "failed";
@@ -30,12 +33,22 @@ const SIDECAR_SYNC_INTERVAL_MS = 50;
  * The video element is the sole editor clock. Every user action invalidates
  * older async media work, and only confirmed frame progress reports playing.
  */
-export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, playbackRate, audioTracks, audioMix, previewMuted = false, previewVolume = 100 }: Options) {
+export function usePlaybackController({ videoPath, trimStart, trimEnd, duration, playbackRate, audioTracks, audioMix, previewMuted = false, previewVolume = 100, videoClips, frameRate = 30 }: Options) {
+  const clipsRef = useRef<VideoClip[]>([]);
+  clipsRef.current = retainedClips(videoClips, trimStart, trimEnd || duration);
+  const activeIdRef = useRef("recording");
+  const [activeClipId, setActiveClipId] = useState("recording");
   const [currentTime, setCurrentTime] = useState(0);
   const [status, setStatusState] = useState<TransportStatus>("idle");
   const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioElementsRef = useRef(new Map<string, HTMLAudioElement>());
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analysersRef = useRef(new Map<string, {node:AnalyserNode;data:Float32Array<ArrayBuffer>}>());
+  const speechRef = useRef(0);
+  const gainsRef=useRef(new Map<string,GainNode>());
+  const [audioDurations,setAudioDurations]=useState<Record<string,number>>({});
+  const audioSources = JSON.stringify(audioTracks.map(track => [track.id,track.path]));
   const audioTracksRef = useRef(audioTracks);
   const audioMixRef = useRef(audioMix);
   const previewMutedRef = useRef(previewMuted);
@@ -53,7 +66,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   const lastSidecarSyncRef = useRef(0);
   const recoverRef = useRef<(time: number) => void>(() => {});
 
-  boundsRef.current = { start: trimStart, end: trimEnd || duration };
+  boundsRef.current = { start: clipsRef.current[0]?.start ?? trimStart, end: clipsRef.current[clipsRef.current.length - 1]?.end ?? (trimEnd || duration) };
   audioTracksRef.current = audioTracks;
   audioMixRef.current = audioMix;
   previewMutedRef.current = previewMuted;
@@ -80,8 +93,13 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
         : track.kind === "imported"
           ? 100
           : audioMixRef.current.systemVolume;
-      element.muted = trackIsMuted(track);
-      element.volume = Math.max(0, Math.min(1, track.volume * channelVolume / 100 * previewVolumeRef.current / 100));
+      const gain=gainsRef.current.get(track.id);
+      const audible=statusRef.current==="playing"&&wantsPlaybackRef.current&&!!videoRef.current&&!videoRef.current.paused&&!videoRef.current.seeking;
+      element.muted = gain ? false : !audible || trackIsMuted(track);
+      const video = videoRef.current;
+      const position = audioPosition(track, video?.currentTime ?? 0, sequenceTime(clipsRef.current, video?.currentTime ?? 0, activeIdRef.current));
+      const volume = Math.max(0, Math.min(4, audioEnvelope(track, position.time, element.duration || Infinity) * (track.kind !== "microphone" ? 1 - (track.ducking ?? 0) / 100 * speechRef.current : 1) * channelVolume / 100 * previewVolumeRef.current / 100));
+      if(gain&&audioContextRef.current){element.volume=1;gain.gain.setTargetAtTime(!audible||trackIsMuted(track)?0:volume,audioContextRef.current.currentTime,.02);}else element.volume=Math.min(1,volume);
     }
   }, [trackIsMuted]);
 
@@ -90,21 +108,25 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   }, []);
 
   const syncSidecars = useCallback((video: HTMLVideoElement, force = false) => {
-    for (const element of audioElementsRef.current.values()) {
-      if (element.readyState >= HTMLMediaElement.HAVE_METADATA
-        && shouldResyncSidecar(element.currentTime, video.currentTime, force)) {
-        try { element.currentTime = video.currentTime; } catch { /* sidecar source is changing */ }
+    for (const track of audioTracksRef.current) {
+      const element = audioElementsRef.current.get(track.id);
+      if (!element) continue;
+      const position = audioPosition(track, video.currentTime, sequenceTime(clipsRef.current, video.currentTime, activeIdRef.current));
+      if (!position.active || (Number.isFinite(element.duration)&&position.time>=element.duration)) { element.pause(); continue; }
+      if (element.readyState >= HTMLMediaElement.HAVE_METADATA && shouldResyncSidecar(element.currentTime, position.time, force)) {
+        try { element.currentTime = position.time; } catch { /* metadata changing */ }
       }
       element.playbackRate = video.playbackRate;
+      if(wantsPlaybackRef.current&&statusRef.current==="playing"&&!video.paused&&!video.seeking&&element.paused&&!trackIsMuted(track))void element.play().catch(()=>{});
     }
-  }, []);
+  }, [trackIsMuted]);
 
   const playSidecars = useCallback((video: HTMLVideoElement, generation: number) => {
     applyAudioMix();
     syncSidecars(video);
     for (const track of audioTracksRef.current) {
       const element = audioElementsRef.current.get(track.id);
-      if (!element || trackIsMuted(track) || !element.paused) continue;
+      if (!element || trackIsMuted(track) || !element.paused || !audioPosition(track,video.currentTime,sequenceTime(clipsRef.current,video.currentTime,activeIdRef.current)).active || (Number.isFinite(element.duration)&&audioPosition(track,video.currentTime,sequenceTime(clipsRef.current,video.currentTime,activeIdRef.current)).time>=element.duration)) continue;
       void element.play().catch((error) => {
         if (generation === generationRef.current && wantsPlaybackRef.current) {
           console.warn(`[Snap] ${track.label} preview playback failed:`, error);
@@ -120,7 +142,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       const element = audioElementsRef.current.get(track.id);
       if (!element || trackIsMuted(track)) continue;
       element.pause();
-      try { element.currentTime = targetTime; } catch { /* metadata is loading */ }
+      try { element.currentTime = audioPosition(track,targetTime,sequenceTime(clipsRef.current,targetTime,activeIdRef.current)).time; } catch { /* metadata is loading */ }
       element.muted = true;
       void element.play().catch((error) => {
         if (generation === generationRef.current && wantsPlaybackRef.current) {
@@ -291,21 +313,23 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   const start = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    void audioContextRef.current?.resume();
     const { generation, signal } = beginCommand();
     wantsPlaybackRef.current = true;
     recoveryActiveRef.current = false;
-    const { start: rangeStart, end: configuredEnd } = boundsRef.current;
-    const rangeEnd = configuredEnd || video.duration || duration;
-    const rebuild = isAtPlaybackBoundary(video.currentTime, video.ended, rangeStart, rangeEnd);
-    const startAt = rebuild ? Math.max(0, rangeStart) : video.currentTime;
+    const current = clipsRef.current.find(c => c.id === activeIdRef.current) ?? clipsRef.current[0];
+    const startAt = current ? Math.max(current.start, Math.min(current.end, video.currentTime)) : 0;
+    const restart = !current || video.ended || (video.currentTime >= current.end - .005 && current.id === clipsRef.current[clipsRef.current.length - 1]?.id);
+    if (restart && clipsRef.current.length) { activeIdRef.current = clipsRef.current[0].id; setActiveClipId(activeIdRef.current); }
+    const targetStart = restart ? clipsRef.current[0]?.start ?? 0 : startAt;
     // Rewind ended WAV sidecars before priming them. Priming at their old end
     // made replay start with stale/absent audio while captions restarted.
-    primeSidecars(video, generation, startAt);
-    setCurrentTime(startAt);
-    if (rebuild) {
+    primeSidecars(video, generation, targetStart);
+    setCurrentTime(targetStart);
+    if (restart || Math.abs(targetStart - video.currentTime) > .001) {
       setStatus("recovering");
       recoveryActiveRef.current = true;
-      void seekMedia(video, startAt, signal).then((ready) => {
+      void seekMedia(video, targetStart, signal).then((ready) => {
         recoveryActiveRef.current = false;
         if (!ready || !commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) return;
         syncSidecars(video, true);
@@ -323,10 +347,15 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     else start();
   }, [pause, start]);
 
-  const seek = useCallback((time: number) => {
+  const seek = useCallback((time: number, clipId?: string) => {
     const video = videoRef.current;
     const end = boundsRef.current.end || video?.duration || duration || time;
-    const clamped = clampPlaybackTime(time, boundsRef.current.start, end);
+    const selected = clipsRef.current.find(c => c.id === clipId)
+      ?? clipsRef.current.find(c => c.id === activeIdRef.current && time >= c.start && time <= c.end)
+      ?? clipsRef.current.find(c => time >= c.start && time < c.end)
+      ?? clipsRef.current[0];
+    if (selected) { activeIdRef.current = selected.id; setActiveClipId(selected.id); }
+    const clamped = clampPlaybackTime(time, selected?.start ?? 0, selected?.end ?? end);
     const resumeAfterSeek = wantsPlaybackRef.current;
     const { generation, signal } = beginCommand();
     setStatus("seeking");
@@ -352,25 +381,44 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
 
   useEffect(() => {
     const elements = new Map<string, HTMLAudioElement>();
+    const metadataHandlers=new Map<string,()=>void>();
+    setAudioDurations({});
     for (const track of audioTracks) {
-      const element = new Audio(convertFileSrc(track.path));
+      const element = new Audio(); element.crossOrigin="anonymous"; element.src=convertFileSrc(track.path);
+      const metadata=()=>{if(Number.isFinite(element.duration))setAudioDurations(current=>({...current,[track.id]:element.duration}));};
+      metadataHandlers.set(track.id,metadata);element.addEventListener("loadedmetadata",metadata);
       element.preload = "auto";
       element.load();
       elements.set(track.id, element);
     }
     audioElementsRef.current = elements;
+    try {
+      const context = elements.size ? new AudioContext() : null; audioContextRef.current = context;
+      if(context)for (const [id,element] of elements) { const source=context.createMediaElementSource(element); const gain=context.createGain();gain.gain.value=0;gainsRef.current.set(id,gain); const node=context.createAnalyser(); node.fftSize=256; source.connect(gain);gain.connect(node); node.connect(context.destination); analysersRef.current.set(id,{node,data:new Float32Array(node.fftSize)}); }
+    } catch { /* Playback remains available when Web Audio is unavailable. */ }
     applyAudioMix();
     const video = videoRef.current;
     if (video) syncSidecars(video, true);
     return () => {
-      for (const element of elements.values()) {
+      for (const [id,element] of elements) {
+        const handler=metadataHandlers.get(id);if(handler)element.removeEventListener("loadedmetadata",handler);
         element.pause();
         element.removeAttribute("src");
         element.load();
       }
       if (audioElementsRef.current === elements) audioElementsRef.current = new Map();
+      analysersRef.current.clear(); gainsRef.current.clear(); void audioContextRef.current?.close(); audioContextRef.current=null;
     };
-  }, [applyAudioMix, audioTracks, syncSidecars]);
+  }, [applyAudioMix, audioSources, syncSidecars]);
+
+  useEffect(() => {
+    const video = mediaElement ?? videoRef.current;
+    if (mediaElement) videoRef.current = mediaElement;
+    if (!video || !clipsRef.current.length) return;
+    const clip = clipsRef.current.find(c => c.id === activeIdRef.current) ?? clipsRef.current[0];
+    const target = Math.max(clip.start, Math.min(clip.end, video.currentTime));
+    if (activeIdRef.current !== clip.id || Math.abs(target - video.currentTime) > .001) seek(target, clip.id);
+  }, [videoClips, trimStart, trimEnd, duration, mediaElement, seek]);
 
   useEffect(() => {
     applyAudioMix();
@@ -409,6 +457,14 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
 
     const clock = () => {
       const mediaTime = video.currentTime;
+      const index = clipsRef.current.findIndex(c => c.id === activeIdRef.current);
+      const clip = clipsRef.current[index];
+      const next = clipsRef.current[index + 1];
+      if (wantsPlaybackRef.current && !video.seeking && clip && mediaTime >= clip.end - .001 && next) {
+        seek(next.start, next.id);
+        clockFrameRef.current = requestAnimationFrame(clock);
+        return;
+      }
       const now = performance.now();
       const last = lastProgressRef.current;
       if (Math.abs(mediaTime - last.mediaTime) >= .002) {
@@ -427,8 +483,8 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
         lastProgressRef.current.wallTime = now;
         recoverRef.current(mediaTime);
       }
-      const end = boundsRef.current.end || video.duration || 0;
-      if (wantsPlaybackRef.current && end > 0 && mediaTime >= end - .005) {
+      const end = clip?.end ?? video.duration ?? 0;
+      if (wantsPlaybackRef.current && !next && end > 0 && mediaTime >= end - .005) {
         wantsPlaybackRef.current = false;
         beginCommand();
         video.pause();
@@ -514,10 +570,27 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       video.removeEventListener("ratechange", onRateChange);
       if (videoRef.current === video) videoRef.current = null;
     };
-  }, [beginCommand, mediaElement, pauseSidecars, playSidecars, scheduleRecovery, setStatus, syncSidecars, videoPath]);
+  }, [beginCommand, mediaElement, pauseSidecars, playSidecars, scheduleRecovery, setStatus, syncSidecars, videoPath, seek]);
+
+  useEffect(() => {
+    const timer=window.setInterval(()=>{
+      let speech=0;
+      for (const [id,{node,data}] of analysersRef.current) {
+        const track=audioTracksRef.current.find(t=>t.id===id);
+        if(track?.kind!=="microphone" || track.muted)continue;
+        node.getFloatTimeDomainData(data);
+        const rms=Math.sqrt(data.reduce((sum,n)=>sum+n*n,0)/data.length);
+        speech=Math.max(speech,Math.min(1,rms/.025));
+      }
+      speechRef.current=speechRef.current*.7+speech*.3;
+      applyAudioMix();
+    },100);
+    return ()=>window.clearInterval(timer);
+  },[applyAudioMix]);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
+      if ((event.code === "ArrowLeft" || event.code === "ArrowRight") && !event.ctrlKey && !event.metaKey && !event.altKey && !(event.target instanceof HTMLElement && event.target.closest("input,textarea,select,[contenteditable]"))) { event.preventDefault(); pause(); const position=sequenceTime(clipsRef.current,videoRef.current?.currentTime??0,activeIdRef.current); const target=sequenceClip(clipsRef.current,Math.max(0,position+(event.code === "ArrowLeft"?-1:1)*(event.shiftKey?10:1)/Math.max(1,frameRate))); if(target)seek(target.source,target.clip.id); return; }
       if (event.code !== "Space" || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || !!target.closest("input, textarea, select, button, [role='textbox'], [role='slider']"))) return;
@@ -526,10 +599,14 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     };
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
-  }, [toggle]);
+  }, [toggle,pause,seek,frameRate]);
 
   return {
     currentTime,
+    audioDurations,
+    activeClipId,
+    sequencePosition: sequenceTime(clipsRef.current, currentTime, activeClipId),
+    seekSequence: (time: number) => { const target = sequenceClip(clipsRef.current, time); if (target) seek(target.source, target.clip.id); },
     playing: status === "playing",
     playbackStatus: status,
     setMediaElement,

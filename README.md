@@ -22,91 +22,6 @@ as synchronized editable sources. Its editor adds automatic or manual camera
 movement, captions, cursor styling, backgrounds, annotations, and polished
 exports without uploading recordings to a cloud service.
 
-## Snap 9.0.1
-
-This maintenance release releases the heavy editor before capture, coordinates recording startup and stop, bounds export memory, protects failed project recovery, and fixes delivery packages, audio undo/redo, and user-facing errors. Recording hardware defaults remain unchanged.
-
-### Snap 9.0.0
-
-Snap 9 moves Snap into a lightweight tray-first recording workflow and rounds
-out the tutorial editor with dedicated action overlays and safer long sessions:
-
-- A native tray menu can start a recording, reopen the recorder or editor, open
-  the recording library, and quit Snap without keeping the full launcher open.
-- Recording now prioritizes the Windows-scheduled hardware encoder and bounds
-  live GPU frame buffering so browser video, games, and capture can share the
-  display adapter without an ever-growing queue.
-- Completed recordings open directly in the editor while the recorder closes,
-  and exports are kept in their own `Exports` folder outside Recent Recordings.
-- Keys & Clicks has its own timeline lane with editable shortcut, mouse, and
-  scroll overlays, separate from generated caption tracks.
-- The editor has a clearer command palette, larger timeline zoom control,
-  cleaner menus and scrollbars, and coordinated panels that no longer overlap.
-- Desktop installers, application windows, and the product website now use the
-  same Snap avocado identity.
-
-### Snap 8.1.1
-
-Snap 8.1.1 gives Keys & Clicks its own correctly aligned timeline track header,
-keeping action clips separate from captions and every later overlay lane.
-
-### Snap 8.1
-
-Snap 8.1 turns recorded keyboard and pointer activity into a first-class editing
-workflow while expanding the tools used to finish tutorial and product videos:
-
-- A dedicated Keys & Clicks timeline layer with separate keyboard, mouse, and
-  scroll clips, direct selection, drag-to-retime, edge trimming, and contextual
-  show, hide, reset, and edit actions.
-- Per-action controls for label, start time, duration, and visibility. Every edit
-  is non-destructive, saved in the project, and shared by preview and export.
-- Privacy-safe shortcut capture: ordinary text remains anonymous while useful
-  modifier shortcuts, clicks, and scroll direction stay available for tutorials.
-- Auto Zoom 2.0 intent controls, Webcam Studio framing, freeze frames, thumbnails,
-  moving masks, snap-to-click annotations, layer-style copy/paste, comparison mode,
-  delivery packages, and MP4, WebM, or looping GIF export.
-
-### Snap 8 foundation
-
-Snap 8 focuses on a denser, more legible editor and dependable local export.
-The complete editor toolset keeps its full-size left rail while each selected
-tool opens a purpose-built panel with consistent controls, menus, spacing, and
-light/dark styling. This release includes:
-
-- A hardened canvas-to-FFmpeg export path that explicitly submits every rendered
-  frame on WebView2, validates input and output duration/frame counts, and never
-  replaces an existing export with a truncated file.
-- Clear export completion actions for opening the rendered file or exporting
-  again, with a single progress percentage throughout the render.
-- A richer media library with drag-and-drop import, image editing, duplicate-file
-  handling, timeline-aware deletion, and contextual actions.
-- Expanded canvas, cursor, layers, motion, audio, captions, mask, and Auto Zoom
-  controls with consistent type scale, custom menus, smoother curves, and
-  conditional advanced options.
-- Twenty-four backgrounds per palette, custom gradients and colors, image
-  backgrounds, improved transparent menus, and corrected light-theme surfaces.
-- Offline caption-model download sizes, installation and cancellation states,
-  plus clearer handling when a selected model is not installed.
-
-Snap also retains the lightweight recording and recovery work introduced in
-Snap 7:
-
-- Automatic recording uses hardware encoding with a conservative 720p/30 profile;
-  CPU compatibility recording is available only when explicitly selected.
-- The capture path avoids synchronous frame readback and keeps encoder diagnostics
-  bounded, reducing CPU, GPU, RAM, and VRAM pressure during games and creative work.
-- The editor has new neutral light and dark themes, clearer layouts and states,
-  twenty distinct gradients, improved text, additional shapes, and advanced masks.
-- Camera movement supports per-region easing, cinematic curves, smooth sine motion,
-  and corrected motion-blur compositing in preview and export.
-- Timeline duration is recovered natively when browser metadata is incomplete.
-  Unplayable MP4s receive a cached fast-start preview without changing the original.
-- Playback, pause, seek, and boundary jumps avoid unnecessary decoder rebuilds.
-- Offline captions install once per PC, verify downloaded files, persist locally,
-  and align captions to measured speech activity without an artificial reveal delay.
-- Recording and project files use scoped access, bounded IPC, atomic project saves,
-  safer export destinations, and crash-recoverable recording fragments.
-
 ## What Snap includes
 
 - Full-screen, custom-region, window, Android USB, and iPhone/iPad UVC capture
@@ -298,6 +213,12 @@ layouts when opening previous recordings.
 
 Recording remains native and lightweight. The heavier React editor loads after
 capture, where timeline editing and rich visual rendering are appropriate.
+
+## Maintenance
+
+Run `npm run check:source` to check the desktop import graph for orphaned source files and missing relative imports. Tests, native commands and dynamically loaded editor modules remain separate from the website.
+
+The latest cleanup, validation and suggested improvements are documented in [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md).
 
 ## Updates and releases
 

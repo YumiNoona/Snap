@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check:source": "node scripts/check-source-graph.mjs",
     "preview": "vite preview",
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",

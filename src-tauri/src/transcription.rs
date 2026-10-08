@@ -33,6 +33,15 @@ pub struct TranscriptionSegment {
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
+    pub words: Vec<TranscriptionWord>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptionWord {
+    pub text: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -265,7 +274,7 @@ fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
             .map_err(|error| format!("Unable to read transcription audio: {error}"))?;
         let mut sum_squares = 0.0;
         let mut peak: f64 = 0.0;
-        for sample in buffer[..count].chunks_exact(2) {
+        for sample in buffer[..count].as_chunks::<2>().0 {
             let value = i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0;
             sum_squares += value * value;
             peak = peak.max(value.abs());
@@ -385,9 +394,65 @@ fn align_to_audio_activity(
                 start_ms,
                 end_ms,
                 text: segment.text,
+                words: segment
+                    .words
+                    .into_iter()
+                    .map(|mut word| {
+                        word.start_ms = word.start_ms.saturating_add(shift_ms).max(start_ms);
+                        word.end_ms = word.end_ms.saturating_add(shift_ms).min(end_ms);
+                        word
+                    })
+                    .filter(|word| word.end_ms > word.start_ms)
+                    .collect(),
             })
         })
         .collect()
+}
+
+fn parse_words(entry: &serde_json::Value) -> Vec<TranscriptionWord> {
+    let mut words: Vec<TranscriptionWord> = Vec::new();
+    for token in entry
+        .get("tokens")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(text) = token.get("text").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if text.trim().is_empty() || text.contains("[_") {
+            continue;
+        }
+        let Some(offsets) = token.get("offsets") else {
+            continue;
+        };
+        let (Some(start_ms), Some(end_ms)) = (
+            offsets.get("from").and_then(parse_timestamp),
+            offsets.get("to").and_then(parse_timestamp),
+        ) else {
+            continue;
+        };
+        if end_ms <= start_ms {
+            if !text.starts_with(char::is_whitespace) {
+                if let Some(previous) = words.last_mut() {
+                    previous.text.push_str(text.trim());
+                }
+            }
+            continue;
+        }
+        if !text.starts_with(char::is_whitespace) && !words.is_empty() {
+            let previous = words.last_mut().unwrap();
+            previous.text.push_str(text.trim());
+            previous.end_ms = end_ms.max(previous.end_ms);
+        } else {
+            words.push(TranscriptionWord {
+                text: text.trim().to_string(),
+                start_ms,
+                end_ms,
+            });
+        }
+    }
+    words
 }
 
 fn parse_output(
@@ -421,6 +486,7 @@ fn parse_output(
                 start_ms,
                 end_ms,
                 text,
+                words: parse_words(entry),
             })
         })
         .collect();
@@ -497,7 +563,7 @@ pub async fn transcribe_audio(
             .arg(&model)
             .arg("-f")
             .arg(&prepared)
-            .args(["-l", language, "-oj", "-of"])
+            .args(["-l", language, "-ojf", "-of"])
             .arg(&output_prefix)
             .args(["-sow", "-ml", "42", "-sns", "-bo", "8", "-bs", "8", "-nth", "0.50", "--prompt", prompt])
             .output()
@@ -523,6 +589,15 @@ mod tests {
     };
     use std::io::Write;
     #[test]
+    fn reads_measured_words_and_joins_subtokens_and_punctuation() {
+        let value = serde_json::json!({"tokens":[{"text":" Hello","offsets":{"from":100,"to":300}},{"text":" world","offsets":{"from":400,"to":600}},{"text":"wide","offsets":{"from":600,"to":800}},{"text":".","offsets":{"from":800,"to":800}},{"text":"[_EOT_]","offsets":{"from":800,"to":900}}]});
+        let words = super::parse_words(&value);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[1].text, "worldwide.");
+        assert_eq!(words[1].start_ms, 400);
+        assert_eq!(words[1].end_ms, 800);
+    }
+    #[test]
     fn accepts_integer_and_float_offsets() {
         assert_eq!(parse_timestamp(&serde_json::json!(1250)), Some(1250));
         assert_eq!(parse_timestamp(&serde_json::json!(1250.9)), Some(1250));
@@ -535,11 +610,13 @@ mod tests {
                 start_ms: 0,
                 end_ms: 15_920,
                 text: "real speech".into(),
+                words: Vec::new(),
             },
             TranscriptionSegment {
                 start_ms: 48_840,
                 end_ms: 54_000,
                 text: "hallucination".into(),
+                words: Vec::new(),
             },
         ];
         let aligned = align_to_audio_activity(
@@ -561,6 +638,7 @@ mod tests {
                 start_ms: 22_260,
                 end_ms: 22_360,
                 text: "to".into(),
+                words: Vec::new(),
             }],
             &[AudioActivityRange {
                 start_ms: 22_200,
@@ -578,6 +656,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 8_000,
                 text: "speech after silence".into(),
+                words: Vec::new(),
             }],
             &[AudioActivityRange {
                 start_ms: 10_000,

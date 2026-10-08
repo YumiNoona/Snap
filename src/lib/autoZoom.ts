@@ -105,7 +105,7 @@ function findClusters(
     rawClusters.push(current);
   }
 
-  return mergeNearbyClusters(rawClusters, videoWidth, videoHeight, options.cooldownMs, options.deadZone);
+  return mergeNearbyClusters(rawClusters, videoWidth, videoHeight, Math.max(0, Math.min(5000, options.mergeGapMs ?? options.cooldownMs)), options.deadZone);
 }
 
 /**
@@ -292,7 +292,8 @@ export function generateKeyframes(
   options.singleClickScale = clamp(options.singleClickScale, options.minScale, options.maxScale);
   options.typingScale = clamp(options.typingScale, options.minScale, options.maxScale);
   options.minimumShotMs = clamp(options.minimumShotMs, 350, 4000);
-  const clusters = findClusters(events, safeWidth, safeHeight, safeDuration, options);
+  const eligibleEvents = events.filter(event => !(options.excludedRanges ?? []).some(range => event.ts >= range.start && event.ts <= range.end));
+  const clusters = findClusters(eligibleEvents, safeWidth, safeHeight, safeDuration, options);
 
   // Default: unzoomed full-screen 1.0x
   if (clusters.length === 0 || safeDuration === 0) {
@@ -319,6 +320,18 @@ export function generateKeyframes(
   for (let i = 0; i < clusters.length; i++) {
     const cluster = clusters[i];
     const target = clusterFocus(cluster, safeWidth, safeHeight, options);
+    // Keep protected rectangles visible by widening the camera crop around
+    // the focus. Rectangles use normalized source coordinates.
+    for (const area of options.protectedAreas ?? []) {
+      if (![area.x,area.y,area.w,area.h].every(Number.isFinite)) continue;
+      const left = Math.max(0,Math.min(target.cx-.5/target.scale,area.x));
+      const right = Math.min(1,Math.max(target.cx+.5/target.scale,area.x+area.w));
+      const top = Math.max(0,Math.min(target.cy-.5/target.scale,area.y));
+      const bottom = Math.min(1,Math.max(target.cy+.5/target.scale,area.y+area.h));
+      target.scale = Math.max(1,Math.min(target.scale,1/Math.max(right-left,bottom-top,.001)));
+      target.cx = clamp((left+right)/2,.5/target.scale,1-.5/target.scale);
+      target.cy = clamp((top+bottom)/2,.5/target.scale,1-.5/target.scale);
+    }
     const previousTarget = keyframes[keyframes.length - 1];
     const targetDistance = Math.hypot(target.cx - previousTarget.x, target.cy - previousTarget.y);
     const targetScaleDistance = Math.abs(target.scale - previousTarget.scale);
@@ -337,7 +350,7 @@ export function generateKeyframes(
         time: Math.min(safeDuration, Math.max(keyframes[lastHoldIndex].time, cluster.endTime + LEAD_OUT_MS)),
         x: (keyframes[lastHoldIndex].x + target.cx) / 2,
         y: (keyframes[lastHoldIndex].y + target.cy) / 2,
-        scale: Math.max(keyframes[lastHoldIndex].scale, target.scale),
+        scale: options.protectedAreas?.length ? Math.min(keyframes[lastHoldIndex].scale, target.scale) : Math.max(keyframes[lastHoldIndex].scale, target.scale),
       };
       continue;
     }

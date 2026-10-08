@@ -1,3 +1,4 @@
+import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
 import { userError } from "../../lib/userError";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -7,7 +8,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -27,6 +28,7 @@ import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
 import { clearInputLogCache, loadInputLog } from "../../lib/inputLog";
 import { clearImageAssets } from "../../lib/canvasDraw";
 import { buildDeliveryPackage } from "../../lib/deliveryPackage";
+import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
 import "./Editor.css";
 
 interface Props {
@@ -37,7 +39,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "uploads" | "canvas" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
+export type SidebarToolTab = "uploads" | "canvas" | "tilt" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_THEME_STORAGE_KEY = "snap.editorTheme.v1";
@@ -78,6 +80,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [editorTheme, setEditorTheme] = useState<"dark" | "light">(() => localStorage.getItem(EDITOR_THEME_STORAGE_KEY) === "light" ? "light" : "dark");
   const [zoomTargetMode, setZoomTargetMode] = useState(false);
   const [autoZoomRevision, setAutoZoomRevision] = useState(0);
+  const [zoomProposal, setZoomProposal] = useState<Keyframe[] | null>(null);
+  const [compareZoom, setCompareZoom] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -124,10 +128,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
     config, keyframes, captions: captionTracks, audioTracks, setAudioTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
   });
-  const { currentTime, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
+  useEffect(()=>()=>{void invoke("cancel_editor_cached_media").catch(()=>{});},[videoPath]);
+  const [sourceFrameRate,setSourceFrameRate]=useState(30);
+  useEffect(()=>{let cancelled=false;setSourceFrameRate(30);void invoke<number>("editor_source_frame_rate",{path:videoPath}).then(rate=>{if(!cancelled&&Number.isFinite(rate))setSourceFrameRate(rate);}).catch(()=>{});return ()=>{cancelled=true;};},[videoPath]);
+  const { currentTime, audioDurations, activeClipId, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
-    playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted, previewVolume,
+    frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: config.videoClips,
   });
+  const footageClips = useMemo(() => retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration), [config.videoClips, config.trimStart, config.trimEnd, duration]);
+  const editedDuration = sequenceDuration(footageClips) / (config.playbackRate || 1);
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
     ...restored,
@@ -276,6 +285,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           label,
           muted: false,
           volume: 1,
+          linked: false,
+          start: 0,
         };
       }));
       setAudioTracks((current) => {
@@ -445,7 +456,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   useEffect(() => {
     const onCommandKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault(); setShowCommandPalette((open) => !open); setCommandQuery("");
       } else if (event.key === "Escape") {
         setShowCommandPalette(false); setShowProjectHealth(false);
@@ -486,7 +497,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if (!event || event.x == null || event.y == null) return;
     const x = log.region ? (event.x - log.region.x) / log.region.w : event.x;
     const y = log.region ? (event.y - log.region.y) / log.region.h : event.y;
-    setConfig((current) => ({ ...current, layers: current.layers.map((layer) => layer.id === layerId ? { ...layer, x: Math.max(0, Math.min(1 - layer.w, x - layer.w / 2)), y: Math.max(0, Math.min(1 - layer.h, y - layer.h / 2)) } : layer) }));
+    setConfig((current) => current.lockedTracks?.includes("annotations") ? current : ({ ...current, layers: current.layers.map((layer) => layer.id === layerId ? { ...layer, x: Math.max(0, Math.min(1 - layer.w, x - layer.w / 2)), y: Math.max(0, Math.min(1 - layer.h, y - layer.h / 2)) } : layer) }));
   }, [currentTime, inputLogPath]);
 
   const handleCropApply = useCallback(
@@ -499,12 +510,21 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   const handleCropCancel = useCallback(() => setCropMode(false), []);
 
+  const zoomLocked=config.lockedTracks?.includes("zoom")??false;
+  const applyKeyframes=useCallback((frames:Keyframe[])=>{if(!zoomLocked)setKeyframes(frames);},[zoomLocked,setKeyframes]);
+  const applyConfigEdit=(next:EditorConfig)=>setConfig(current=>{
+    const locked=(id:string)=>current.lockedTracks?.includes(id)&&next.lockedTracks?.includes(id);
+    return {...next,layers:locked("annotations")?current.layers:next.layers,videoClips:locked("video")?current.videoClips:next.videoClips,trimStart:locked("video")?current.trimStart:next.trimStart,trimEnd:locked("video")?current.trimEnd:next.trimEnd,actionOverlay:locked("action")?current.actionOverlay:next.actionOverlay};
+  });
+
   const handleTrimStart = (t: number) => {
+    if(config.lockedTracks?.includes("video"))return;
     setConfig({ ...config, trimStart: t });
     if (currentTime < t) seekTo(t);
   };
 
   const handleTrimEnd = (t: number) => {
+    if(config.lockedTracks?.includes("video"))return;
     setConfig({ ...config, trimEnd: t });
     if (currentTime > t) seekTo(t);
   };
@@ -549,7 +569,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         try {
           await invoke("write_delivery_package", {
             outputPath: settings.outputPath,
-            ...buildDeliveryPackage(captionTracks, keyframes, config.trimStart, config.trimEnd || duration, config.playbackRate),
+            ...buildDeliveryPackage(captionTracks, keyframes, config.trimStart, config.trimEnd || duration, config.playbackRate, config.videoClips),
           });
         } catch (error) {
           console.error("[Snap] Delivery package failed:", error);
@@ -581,6 +601,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   );
 
   const updateSelectedZoom = useCallback((patch: Partial<ZoomRegionSettings>) => {
+    if(config.lockedTracks?.includes("zoom"))return;
     const region = resolvedSelectedZoom;
     if (!region) return;
     const timelineStartMs = Math.round(config.trimStart * 1000);
@@ -615,9 +636,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
     setKeyframes(updated);
     setSelectedZoomRegion({ startMs, endMs, regionId: region.regionId });
-  }, [config.trimEnd, config.trimStart, duration, keyframes, resolvedSelectedZoom]);
+  }, [config.lockedTracks, config.trimEnd, config.trimStart, duration, keyframes, resolvedSelectedZoom]);
 
   const deleteSelectedZoom = useCallback(() => {
+    if(config.lockedTracks?.includes("zoom"))return;
     if (!resolvedSelectedZoom) return;
     const selection: ZoomRegionSelection = {
       startMs: resolvedSelectedZoom.startMs,
@@ -632,9 +654,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       return current.filter((_, index) => !memberSet.has(index));
     });
     setSelectedZoomRegion(null);
-  }, [config.trimEnd, duration, resolvedSelectedZoom]);
+  }, [config.lockedTracks, config.trimEnd, duration, resolvedSelectedZoom]);
 
   const deleteZoomRegion = useCallback((selection: ZoomRegionSelection) => {
+    if(config.lockedTracks?.includes("zoom"))return;
     const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
     setKeyframes((current) => {
       const region = findZoomRegion(current, selection, timelineEndMs);
@@ -643,9 +666,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       return current.filter((_, index) => !memberSet.has(index));
     });
     if (!selection.regionId || selectedZoomRegion?.regionId === selection.regionId) setSelectedZoomRegion(null);
-  }, [config.trimEnd, duration, selectedZoomRegion?.regionId]);
+  }, [config.lockedTracks, config.trimEnd, duration, selectedZoomRegion?.regionId]);
 
   const duplicateZoomRegion = useCallback((selection: ZoomRegionSelection) => {
+    if(config.lockedTracks?.includes("zoom"))return;
     const timelineStartMs = Math.round(config.trimStart * 1000);
     const timelineEndMs = Math.round((config.trimEnd || duration) * 1000);
     const region = findZoomRegion(keyframes, selection, timelineEndMs);
@@ -681,9 +705,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setActiveTool("motion");
     pausePlayback();
     seekTo(destination / 1000);
-  }, [config.trimEnd, config.trimStart, duration, getOccupiedZoomRanges, keyframes, pausePlayback, seekTo]);
+  }, [config.lockedTracks, config.trimEnd, config.trimStart, duration, getOccupiedZoomRanges, keyframes, pausePlayback, seekTo]);
 
   const duplicateLayer = useCallback((id: string) => {
+    if(config.lockedTracks?.includes("annotations"))return;
     const layer = config.layers.find((candidate) => candidate.id === id);
     if (!layer) return;
     const timelineEnd = config.trimEnd || duration;
@@ -702,14 +727,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setActiveTool("annotations");
     pausePlayback();
     seekTo(copy.start + 0.01);
-  }, [config.layers, config.trimEnd, config.trimStart, duration, pausePlayback, seekTo]);
+  }, [config.layers, config.lockedTracks, config.trimEnd, config.trimStart, duration, pausePlayback, seekTo]);
 
   const deleteLayer = useCallback((id: string) => {
-    setConfig((current) => ({ ...current, layers: current.layers.filter((layer) => layer.id !== id) }));
+    setConfig((current) => current.lockedTracks?.includes("annotations") ? current : ({ ...current, layers: current.layers.filter((layer) => layer.id !== id) }));
     if (selectedLayerId === id) setSelectedLayerId(null);
   }, [selectedLayerId]);
 
   const handleAddManualZoom = useCallback(() => {
+    if(config.lockedTracks?.includes("zoom"))return;
     const videoEndMs = Math.max(0, Math.round((config.trimEnd || duration) * 1000));
     const trimStartMs = Math.round(config.trimStart * 1000);
     if (videoEndMs - trimStartMs < 600) return;
@@ -788,9 +814,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     // The bar exists immediately. The next preview click only changes its
     // focus point; Escape keeps the new centered bar.
     setZoomTargetMode(true);
-  }, [config.trimEnd, config.trimStart, config.zoomLevel, config.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
+  }, [config.lockedTracks, config.trimEnd, config.trimStart, config.zoomLevel, config.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
 
   const updateManualZoomTarget = useCallback((point: { x: number; y: number }, commit = true) => {
+    if(config.lockedTracks?.includes("zoom"))return;
     const range = manualTargetRangeRef.current;
     if (!range) {
       if (commit) setZoomTargetMode(false);
@@ -809,7 +836,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       manualTargetRangeRef.current = null;
       setZoomTargetMode(false);
     }
-  }, []);
+  }, [config.lockedTracks, ]);
 
   useEffect(() => {
     if (!zoomTargetMode) return;
@@ -861,6 +888,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const commandItems = [
     { label: "Freeze frame at playhead", detail: "Adds a still image layer for 2.5 seconds", icon: Snowflake, run: () => void extractFrame("freeze") },
     { label: "Save current frame as thumbnail", detail: "Exports a full-resolution PNG", icon: ImageIcon, run: () => void extractFrame("thumbnail") },
+    { label: "3D Tilt", detail: "Animate screen perspective and rotation", icon: Box, run: () => setActiveTool("tilt") },
     { label: "Project health", detail: "Review media, timing, captions, and export readiness", icon: Activity, run: () => setShowProjectHealth(true) },
     { label: "Keys & Clicks", detail: "Open tutorial action overlays", icon: Keyboard, run: () => setActiveTool("actions") },
     ...(cameraMedia ? [{ label: "Webcam Studio", detail: "Frame and style the camera track", icon: Camera, run: () => setActiveTool("camera" as const) }] : []),
@@ -922,7 +950,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
-          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl K)" aria-label="Open command palette"><Command size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl Shift P)" aria-label="Open command palette"><Command size={16} /></button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -981,6 +1009,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             <Frame size={20} /><span className="ss-tool-label">Canvas</span>
           </button>
 
+          <button className={`ss-tool-icon-btn ${activeTool === "tilt" ? "active" : ""}`} onClick={() => setActiveTool("tilt")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "tilt"} title="3D Tilt">
+            <Box size={20}/><span className="ss-tool-label">3D Tilt</span>
+          </button>
           <button
             className={`ss-tool-icon-btn ${activeTool === "cursor" ? "active" : ""}`}
             onClick={() => setActiveTool("cursor")}
@@ -1056,11 +1087,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           </button>
           <Preview
             videoPath={videoPath}
+            sourceDuration={duration}
             inputLogPath={isBrowserPreview ? "" : inputLogPath}
             cameraMedia={cameraMedia}
             config={config}
-            keyframes={keyframes}
-            onKeyframesChange={setKeyframes}
+            keyframes={compareZoom && zoomProposal ? zoomProposal : keyframes}
+            onKeyframesChange={applyKeyframes}
+            onAutoZoomProposal={setZoomProposal}
             playing={playing}
             previewMuted={previewMuted}
             previewVolume={previewVolume}
@@ -1089,7 +1122,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             }}
             onLayerChange={(updated) => setConfig((c) => ({
               ...c,
-              layers: c.layers.map((layer) => layer.id === updated.id ? updated : layer),
+              layers: c.lockedTracks?.includes("annotations") ? c.layers : editLayerAtTime(c.layers, updated, currentTime),
             }))}
             zoomTargetMode={activeTool === "motion" && zoomTargetMode}
             zoomFocusPoint={activeTool === "motion" && zoomTargetMode && resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
@@ -1102,13 +1135,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             hasExternalAudio={audioTracks.length > 0}
             originalOnly={false}
           />
+          {zoomProposal && <div className="editor-enhancements"><strong>Suggested camera movement</strong><p>{keyframes.length} current keys · {zoomProposal.length} suggested keys</p><div className="editor-tool-row"><button aria-pressed={compareZoom} onClick={() => setCompareZoom(value => !value)}>{compareZoom ? "Show current" : "Preview suggestion"}</button><button disabled={config.lockedTracks?.includes("zoom")} onClick={() => { setKeyframes(zoomProposal); setZoomProposal(null); setCompareZoom(false); }}>Apply suggestion</button><button onClick={() => { setZoomProposal(null); setCompareZoom(false); }}>Discard</button></div></div>}
           {previewFocusMode && <div className="ss-preview-player" role="group" aria-label="Preview playback controls">
-            <div className="ss-preview-player-time"><span>{formatPlayerTime(currentTime)}</span><span>{formatPlayerTime(duration)}</span></div>
-            <input aria-label="Preview position" type="range" min={config.trimStart} max={config.trimEnd || duration || 1} step="0.01" value={Math.min(currentTime, config.trimEnd || duration || 1)} onChange={(event) => seekTo(Number(event.target.value))} />
+            <div className="ss-preview-player-time"><span>{formatPlayerTime(sequencePosition / (config.playbackRate || 1))}</span><span>{formatPlayerTime(editedDuration)}</span></div>
+            <input aria-label="Preview position" type="range" min={0} max={editedDuration || 1} step="0.01" value={Math.min(sequencePosition / (config.playbackRate || 1), editedDuration)} onChange={(event) => seekSequence(Number(event.target.value) * (config.playbackRate || 1))} />
             <div className="ss-preview-player-buttons">
-              <button type="button" title="Back 5 seconds" onClick={() => seekTo(Math.max(config.trimStart, currentTime - 5))}><SkipBack size={18} /></button>
+              <button type="button" title="Back 5 seconds" onClick={() => seekSequence(sequencePosition - 5 * (config.playbackRate || 1))}><SkipBack size={18} /></button>
               <button type="button" className="primary" title={playing ? "Pause" : "Play"} onClick={togglePlay}>{playing ? <Pause size={21} /> : <Play size={21} fill="currentColor" />}</button>
-              <button type="button" title="Forward 5 seconds" onClick={() => seekTo(Math.min(config.trimEnd || duration, currentTime + 5))}><SkipForward size={18} /></button>
+              <button type="button" title="Forward 5 seconds" onClick={() => seekSequence(sequencePosition + 5 * (config.playbackRate || 1))}><SkipForward size={18} /></button>
               <div className="ss-preview-volume">
                 <button type="button" title={previewMuted ? "Unmute preview" : "Mute preview"} onClick={() => setPreviewMuted((muted) => !muted)}>{previewMuted || previewVolume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
                 <input aria-label="Preview volume" type="range" min={0} max={100} step={1} value={previewMuted ? 0 : previewVolume} onChange={(event) => { const value = Number(event.target.value); setPreviewVolume(value); setPreviewMuted(value === 0); }} />
@@ -1121,12 +1155,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         {activeTool && <Panels
           config={config}
           inputLogPath={inputLogPath}
-          onConfigChange={setConfig}
+          onConfigChange={applyConfigEdit}
           duration={duration}
           currentTime={currentTime}
           layers={config.layers}
           selectedLayerId={selectedLayerId}
-          onAddLayer={(layer: Layer) => setConfig((c) => ({ ...c, layers: [...c.layers, layer] }))}
+          onAddLayer={(layer: Layer) => setConfig((c) => c.lockedTracks?.includes("annotations") ? c : ({ ...c, layers: [...c.layers, layer] }))}
           onSelectLayer={setSelectedLayerId}
           activeTab={activeTool}
           onAddManualZoom={handleAddManualZoom}
@@ -1150,11 +1184,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onAddAudioSources={addAudioSources}
           onAddMediaToTimeline={addMediaToTimeline}
           onAddManualCaption={() => addManualCaptionAt(currentTime)}
-          onAudioTracksChange={setAudioTracks}
+          onAudioTracksChange={(next) => setAudioTracks(current => [...next.filter(t => !config.lockedTracks?.includes(t.id)),...current.filter(t => config.lockedTracks?.includes(t.id))])}
           captionTracks={captionTracks}
-          onCaptionTracksChange={setCaptionTracks}
+          onCaptionTracksChange={(tracks) => {if(!config.lockedTracks?.includes("caption"))setCaptionTracks(tracks);}}
           selectedCaption={selectedCaption}
-          onSelectCaption={setSelectedCaption}
+          onSelectCaption={(selection) => { setSelectedCaption(selection); if(selection) { const segment=captionTracks.find(track=>track.id===selection.trackId)?.segments.find(s=>s.id===selection.segmentId); if(segment) { pausePlayback(); seekTo(segment.startMs/1000); } } }}
           selectedActionId={selectedActionId}
           onSelectAction={setSelectedActionId}
           onSnapLayerToAction={snapLayerToAction}
@@ -1163,6 +1197,46 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
       <Timeline
+        audioDurations={audioDurations}
+        frameRate={sourceFrameRate}
+        activeClipId={activeClipId}
+        videoPath={videoPath}
+        onTrackLocksChange={lockedTracks => setConfig(c => ({ ...c, lockedTracks }))}
+        onAnimationKeyChange={(kind, id, time, nextTime) => {
+          setConfig(c => {
+            if (c.lockedTracks?.includes(kind === "layer" ? "annotations" : kind)) return c;
+            const retime = <T extends { time: number }>(keys: T[]): T[] => {
+              const key = keys.find(item => Math.abs(item.time-time)<.000001);
+              if (!key) return keys;
+              const rest = keys.filter(item => item !== key && (nextTime === null || Math.abs(item.time-nextTime)>.000001));
+              return nextTime === null ? rest : [...rest, { ...key, time: nextTime }].sort((a,b)=>a.time-b.time);
+            };
+            if (kind === "tilt" && c.screenTilt) return { ...c, screenTilt: { ...c.screenTilt, keys: retime(c.screenTilt.keys) } };
+            if (kind === "camera") return { ...c, cameraOverlay: { ...c.cameraOverlay, animation: retime(c.cameraOverlay.animation??[]) } };
+            return { ...c, layers: c.layers.map(layer => layer.id === id ? { ...layer, animation: retime(layer.animation??[]) } : layer) };
+          });
+        }}
+        onTrackClear={(kind, id) => {
+          const lockId = kind === "layer" ? "annotations" : kind;
+          if (config.lockedTracks?.includes(lockId)) return;
+          if (kind === "zoom") {
+            setKeyframes([]);
+            setSelectedZoomRegion(null);
+            setConfig(c => ({ ...c, zoomMode: "manual" }));
+          } else if (kind === "caption") {
+            setCaptionTracks(tracks => tracks.map(track => track.id === id ? { ...track, segments: [] } : track));
+            setSelectedCaption(null);
+          } else if (kind === "layer") {
+            setConfig(c => ({ ...c, layers: c.layers.filter(layer => layer.type !== id) }));
+            setSelectedLayerId(null);
+          } else if (kind === "action") {
+            setConfig(c => ({ ...c, actionOverlay: { ...c.actionOverlay, enabled: false } }));
+            setSelectedActionId(null);
+          } else {
+            pausePlayback();
+            setConfig(c => ({ ...c, videoClips: null, cuts: [] }));
+          }
+        }}
         editorTheme={editorTheme}
         inputLogPath={isBrowserPreview ? "" : inputLogPath}
         audioTracks={audioTracks}
@@ -1179,6 +1253,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onCutsChange={(newCuts: number[]) =>
             setConfig((c) => ({ ...c, cuts: newCuts }))
         }
+        onVideoClipsChange={(videoClips) => { if(config.lockedTracks?.includes("video"))return; pausePlayback(); setConfig(c => ({ ...c, videoClips })); }}
         onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
@@ -1213,8 +1288,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onAddAudio={handleAddAudio}
         onMediaDrop={addMediaToTimeline}
         onAddCaptionAtTime={addManualCaptionAt}
-        onAudioTrackChange={(updated) => setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track))}
-        onAudioTrackRemove={(trackId) => setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId))}
+        onAudioTrackChange={(updated) => { if(!config.lockedTracks?.includes(updated.id))setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track)); }}
+        onAudioTrackRemove={(trackId) => { if(!config.lockedTracks?.includes(trackId))setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId)); }}
         selectedActionId={selectedActionId}
         onActionSelect={(id) => {
           pausePlayback();
@@ -1225,7 +1300,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           setZoomTargetMode(false);
           setActiveTool("actions");
         }}
-        onActionEdit={(id, patch: ActionEventEdit) => setConfig((current) => ({
+        onActionEdit={(id, patch: ActionEventEdit) => setConfig((current) => current.lockedTracks?.includes("action") ? current : ({
           ...current,
           actionOverlay: {
             ...current.actionOverlay,
@@ -1248,7 +1323,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         }}
         onLayerChange={(updated) => setConfig((current) => ({
           ...current,
-          layers: current.layers.map((layer) => layer.id === updated.id ? updated : layer),
+          layers: current.lockedTracks?.includes("annotations") ? current.layers : moveLayerGroup(current.layers, updated),
         }))}
         onLayerDuplicate={duplicateLayer}
         onLayerDelete={deleteLayer}
@@ -1265,13 +1340,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           const segment = track?.segments.find((candidate) => candidate.id === selection.segmentId);
           if (segment && (currentTime < segment.startMs / 1000 || currentTime >= segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01);
         }}
-        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? {
+        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => config.lockedTracks?.includes("caption") ? tracks : tracks.map((track) => track.id === trackId ? {
           ...track,
           segments: track.segments
             .map((item) => item.id === segment.id ? segment : item)
             .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs),
         } : track))}
-        onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => tracks.map((track) => {
+        onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => config.lockedTracks?.includes("caption") ? tracks : tracks.map((track) => {
           if (track.id !== trackId) return track;
           const source = track.segments.find((segment) => segment.id === segmentId);
           if (!source) return track;
@@ -1292,6 +1367,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         }))}
         onPlaybackRateChange={(playbackRate) => setConfig((current) => ({ ...current, playbackRate }))}
         onCaptionSegmentDelete={(trackId, segmentId) => {
+          if(config.lockedTracks?.includes("caption"))return;
           setCaptionTracks((tracks) => tracks.map((track) => track.id === trackId ? { ...track, segments: track.segments.filter((segment) => segment.id !== segmentId) } : track));
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
@@ -1310,7 +1386,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
         <section className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
           <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>
-          <div className="ss-health-score"><strong>{duration > 0 && (config.trimEnd || duration) > config.trimStart ? "Ready" : "Needs attention"}</strong><span>{Math.max(0, (config.trimEnd || duration) - config.trimStart).toFixed(1)}s edited duration</span></div>
+          <div className="ss-health-score"><strong>{duration > 0 && (config.trimEnd || duration) > config.trimStart ? "Ready" : "Needs attention"}</strong><span>{editedDuration.toFixed(1)}s edited duration</span></div>
           <ul>
             <li className={duration > 0 ? "ok" : "warn"}><span>Source video</span><strong>{duration > 0 ? "Loaded" : "Metadata missing"}</strong></li>
             <li className={inputLogPath ? "ok" : "warn"}><span>Input actions</span><strong>{inputLogPath ? "Available" : "Imported video"}</strong></li>

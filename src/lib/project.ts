@@ -3,7 +3,7 @@ import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe }
 import { DEFAULT_EDITOR_CONFIG } from "./types";
 import { recordingDataPaths } from "./recordingPaths";
 
-export const CURRENT_PROJECT_VERSION = 1 as const;
+export const CURRENT_PROJECT_VERSION = 3 as const;
 export const PROJECT_FILENAME = "project.snap.json";
 
 export interface SnapProject {
@@ -52,7 +52,7 @@ export function createProject(videoPath: string, inputLogPath: string, now = new
 export function migrateProject(value: unknown): SnapProject {
   if (!value || typeof value !== "object") throw new Error("Project file is not a JSON object");
   const raw = value as Partial<SnapProject> & { schemaVersion?: number };
-  if (raw.schemaVersion !== CURRENT_PROJECT_VERSION) {
+  if (raw.schemaVersion !== CURRENT_PROJECT_VERSION && raw.schemaVersion !== 1 && raw.schemaVersion !== 2) {
     throw new Error(`Unsupported Snap project version: ${String(raw.schemaVersion ?? "missing")}`);
   }
   if (!raw.media?.videoPath || !raw.media.inputLogPath) throw new Error("Project media paths are missing");
@@ -89,6 +89,7 @@ export function migrateProject(value: unknown): SnapProject {
       audio: { ...defaults.audio, ...(raw.editor?.audio ?? {}) },
       layers: Array.isArray(raw.editor?.layers) ? raw.editor.layers : [],
       cuts: Array.isArray(raw.editor?.cuts) ? raw.editor.cuts : [],
+      videoClips: Array.isArray(raw.editor?.videoClips) ? raw.editor.videoClips : null,
     },
     keyframes: Array.isArray(raw.keyframes) ? raw.keyframes : [],
     captions: Array.isArray(raw.captions) ? raw.captions : [],

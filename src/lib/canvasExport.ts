@@ -3,8 +3,9 @@ import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe }
 import { createExportCompositor } from "./exportCompositor";
 import { captionsToSrt, captionsToVtt } from "./captions";
 import { createIvfHeader, wrapIvfFrame, type IvfCodec } from "./ivf";
-import { exportPlaybackRate, outputDuration, renderProgress } from "./exportTiming";
+import { exportPlaybackRate, renderProgress } from "./exportTiming";
 import { ExportWriteBudget } from "./exportWriteBudget";
+import { retainedClips, sequenceDuration, sequenceTime, mapCaptionTracks } from "./videoEditing";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
@@ -64,6 +65,10 @@ export async function runCanvasExport(
   };
   throwIfAborted();
   onProgress({ phase: "preparing", progress: 0, message: "Preparing export…" });
+  const clips = retainedClips(config.videoClips, trimStart, trimEnd);
+  if (!clips.length) throw new Error("Keep at least one footage segment before exporting");
+  const editedDuration = sequenceDuration(clips);
+  const outputCaptions = mapCaptionTracks(captionTracks, clips);
 
   const compositor = await createExportCompositor(
     videoPath,
@@ -90,7 +95,7 @@ export async function runCanvasExport(
     const hasWebCodecs = typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
 
     const playbackRate = exportPlaybackRate(config.playbackRate);
-    const totalMs = outputDuration(trimStart, trimEnd, playbackRate) * 1000;
+    const totalMs = editedDuration / playbackRate * 1000;
     const fps = Math.max(1, Math.round(exportSettings.fps));
     const totalFrames = Math.max(1, Math.ceil((totalMs / 1000) * fps));
     const pixelsComparedWith1080p = (exportSettings.width * exportSettings.height) / (1920 * 1080);
@@ -194,13 +199,13 @@ export async function runCanvasExport(
     }
 
     // Install the listener before seeking; seeking to the current time may emit nothing.
-    if (Math.abs(compositor.video.currentTime - trimStart) > 0.001) {
+    if (Math.abs(compositor.video.currentTime - clips[0].start) > 0.001) {
       await new Promise<void>((resolve, reject) => {
         const cleanup = () => { clearTimeout(timeout); compositor.video.removeEventListener("seeked", done); };
         const done = () => { cleanup(); resolve(); };
         const timeout = setTimeout(() => { cleanup(); reject(new Error("Video seek timed out")); }, 15000);
         compositor.video.addEventListener("seeked", done, { once: true });
-        compositor.video.currentTime = trimStart;
+        compositor.video.currentTime = clips[0].start;
       });
     }
 
@@ -243,8 +248,12 @@ export async function runCanvasExport(
         submittedFrames += 1;
       }
     };
+    let clipIndex = 0;
+    let changingClip = false;
     compositor.setFrameConsumer(() => {
-      const sourceElapsed = Math.max(0, compositor.video.currentTime - trimStart);
+      const clip = clips[clipIndex];
+      if (changingClip || compositor.video.seeking || compositor.video.currentTime < clip.start || compositor.video.currentTime >= clip.end) return;
+      const sourceElapsed = sequenceTime(clips, compositor.video.currentTime, clips[clipIndex].id);
       const exportElapsed = sourceElapsed / playbackRate;
       try {
         submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
@@ -252,6 +261,7 @@ export async function runCanvasExport(
         encoderError = error instanceof Error ? error : new Error(String(error));
       }
     });
+    compositor.renderFrame();
     await compositor.video.play();
 
     await new Promise<void>((resolve, reject) => {
@@ -267,6 +277,33 @@ export async function runCanvasExport(
         if (encoderError) {
           reject(encoderError);
           return;
+        }
+        if (changingClip) { requestAnimationFrame(check); return; }
+        const clip = clips[clipIndex];
+        if (compositor.video.currentTime >= clip.end || compositor.video.ended) {
+          compositor.video.pause();
+          try { submitFramesThrough(Math.ceil((sequenceTime(clips, clip.start, clip.id) + clip.end - clip.start) / playbackRate * fps)); }
+          catch (error) { reject(error); return; }
+          if (clipIndex === clips.length - 1) { resolve(); return; }
+          clipIndex += 1;
+          heldForEncoder = false;
+          changingClip = true;
+          const target = clips[clipIndex].start;
+          const seekNext = new Promise<void>((done, fail) => {
+            const abort = () => { cleanup(); fail(new DOMException("Export cancelled", "AbortError")); };
+            const cleanup = () => { clearTimeout(timer); compositor.video.removeEventListener("seeked", ready); signal?.removeEventListener("abort", abort); };
+            const ready = () => { cleanup(); done(); };
+            const timer = setTimeout(() => { cleanup(); fail(new Error("Video seek timed out")); }, 15_000);
+            compositor.video.addEventListener("seeked", ready, { once: true });
+            signal?.addEventListener("abort", abort, { once: true });
+            try { compositor.video.currentTime = target; } catch (error) { cleanup(); fail(error); }
+          });
+          void seekNext.then(async () => {
+            lastTime = target; lastAdvance = performance.now();
+            changingClip = false;
+            if (!signal?.aborted) { compositor.renderFrame(); await compositor.video.play(); }
+          }).catch(error => { changingClip = false; encoderError = error instanceof Error ? error : new Error(String(error)); });
+          requestAnimationFrame(check); return;
         }
         if (writeError || (writeBudget.bytes > 0 && performance.now() - lastWriteAdvance > 30_000)) {
           reject(new Error(writeError || "The export destination stopped responding"));
@@ -304,14 +341,9 @@ export async function runCanvasExport(
           reject(new Error(writeError));
           return;
         }
-        if (compositor.video.ended || compositor.video.currentTime >= trimEnd) {
-          compositor.video.pause();
-          resolve();
-          return;
-        }
         onProgress({
           phase: "recording",
-          progress: renderProgress(compositor.video.currentTime, trimStart, trimEnd),
+          progress: renderProgress(sequenceTime(clips, compositor.video.currentTime), 0, editedDuration),
           message: "Recording composited frames…",
         });
         requestAnimationFrame(check);
@@ -339,23 +371,24 @@ export async function runCanvasExport(
         tempWebmPath,
         inputVideo: videoPath,
         exportSettings,
-        captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(captionTracks, trimStart, trimEnd, playbackRate) : null,
+        captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(outputCaptions, 0, editedDuration, playbackRate) : null,
         clickTimesMs: config.cursorStyle.clickSound
-          ? compositor.clickTimesMs.filter((time) => time >= trimStart * 1000 && time <= trimEnd * 1000).map((time) => (time - trimStart * 1000) / playbackRate)
+          ? clips.flatMap(c => compositor.clickTimesMs.filter(time => time >= c.start * 1000 && time < c.end * 1000).map(time => (sequenceTime(clips, c.start, c.id) * 1000 + time - c.start * 1000) / playbackRate))
           : [],
         audioMix: config.audio,
         audioTracks,
         trimStartSeconds: trimStart,
-        exportDurationSeconds: Math.max(0.01, (trimEnd - trimStart) / playbackRate),
+        exportDurationSeconds: Math.max(0.01, editedDuration / playbackRate),
+        sourceSegments: clips.map(c => ({ start: c.start, end: c.end })),
         playbackRate,
       },
     });
 
     const basePath = exportSettings.outputPath.replace(/\.(mp4|webm|gif)$/i, "");
     if (exportSettings.captions === "srt" || exportSettings.captions === "burned-srt") {
-      await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(captionTracks, trimStart, trimEnd, playbackRate) });
+      await invoke("write_text_file_atomic", { path: `${basePath}.srt`, contents: captionsToSrt(outputCaptions, 0, editedDuration, playbackRate) });
     } else if (exportSettings.captions === "vtt") {
-      await invoke("write_text_file_atomic", { path: `${basePath}.vtt`, contents: captionsToVtt(captionTracks, trimStart, trimEnd, playbackRate) });
+      await invoke("write_text_file_atomic", { path: `${basePath}.vtt`, contents: captionsToVtt(outputCaptions, 0, editedDuration, playbackRate) });
     }
 
     onProgress({ phase: "done", progress: 1, message: result });

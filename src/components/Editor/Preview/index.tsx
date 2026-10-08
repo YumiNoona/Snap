@@ -1,3 +1,5 @@
+import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "../../../lib/screenTilt";
+import { animatedLayer, anchoredLayer } from "../../../lib/layerAnimation";
 import { userError } from "../../../lib/userError";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -20,10 +22,12 @@ import "./Preview.css";
 
 interface Props {
   videoPath: string;
+  sourceDuration?: number;
   inputLogPath: string;
   config: EditorConfig;
   keyframes: Keyframe[];
   onKeyframesChange: (kf: Keyframe[]) => void;
+  onAutoZoomProposal?: (kf: Keyframe[]) => void;
   playing: boolean;
   previewMuted?: boolean;
   previewVolume?: number;
@@ -98,10 +102,12 @@ function firstClickAfter(clicks: InputEvent[], timestampMs: number) {
 
 export default function Preview({
   videoPath,
+  sourceDuration=0,
   inputLogPath,
   config,
   keyframes,
   onKeyframesChange,
+  onAutoZoomProposal,
   playing, previewMuted = false, previewVolume = 100,
   onDuration,
   onMediaElementChange,
@@ -124,6 +130,10 @@ export default function Preview({
   originalOnly = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas=canvasRef.current;
+    return () => { if(canvas)releaseScreenTilt(canvas); };
+  }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
@@ -207,6 +217,16 @@ export default function Preview({
     setLoadError("");
     previewRepairAttemptedRef.current = false;
   }, [videoPath]);
+
+  const [proxyStatus,setProxyStatus]=useState("");
+  const proxySeekRef=useRef<number|null>(null);
+  useEffect(()=>{
+    let cancelled=false;
+    if(!config.useProxy){proxySeekRef.current=videoRef.current?.currentTime??0;setPlaybackPath(videoPath);setProxyStatus("");return;}
+    setProxyStatus("Preparing cached proxy…");
+    void invoke<string>("editor_cached_media",{path:videoPath,kind:"proxy"}).then(path=>{if(!cancelled){proxySeekRef.current=videoRef.current?.currentTime??0;setPlaybackPath(path);setProxyStatus("Proxy preview · export uses original");}}).catch(()=>{if(!cancelled)setProxyStatus("Proxy unavailable · using original");});
+    return ()=>{cancelled=true;};
+  },[videoPath,config.useProxy]);
 
   const repairPreview = useCallback(() => {
     if (previewRepairAttemptedRef.current || /^https?:\/\//i.test(videoPath)) return;
@@ -325,10 +345,10 @@ export default function Preview({
         getMovementDuration(config.zoomMovement),
         config.autoZoom
       );
-      if (!cancelled) onKeyframesChange(kf);
+      if (!cancelled) { if (autoZoomRevision > 0 && onAutoZoomProposal) onAutoZoomProposal(kf); else onKeyframesChange(kf); }
     })();
     return () => { cancelled = true; };
-  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement, config.autoZoom, videoPath, autoZoomReady, preserveProjectKeyframes]);
+  }, [videoReady, eventsReady, onKeyframesChange, autoZoomRevision, config.zoomMovement, config.autoZoom, videoPath, autoZoomReady, preserveProjectKeyframes, onAutoZoomProposal]);
 
   const playClickSound = useCallback(() => {
     if (!config.cursorStyle.clickSound || !playing) return;
@@ -355,7 +375,8 @@ export default function Preview({
   const onMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
-    const dur = video.duration;
+    const dur = config.useProxy && playbackPath !== videoPath && sourceDuration > 0 ? sourceDuration : video.duration;
+    if(proxySeekRef.current!==null&&video.readyState>=1){const time=proxySeekRef.current;proxySeekRef.current=null;video.currentTime=Math.max(0,Math.min(time,dur-.001));}
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (Number.isFinite(dur) && dur > 0) onDuration(dur);
@@ -392,9 +413,10 @@ export default function Preview({
         outH = vh * scale;
       }
 
-      setCanvasSize({ w: Math.round(outW), h: Math.round(outH) });
+      const quality = config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1;
+      setCanvasSize({ w: Math.max(16, Math.round(outW * quality)), h: Math.max(16, Math.round(outH * quality)) });
     },
-    [config.aspectRatio]
+    [config.aspectRatio, config.previewQuality]
   );
 
   useEffect(() => {
@@ -474,6 +496,7 @@ export default function Preview({
     ctx.shadowOffsetY = 0;
     ctx.beginPath();
 
+    const simplified = config.simplifiedScrubbing && video.seeking;
     const ts = video.currentTime * 1000;
 
     // Click effects use a forward-only event cursor for cheap playback. Keep
@@ -570,7 +593,7 @@ export default function Preview({
     // Blur applies ONLY to the wallpaper image layer (not gradients/solids)
     const FADE_MS = 200;
     ctx.save();
-    if (bgIsImage && config.bgBlur > 0) {
+    if (bgIsImage && config.bgBlur > 0 && !simplified) {
       ctx.filter = `blur(${Math.min(config.bgBlur, 100)}px)`;
     }
 
@@ -609,25 +632,27 @@ export default function Preview({
     }
     ctx.restore();
 
+    const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
+    const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
     if (config.shadow.enabled) {
-      ctx.save();
-      ctx.shadowColor = config.shadow.color;
-      ctx.shadowBlur = config.shadow.blur;
-      ctx.shadowOffsetX = config.shadow.offsetX;
-      ctx.shadowOffsetY = config.shadow.offsetY;
-      ctx.fillStyle = colorsRef.current.shadow;
-      ctx.beginPath();
-      roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
-      ctx.fill();
-      ctx.restore();
+      screenCtx.save();
+      screenCtx.shadowColor = config.shadow.color;
+      screenCtx.shadowBlur = config.shadow.blur;
+      screenCtx.shadowOffsetX = config.shadow.offsetX;
+      screenCtx.shadowOffsetY = config.shadow.offsetY;
+      screenCtx.fillStyle = colorsRef.current.shadow;
+      screenCtx.beginPath();
+      roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR);
+      screenCtx.fill();
+      screenCtx.restore();
     }
 
     // Clip for video area
-    ctx.save();
-    ctx.beginPath();
-    roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
-    ctx.clip();
+    screenCtx.save();
+    screenCtx.beginPath();
+    roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR);
+    screenCtx.clip();
 
     // Draw Video Frame with Zoom (within the crop base rect)
     const srcX = baseX + zoomX * baseW - (baseW / zoomScale) / 2;
@@ -659,22 +684,22 @@ export default function Preview({
         ? { x: (zoomX - prevZoom.x) * videoW, y: (zoomY - prevZoom.y) * videoH, scale: zoomScale - prevZoom.scale }
         : null;
       drawVideoWithMotionBlur(
-        ctx,
+        screenCtx,
         video,
         { x: coverX, y: coverY, w: coverW, h: coverH },
         { x: offsetX, y: offsetY, w: videoW, h: videoH },
-        config.motionBlur,
+        simplified ? { ...config.motionBlur, enabled: false } : config.motionBlur,
         zoomDelta
       );
       previousZoomRef.current = { x: zoomX, y: zoomY, scale: zoomScale, ts };
     }
 
     if (config.inset > 0) {
-      ctx.save();
-      ctx.strokeStyle = config.insetColor;
-      ctx.lineWidth = config.inset * 2;
-      ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.stroke();
-      ctx.restore();
+      screenCtx.save();
+      screenCtx.strokeStyle = config.insetColor;
+      screenCtx.lineWidth = config.inset * 2;
+      screenCtx.beginPath(); roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR); screenCtx.stroke();
+      screenCtx.restore();
     }
 
     // Cursor Overlay
@@ -701,24 +726,24 @@ export default function Preview({
         const zoomedCursorY = (c.y - coverY) / coverH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
-          ctx.save();
-          ctx.globalAlpha = idleAlpha;
+          screenCtx.save();
+          screenCtx.globalAlpha = idleAlpha;
           const pack = config.cursorStyle.pack;
           const trailImage = pack ? loadCursorImage(pack.imageUrl, cursorImages.current) : null;
           const trailHotspot = pack ? (config.cursorHotspots[pack.id] ?? { x: 10, y: 10 }) : null;
           const prevCursor = previousCursorDrawRef.current;
-          if (config.motionBlur.enabled && config.motionBlur.cursorAmount > 0 && prevCursor) {
+          if (!simplified && config.motionBlur.enabled && config.motionBlur.cursorAmount > 0 && prevCursor) {
             const dx = zoomedCursorX - prevCursor.x;
             const dy = zoomedCursorY - prevCursor.y;
             if (Math.hypot(dx, dy) > 2) {
               for (let ghost = 3; ghost >= 1; ghost--) {
-                ctx.save(); ctx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
+                screenCtx.save(); screenCtx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
                 if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
-                  drawCursorImage(ctx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
+                  drawCursorImage(screenCtx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
                 } else {
-                  drawCursor(ctx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                  drawCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
                 }
-                ctx.restore();
+                screenCtx.restore();
               }
             }
           }
@@ -728,20 +753,20 @@ export default function Preview({
             if (img && img.complete && img.naturalWidth > 0) {
               lastPackRef.current = { path: pack.imageUrl, img };
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              drawCursorImage(ctx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
+              drawCursorImage(screenCtx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else if (lastPackRef.current) {
               // New pack image still loading — draw the previous pack image
               // instead of flashing the built-in cursor.
               const prev = lastPackRef.current.img;
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              drawCursorImage(ctx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
+              drawCursorImage(screenCtx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
-              drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+              drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
             }
           } else {
-            drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+            drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
           }
-          ctx.restore();
+          screenCtx.restore();
         }
       }
     }
@@ -752,11 +777,12 @@ export default function Preview({
       if (age > clickEffectDuration(config.cursorStyle.clickEffect)) return false;
       const rx = (r.x - coverX) / coverW * videoW + offsetX;
       const ry = (r.y - coverY) / coverH * videoH + offsetY;
-      drawClickEffect(ctx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
+      drawClickEffect(screenCtx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
       return true;
     });
 
-    ctx.restore();
+    screenCtx.restore();
+    finishScreenTilt(ctx,tiltPass);
 
     const camera = cameraRef.current;
     if (camera && cameraMedia) {
@@ -769,15 +795,15 @@ export default function Preview({
         }
         if (!video.paused && camera.paused) void camera.play().catch(() => {});
         if (video.paused && !camera.paused) camera.pause();
-        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay);
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay, video.currentTime);
       }
     }
 
     // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
-    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
     reconcileVideoLayers(config.layers, videoTs, playing, layerVideoCacheRef.current);
-    const activeMasks = activeLayers.filter((layer) => layer.type === "mask");
+    const activeMasks = (simplified ? [] : activeLayers).filter((layer) => layer.type === "mask");
 
     // Masks sample the already-composited preview, not the raw video. This
     // keeps blur and magnification aligned with crop, pan/zoom, and styling.
@@ -1037,6 +1063,13 @@ export default function Preview({
     };
   }, [canvasToBacking]);
 
+  const emitLayerChange = useCallback((layer:Layer)=>{
+    if(config.lockedTracks?.includes("annotations"))return;
+    const view=sourceViewRef.current,video=videoRef.current;
+    const changed=layer.screenAnchored&&video?{...layer,x:(layer.x*view.w+view.x)/video.videoWidth,y:(layer.y*view.h+view.y)/video.videoHeight,w:layer.w*view.w/video.videoWidth,h:layer.h*view.h/video.videoHeight}:layer;
+    onLayerChange?.(changed);
+  },[config.lockedTracks,onLayerChange]);
+
   const handleCropMouseDown = useCallback(
     (e: React.PointerEvent) => {
       if (zoomTargetMode && onZoomTargetPick) {
@@ -1055,7 +1088,7 @@ export default function Preview({
         const p = canvasToBacking(e.clientX, e.clientY);
         const g = geomRef.current;
         const time = videoRef.current?.currentTime ?? 0;
-        const active = config.layers.filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02);
+        const active = config.layers.filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02).map(layer=>anchoredLayer(animatedLayer(layer,time),sourceViewRef.current,videoRef.current?.videoWidth??1,videoRef.current?.videoHeight??1));
         const selected = active.find((layer) => layer.id === selectedLayerId) ?? null;
         let target = selected;
         let handle: GizmoHandle | undefined;
@@ -1102,7 +1135,7 @@ export default function Preview({
       const p = canvasToBacking(e.clientX, e.clientY);
       cropDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     },
-    [cropMode, zoomTargetMode, onZoomTargetPick, zoomTargetFromClient, canvasToBacking, config.layers, selectedLayerId, onLayerChange, onLayerSelect]
+    [cropMode, zoomTargetMode, onZoomTargetPick, zoomTargetFromClient, canvasToBacking, config.layers, selectedLayerId, onLayerChange, emitLayerChange, onLayerSelect]
   );
 
   const handleCropMouseMove = useCallback(
@@ -1126,7 +1159,7 @@ export default function Preview({
         const d = layerDrag.current;
         const dx = (p.x - d.startX) / g.videoW, dy = (p.y - d.startY) / g.videoH;
         if (d.mode === "move") {
-          onLayerChange({ ...d.layer, x: Math.max(0, Math.min(1 - d.layer.w, d.layer.x + dx)), y: Math.max(0, Math.min(1 - d.layer.h, d.layer.y + dy)) });
+          emitLayerChange({ ...d.layer, x: Math.max(0, Math.min(1 - d.layer.w, d.layer.x + dx)), y: Math.max(0, Math.min(1 - d.layer.h, d.layer.y + dy)) });
         } else if (d.mode === "rotate") {
           const angle = Math.atan2(p.y - d.centerY, p.x - d.centerX) * 180 / Math.PI;
           const raw = (d.layer.rotation ?? 0) + angle - d.startAngle;
@@ -1175,7 +1208,7 @@ export default function Preview({
       cropDrag.current.x1 = p.x;
       cropDrag.current.y1 = p.y;
     },
-    [cropMode, zoomTargetMode, canvasToBacking, zoomTargetFromClient, onZoomTargetPick, onLayerChange, config.layers, selectedLayerId]
+    [cropMode, zoomTargetMode, canvasToBacking, zoomTargetFromClient, onZoomTargetPick, onLayerChange, emitLayerChange, config.layers, selectedLayerId]
   );
 
   const handleCropMouseUp = useCallback((event?: React.PointerEvent) => {
@@ -1345,13 +1378,14 @@ export default function Preview({
       onPointerUp={handleCropMouseUp}
       onPointerCancel={handleCropMouseUp}
     >
+      {proxyStatus && <small className="preview-proxy-status">{proxyStatus}</small>}
       {loadError && <p className="preview-error">{loadError}</p>}
       <canvas
         ref={canvasRef}
         width={canvasSize.w}
         height={canvasSize.h}
         className="preview-canvas"
-        style={{ cursor: cropMode ? "crosshair" : zoomTargetMode ? (zoomTargetDragging ? "grabbing" : "grab") : selectedLayerId ? "move" : undefined }}
+        style={{ width: canvasSize.w / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), height: canvasSize.h / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), cursor: cropMode ? "crosshair" : zoomTargetMode ? (zoomTargetDragging ? "grabbing" : "grab") : selectedLayerId ? "move" : undefined }}
       />
       {cropMode && (
         <div className="crop-hint">
@@ -1364,6 +1398,7 @@ export default function Preview({
       )}
       <video
         ref={assignVideoElement}
+        crossOrigin="anonymous"
         id="preview-video"
         src={videoUrl}
         preload="auto"
@@ -1383,6 +1418,7 @@ export default function Preview({
       />
       {cameraMedia && <video
         ref={assignCameraElement}
+        crossOrigin="anonymous"
         src={convertFileSrc(cameraMedia.path)}
         preload="auto"
         playsInline

@@ -8,9 +8,41 @@ use tauri::Manager;
 use crate::process::{background_command, spawn_recording_child};
 
 fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, String> {
+    // Large edited sequences can exceed Windows' command-line limit. Keep
+    // filter graphs in unique temporary files and remove them on every exit.
+    struct FilterScript(std::path::PathBuf);
+    impl Drop for FilterScript {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let mut prepared = args.to_vec();
+    let mut scripts = Vec::new();
+    for index in 0..args.len().saturating_sub(1) {
+        if args[index] == "-filter_complex" && args[index + 1].len() > 8192 {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "snap_export_filter_{}_{nonce}.txt",
+                std::process::id()
+            ));
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|error| format!("Could not prepare export filter: {error}"))?;
+            scripts.push(FilterScript(path.clone()));
+            file.write_all(args[index + 1].as_bytes())
+                .map_err(|error| format!("Could not write export filter: {error}"))?;
+            prepared[index] = "-filter_complex_script".into();
+            prepared[index + 1] = path.to_string_lossy().to_string();
+        }
+    }
     let mut command = background_command("ffmpeg");
     command
-        .args(args)
+        .args(&prepared)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -253,27 +285,6 @@ fn replace_export_output(
     }
 }
 
-#[derive(Deserialize, Clone)]
-#[allow(dead_code)]
-pub struct ExportKeyframe {
-    pub time: f64,
-    pub x: f64,
-    pub y: f64,
-    pub scale: f64,
-    pub duration: f64,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-pub struct ExportConfig {
-    pub background_color: String,
-    pub padding: u32,
-    pub border_radius: u32,
-    pub zoom_enabled: bool,
-    pub show_cursor: bool,
-    pub keyframes: Vec<ExportKeyframe>,
-}
-
 #[derive(Deserialize)]
 pub struct ExportSettings {
     pub format: String,
@@ -293,267 +304,6 @@ pub struct ExportSettings {
 
 fn default_audio_mode() -> String {
     "mixed".to_string()
-}
-
-#[derive(Deserialize)]
-pub struct ExportRequest {
-    #[serde(rename = "inputVideo")]
-    pub input_video: String,
-    pub config: ExportConfig,
-    #[serde(rename = "exportSettings")]
-    pub export_settings: ExportSettings,
-}
-
-/// Legacy export path: re-renders pan/zoom via FFmpeg's `zoompan` filter
-/// directly on the raw recording. Kept for reference / as a fast fallback,
-/// but it can never fully match the editor: FFmpeg has no equivalent for
-/// the custom cursor overlay, click effects, gradient/color backgrounds,
-/// padding, shadow, or rounded corners drawn in the canvas preview.
-/// The editor now uses `finalize_canvas_export` (below) instead, which
-/// encodes the exact frames the canvas preview draws — true WYSIWYG.
-#[tauri::command]
-pub async fn export_video(
-    app: tauri::AppHandle,
-    request: ExportRequest,
-) -> std::result::Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || export_video_blocking(app, request))
-        .await
-        .map_err(|error| format!("Export worker failed: {error}"))?
-}
-
-fn export_video_blocking(
-    app: tauri::AppHandle,
-    request: ExportRequest,
-) -> std::result::Result<String, String> {
-    crate::access::require(&app, std::path::Path::new(&request.input_video))?;
-    crate::access::require(
-        &app,
-        std::path::Path::new(&request.export_settings.output_path),
-    )?;
-    if request
-        .input_video
-        .eq_ignore_ascii_case(&request.export_settings.output_path)
-    {
-        return Err("Export cannot overwrite the original recording".into());
-    }
-    eprintln!("[Snap Export] Starting export...");
-    eprintln!("[Snap Export] Input: {}", request.input_video);
-    eprintln!(
-        "[Snap Export] Output: {}",
-        request.export_settings.output_path
-    );
-
-    let settings = &request.export_settings;
-    let cfg = &request.config;
-
-    // Parse background hex to FFmpeg color string
-    let bg = cfg.background_color.trim_start_matches('#');
-    let bg_ffmpeg = format!("0x{bg}");
-
-    let pad = cfg.padding;
-    let inner_w = settings.width.saturating_sub(pad * 2);
-    let inner_h = settings.height.saturating_sub(pad * 2);
-
-    // Base args for all formats
-    let crf = match settings.quality.as_str() {
-        "high" => "18",
-        "medium" => "23",
-        _ => "28",
-    };
-
-    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), request.input_video.clone()];
-
-    // Detect sidecar audio files
-    let input_path = std::path::Path::new(&request.input_video);
-    let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
-    let parent = input_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let audio_dir = parent.join(stem.as_ref());
-
-    let device_wav = audio_dir.join("device_audio.wav");
-    let sys_wav = if device_wav.exists() {
-        device_wav
-    } else {
-        audio_dir.join("system_audio.wav")
-    };
-    let mic_wav = audio_dir.join("mic_audio.wav");
-    let has_sys = sys_wav.exists()
-        && std::fs::metadata(&sys_wav)
-            .map(|m| m.len() > 44)
-            .unwrap_or(false);
-    let has_mic = mic_wav.exists()
-        && std::fs::metadata(&mic_wav)
-            .map(|m| m.len() > 44)
-            .unwrap_or(false);
-
-    let mut audio_inputs = 0;
-    if has_sys {
-        args.push("-i".into());
-        args.push(sys_wav.to_string_lossy().to_string());
-        audio_inputs += 1;
-    }
-    if has_mic {
-        args.push("-i".into());
-        args.push(mic_wav.to_string_lossy().to_string());
-        audio_inputs += 1;
-    }
-
-    args.push("-r".into());
-    args.push(settings.fps.to_string());
-
-    let w = settings.width;
-    let h = settings.height;
-
-    // Build video filter
-    let vf = if cfg.zoom_enabled && !cfg.keyframes.is_empty() {
-        let zoom_expr = build_zoompan_expr(&cfg.keyframes, settings.fps, inner_w, inner_h);
-        format!("pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg},{zoom_expr}")
-    } else {
-        format!("scale={inner_w}:{inner_h}:force_original_aspect_ratio=decrease,pad=w={w}:h={h}:x={pad}:y={pad}:color={bg_ffmpeg}")
-    };
-
-    if audio_inputs > 0 {
-        if audio_inputs == 2 {
-            args.push("-filter_complex".into());
-            args.push(format!(
-                "[0:v]{vf}[v];[1:a][2:a]amix=inputs=2:duration=first[a]"
-            ));
-            args.push("-map".into());
-            args.push("[v]".into());
-            args.push("-map".into());
-            args.push("[a]".into());
-        } else {
-            args.push("-filter_complex".into());
-            args.push(format!("[0:v]{vf}[v]"));
-            args.push("-map".into());
-            args.push("[v]".into());
-            args.push("-map".into());
-            args.push("1:a".into());
-        }
-        args.push("-c:a".into());
-        args.push("aac".into());
-        args.push("-b:a".into());
-        args.push("192k".into());
-    } else {
-        args.push("-vf".into());
-        args.push(vf);
-    }
-
-    // Format-specific args
-    if settings.format == "gif" {
-        args.push("-f".into());
-        args.push("gif".into());
-    } else {
-        args.extend_from_slice(&[
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            "medium".into(),
-            "-crf".into(),
-            crf.into(),
-            "-pix_fmt".into(),
-            "yuv420p".into(),
-        ]);
-    }
-
-    args.push(settings.output_path.clone());
-
-    eprintln!("[Snap Export] FFmpeg command: ffmpeg {}", args.join(" "));
-
-    let mut incomplete_output = IncompleteExportOutput {
-        path: std::path::PathBuf::from(&settings.output_path),
-        armed: !std::path::Path::new(&settings.output_path).exists(),
-    };
-    let output = run_ffmpeg(&args)?;
-    let status = output.status;
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !status.success() {
-        eprintln!("[Snap Export] FFmpeg stderr:\n{stderr}");
-        return Err(format!("FFmpeg exited with error: {status}\n{stderr}"));
-    }
-
-    let output = request.export_settings.output_path.clone();
-    let meta = std::fs::metadata(&output).map_err(|e| format!("Output not found: {e}"))?;
-    incomplete_output.armed = false;
-
-    eprintln!(
-        "[Snap Export] Done — {} bytes written to {}",
-        meta.len(),
-        output
-    );
-
-    Ok(format!(
-        "Exported: {} ({:.1} MB)",
-        output,
-        meta.len() as f64 / 1_048_576.0
-    ))
-}
-
-/// Build a nested if/else FFmpeg expression that piecewise-linearly
-/// interpolates `value_of(kf)` across every keyframe over time, evaluated
-/// at T = on/fps (on = zoompan's per-output-frame counter). Falls back to
-/// the last keyframe's value past the final keyframe, and holds the first
-/// keyframe's value before it starts (the clamped `max(0,min(1,...))` frac
-/// handles that automatically).
-fn build_piecewise(
-    kfs: &[ExportKeyframe],
-    fps: u32,
-    value_of: impl Fn(&ExportKeyframe) -> f64,
-) -> String {
-    if kfs.len() == 1 {
-        return format!("{:.5}", value_of(&kfs[0]));
-    }
-    // Start from the tail value and wrap backwards so evaluation short-
-    // circuits into the correct segment for T.
-    let mut expr = format!("{:.5}", value_of(&kfs[kfs.len() - 1]));
-    for i in (0..kfs.len() - 1).rev() {
-        let t0 = kfs[i].time / 1000.0;
-        let t1 = kfs[i + 1].time / 1000.0;
-        let v0 = value_of(&kfs[i]);
-        let v1 = value_of(&kfs[i + 1]);
-        let span = (t1 - t0).max(1.0 / fps as f64); // avoid div-by-zero on duplicate timestamps
-        expr = format!(
-            "if(lte(on/{fps},{t1:.5}),({v0:.5})+(({v1:.5})-({v0:.5}))*max(0,min(1,(on/{fps}-{t0:.5})/{span:.5})),{expr})",
-            fps = fps, t1 = t1, v0 = v0, v1 = v1, t0 = t0, span = span, expr = expr
-        );
-    }
-    expr
-}
-
-/// Build a zoompan FFmpeg filter expression from keyframes. Follows every
-/// keyframe's real scale and pan target (x, y as fractions of the frame),
-/// linearly interpolated across the full timeline — not just a jump
-/// between two points with a hardcoded center pan.
-fn build_zoompan_expr(keyframes: &[ExportKeyframe], fps: u32, w: u32, h: u32) -> String {
-    if keyframes.is_empty() {
-        return format!("zoompan=z=1:x=0:y=0:d=1:s={}x{}:fps={}", w, h, fps);
-    }
-
-    // Sort keyframes by time
-    let mut kfs = keyframes.to_vec();
-    kfs.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-
-    let z_expr = build_piecewise(&kfs, fps, |k| k.scale.max(1.0));
-    let x_frac_expr = build_piecewise(&kfs, fps, |k| k.x);
-    let y_frac_expr = build_piecewise(&kfs, fps, |k| k.y);
-
-    // x/y are the top-left corner of the crop window in *input* pixels.
-    // `zoom` in these expressions refers to this frame's already-resolved
-    // z value. Clamp so the crop window never leaves the source frame.
-    let x_expr = format!("max(0,min(iw-iw/zoom,({x_frac_expr})*iw-(iw/zoom)/2))");
-    let y_expr = format!("max(0,min(ih-ih/zoom,({y_frac_expr})*ih-(ih/zoom)/2))");
-
-    format!(
-        "zoompan=z='{z}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={fps}",
-        z = z_expr,
-        x = x_expr,
-        y = y_expr,
-        w = w,
-        h = h,
-        fps = fps
-    )
 }
 
 // ── Canvas export pipeline ───────────────────────────────────────────────
@@ -736,6 +486,43 @@ pub struct CanvasExportRequest {
     pub playback_rate: f64,
     #[serde(rename = "captionSrt", default)]
     pub caption_srt: Option<String>,
+    #[serde(rename = "sourceSegments", default)]
+    pub source_segments: Vec<SourceSegment>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct SourceSegment {
+    pub start: f64,
+    pub end: f64,
+}
+
+fn source_audio_filter(
+    idx: usize,
+    volume: f64,
+    normalize: &str,
+    speed: &str,
+    label: &str,
+    segments: &[SourceSegment],
+) -> String {
+    if segments.is_empty() {
+        return format!("[{idx}:a]volume={volume:.3}{normalize}{speed},apad[{label}]");
+    }
+    let mut filter = format!("[{idx}:a]apad,asplit={}", segments.len());
+    for i in 0..segments.len() {
+        filter.push_str(&format!("[{label}_src{idx}_{i}]"));
+    }
+    filter.push(';');
+    for (i, segment) in segments.iter().enumerate() {
+        filter.push_str(&format!("[{label}_src{idx}_{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS[{label}_cut{idx}_{i}];", segment.start, segment.end));
+    }
+    for i in 0..segments.len() {
+        filter.push_str(&format!("[{label}_cut{idx}_{i}]"));
+    }
+    filter.push_str(&format!(
+        "concat=n={}:v=0:a=1,volume={volume:.3}{normalize}{speed},apad[{label}]",
+        segments.len()
+    ));
+    filter
 }
 
 #[derive(Deserialize, Clone)]
@@ -746,6 +533,155 @@ pub struct CanvasAudioTrack {
     pub kind: String,
     pub muted: bool,
     pub volume: f64,
+    pub linked: Option<bool>,
+    pub start: Option<f64>,
+    pub source_start: Option<f64>,
+    pub source_end: Option<f64>,
+    pub fade_in: Option<f64>,
+    pub fade_out: Option<f64>,
+    pub noise_reduction: Option<bool>,
+    pub ducking: Option<f64>,
+    #[serde(default)]
+    pub volume_keys: Vec<AudioVolumeKey>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct AudioVolumeKey {
+    pub time: f64,
+    pub volume: f64,
+}
+
+struct AudioFilterEdits<'a> {
+    track: Option<&'a CanvasAudioTrack>,
+    microphone: Option<usize>,
+    duration: f64,
+}
+
+fn edited_audio_filter(
+    idx: usize,
+    volume: f64,
+    normalize: &str,
+    speed: &str,
+    label: &str,
+    segments: &[SourceSegment],
+    edits: AudioFilterEdits<'_>,
+) -> String {
+    let AudioFilterEdits { track, microphone, duration } = edits;
+    let Some(track) = track else {
+        return source_audio_filter(idx, volume, normalize, speed, label, segments);
+    };
+    let finite =
+        |v: Option<f64>, fallback: f64| v.filter(|v| v.is_finite()).unwrap_or(fallback).max(0.0);
+    let start = finite(track.source_start, 0.0);
+    let end = finite(track.source_end, 86400.0).max(start + 0.01);
+    let linked = track.linked.unwrap_or(true);
+    let mut effects = format!("atrim=start={start:.6}:end={end:.6},asetpts=PTS-STARTPTS");
+    if track.noise_reduction.unwrap_or(false) {
+        effects.push_str(",afftdn=nf=-25");
+    }
+    let fade_in = finite(track.fade_in, 0.0).min(end - start);
+    let fade_out = finite(track.fade_out, 0.0).min(end - start);
+    if fade_in > 0.0 {
+        effects.push_str(&format!(",afade=t=in:st=0:d={fade_in:.6}"));
+    }
+    if fade_out > 0.0 {
+        // Source-end is explicit for an exact outgoing fade; otherwise use the
+        // source interval covered by this export rather than an arbitrary end.
+        let effective_end = if track.source_end.is_some() {
+            end - start
+        } else if linked {
+            segments.iter().map(|s| s.end).fold(duration, f64::max) - start
+        } else {
+            duration - finite(track.start, 0.0)
+        };
+        effects.push_str(&format!(
+            ",afade=t=out:st={:.6}:d={fade_out:.6}",
+            (effective_end - fade_out).max(0.0)
+        ));
+    }
+    let mut keys = track
+        .volume_keys
+        .iter()
+        .filter(|k| k.time.is_finite() && k.volume.is_finite())
+        .collect::<Vec<_>>();
+    keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+    keys.truncate(500);
+    if let Some(last) = keys.last() {
+        let mut expression = format!("{:.6}", last.volume.clamp(0.0, 2.0));
+        for pair in keys.windows(2).rev() {
+            let a = pair[0];
+            let b = pair[1];
+            expression = format!(
+                "if(lt(t,{:.6}),{:.6}+({:.6})*(t-{:.6})/{:.6},{expression})",
+                b.time.max(0.0),
+                a.volume.clamp(0.0, 2.0),
+                b.volume.clamp(0.0, 2.0) - a.volume.clamp(0.0, 2.0),
+                a.time.max(0.0),
+                (b.time - a.time).max(0.001)
+            );
+        }
+        let first = keys[0];
+        expression = format!(
+            "if(lt(t,{:.6}),{:.6},{expression})",
+            first.time.max(0.0),
+            first.volume.clamp(0.0, 2.0)
+        );
+        // source_audio_filter applies the static track volume; normalize the
+        // envelope here so keyed volume replaces rather than multiplies it.
+        effects.push_str(&format!(",volume='{expression}':eval=frame"));
+    }
+    let input_label = format!("edit{idx}");
+    let mut filter = format!("[{idx}:a]{effects},apad[{input_label}];");
+    let raw_label = format!("raw{label}");
+    let mut base = source_audio_filter(
+        idx,
+        volume,
+        normalize,
+        speed,
+        &raw_label,
+        if linked { segments } else { &[] },
+    );
+    base = base.replace(&format!("[{idx}:a]"), &format!("[{input_label}]"));
+    // Linked source ranges use original timestamps, so preserve their offset
+    // after trimming. Unlinked audio is positioned in sequence time.
+    if linked && start > 0.0 {
+        filter = filter.replace(
+            &format!(",apad[{input_label}]"),
+            &format!(
+                ",adelay={}:all=1,apad[{input_label}]",
+                (start * 1000.0).round() as u64
+            ),
+        );
+    }
+    filter.push_str(&base);
+    filter.push(';');
+    let duck = finite(track.ducking, 0.0).min(100.0);
+    let shifted = format!("shift{label}");
+    if linked {
+        filter.push_str(&format!("[{raw_label}]anull[{shifted}];"));
+    } else {
+        filter.push_str(&format!(
+            "[{raw_label}]adelay={}:all=1[{shifted}];",
+            (finite(track.start, 0.0) * 1000.0
+                / speed
+                    .trim_start_matches(",atempo=")
+                    .parse::<f64>()
+                    .unwrap_or(1.0)
+                    .max(0.5))
+            .round() as u64
+        ));
+    }
+    if let Some(mic) = microphone.filter(|mic| *mic != idx && duck > 0.0) {
+        let reference = format!("duck{idx}");
+        filter.push_str(&source_audio_filter(
+            mic, 1.0, "", speed, &reference, segments,
+        ));
+        filter.push(';');
+        filter.push_str(&format!("[{shifted}][{reference}]sidechaincompress=threshold=0.02:ratio={:.3}:attack=20:release=300:makeup=1,apad[{label}]",1.0+duck*0.19));
+    } else {
+        filter.push_str(&format!("[{shifted}]anull[{label}]"));
+    }
+    filter
 }
 
 fn default_playback_rate() -> f64 {
@@ -778,19 +714,6 @@ impl Drop for ExportTempFiles {
     fn drop(&mut self) {
         for path in &self.0 {
             let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
-struct IncompleteExportOutput {
-    path: std::path::PathBuf,
-    armed: bool,
-}
-
-impl Drop for IncompleteExportOutput {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -926,6 +849,26 @@ fn finalize_canvas_export_blocking(
         crate::access::require(&app, std::path::Path::new(&track.path))?;
     }
     let playback_rate = request.playback_rate.clamp(0.5, 2.0);
+    if request.source_segments.len() > 1000 || !request.playback_rate.is_finite() {
+        return Err("Invalid source segments or playback rate".into());
+    }
+    let mut source_duration = 0.0;
+    for segment in &request.source_segments {
+        if !segment.start.is_finite()
+            || !segment.end.is_finite()
+            || segment.start < 0.0
+            || segment.end <= segment.start
+            || segment.end > 86400.0
+        {
+            return Err("Invalid source segment range".into());
+        }
+        source_duration += segment.end - segment.start;
+    }
+    if !request.source_segments.is_empty()
+        && (source_duration / playback_rate - request.export_duration_seconds).abs() > 0.05
+    {
+        return Err("Source segments do not match the export duration".into());
+    }
     let captured_metrics = probe_video_metrics(std::path::Path::new(&request.temp_webm_path))?;
     validate_video_metrics(
         captured_metrics,
@@ -1045,6 +988,8 @@ fn finalize_canvas_export_blocking(
         // those tracks; generated click audio is already placed in output time.
         let mut audio_sources: Vec<(usize, f64, String, bool)> = Vec::new();
         let mut input_index = 1usize;
+        let mut track_edits = std::collections::HashMap::new();
+        let mut microphone_index = None;
         let requested_audio = request
             .audio_tracks
             .iter()
@@ -1065,7 +1010,32 @@ fn finalize_canvas_export_blocking(
 
         if !request.audio_tracks.is_empty() {
             for track in requested_audio {
-                if request.trim_start_seconds > 0.0 {
+                let mut edit = track.clone();
+                if edit.source_end.is_none() {
+                    if let Ok(output) = background_command("ffprobe")
+                        .args([
+                            "-v",
+                            "error",
+                            "-show_entries",
+                            "format=duration",
+                            "-of",
+                            "default=noprint_wrappers=1:nokey=1",
+                        ])
+                        .arg(&track.path)
+                        .output()
+                    {
+                        edit.source_end = String::from_utf8_lossy(&output.stdout)
+                            .trim()
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|d| d.is_finite() && *d > 0.0);
+                    }
+                }
+                track_edits.insert(input_index, edit);
+                if track.kind == "microphone" {
+                    microphone_index = Some(input_index);
+                }
+                if request.source_segments.is_empty() && request.trim_start_seconds > 0.0 {
                     args.push("-ss".into());
                     args.push(format!("{:.6}", request.trim_start_seconds));
                 }
@@ -1080,7 +1050,12 @@ fn finalize_canvas_export_blocking(
                 };
                 audio_sources.push((
                     input_index,
-                    channel_volume * track.volume.clamp(0.0, 2.0),
+                    channel_volume
+                        * if track.volume_keys.is_empty() {
+                            track.volume.clamp(0.0, 2.0)
+                        } else {
+                            1.0
+                        },
                     track.label.clone(),
                     true,
                 ));
@@ -1088,7 +1063,7 @@ fn finalize_canvas_export_blocking(
             }
         } else {
             if has_sys && !request.audio_mix.system_muted {
-                if request.trim_start_seconds > 0.0 {
+                if request.source_segments.is_empty() && request.trim_start_seconds > 0.0 {
                     args.push("-ss".into());
                     args.push(format!("{:.6}", request.trim_start_seconds));
                 }
@@ -1103,7 +1078,7 @@ fn finalize_canvas_export_blocking(
                 input_index += 1;
             }
             if has_mic && !request.audio_mix.mic_muted {
-                if request.trim_start_seconds > 0.0 {
+                if request.source_segments.is_empty() && request.trim_start_seconds > 0.0 {
                     args.push("-ss".into());
                     args.push(format!("{:.6}", request.trim_start_seconds));
                 }
@@ -1146,9 +1121,20 @@ fn finalize_canvas_export_blocking(
                 } else {
                     String::new()
                 };
-                filter.push_str(&format!(
-                    "[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a{slot}];"
+                filter.push_str(&edited_audio_filter(
+                    *idx,
+                    *volume,
+                    normalize,
+                    &speed,
+                    &format!("a{slot}"),
+                    if *retime {
+                        &request.source_segments
+                    } else {
+                        &[]
+                    },
+                    AudioFilterEdits { track: track_edits.get(idx), microphone: microphone_index, duration: source_duration },
                 ));
+                filter.push(';');
             }
             args.push("-filter_complex".into());
             args.push(filter.trim_end_matches(';').to_string());
@@ -1174,7 +1160,20 @@ fn finalize_canvas_export_blocking(
                 } else {
                     String::new()
                 };
-                filter.push_str(&format!("[{idx}:a]volume={volume:.3}{speed}[a{slot}];"));
+                filter.push_str(&edited_audio_filter(
+                    *idx,
+                    *volume,
+                    "",
+                    &speed,
+                    &format!("a{slot}"),
+                    if *retime {
+                        &request.source_segments
+                    } else {
+                        &[]
+                    },
+                    AudioFilterEdits { track: track_edits.get(idx), microphone: microphone_index, duration: source_duration },
+                ));
+                filter.push(';');
             }
             for slot in 0..audio_sources.len() {
                 filter.push_str(&format!("[a{slot}]"));
@@ -1210,8 +1209,18 @@ fn finalize_canvas_export_blocking(
             } else {
                 String::new()
             };
-            args.push(format!(
-                "[{idx}:a]volume={volume:.3}{normalize}{speed},apad[a]"
+            args.push(edited_audio_filter(
+                *idx,
+                *volume,
+                normalize,
+                &speed,
+                "a",
+                if *retime {
+                    &request.source_segments
+                } else {
+                    &[]
+                },
+                AudioFilterEdits { track: track_edits.get(idx), microphone: microphone_index, duration: source_duration },
             ));
             args.push("-map".into());
             args.push("0:v".into());
@@ -1310,6 +1319,150 @@ fn finalize_canvas_export_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Requires FFmpeg on PATH; validates edited audio and ducking"]
+    fn edited_audio_filters_render_reordered_linked_and_independent_tracks() {
+        let segments = vec![
+            SourceSegment {
+                start: 2.0,
+                end: 3.0,
+            },
+            SourceSegment {
+                start: 0.0,
+                end: 1.0,
+            },
+            SourceSegment {
+                start: 2.0,
+                end: 3.0,
+            },
+        ];
+        let mut track:CanvasAudioTrack=serde_json::from_value(serde_json::json!({"path":"music.wav","label":"Music","kind":"imported","muted":false,"volume":1,"linked":true,"sourceStart":0.2,"sourceEnd":3.0,"fadeIn":0.1,"fadeOut":0.2,"noiseReduction":true,"ducking":75,"volumeKeys":[{"time":0,"volume":1},{"time":2,"volume":0.5}]})).unwrap();
+        for linked in [true, false] {
+            track.linked = Some(linked);
+            track.start = Some(0.5);
+            let a = edited_audio_filter(
+                0,
+                1.0,
+                "",
+                ",atempo=1.000000",
+                "music",
+                &segments,
+                AudioFilterEdits { track: Some(&track), microphone: Some(1), duration: 3.0 },
+            );
+            let b = edited_audio_filter(
+                1,
+                1.0,
+                "",
+                ",atempo=1.000000",
+                "voice",
+                &segments,
+                AudioFilterEdits { track: None, microphone: None, duration: 3.0 },
+            );
+            let filter = format!("{a};{b};[music][voice]amix=inputs=2[a]");
+            let args = vec![
+                "-v".into(),
+                "error".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "sine=frequency=220:sample_rate=48000:duration=3".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "sine=frequency=440:sample_rate=48000:duration=3".into(),
+                "-filter_complex".into(),
+                filter,
+                "-map".into(),
+                "[a]".into(),
+                "-t".into(),
+                "3".into(),
+                "-f".into(),
+                "null".into(),
+                "-".into(),
+            ];
+            let result = run_ffmpeg(&args).unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "Requires FFmpeg on PATH; run explicitly when validating footage edits"]
+    fn footage_audio_removes_deleted_samples_and_preserves_both_retained_ranges() {
+        let path =
+            std::env::temp_dir().join(format!("snap_footage_audio_{}.wav", std::process::id()));
+        let segments = vec![
+            SourceSegment {
+                start: 0.0,
+                end: 1.0,
+            },
+            SourceSegment {
+                start: 2.0,
+                end: 3.0,
+            },
+        ];
+        for rate in [0.5, 1.0, 2.0] {
+            let filter =
+                source_audio_filter(0, 1.0, "", &format!(",atempo={rate:.6}"), "a", &segments);
+            let filter = if rate == 1.0 {
+                format!("{filter}{}", " ".repeat(9000))
+            } else {
+                filter
+            };
+            let args = vec![
+                "-y".into(),
+                "-v".into(),
+                "error".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "aevalsrc=if(lt(t\\,1)\\,0.1\\,if(lt(t\\,2)\\,0.7\\,0.3)):s=48000:d=3".into(),
+                "-filter_complex".into(),
+                filter,
+                "-map".into(),
+                "[a]".into(),
+                "-t".into(),
+                format!("{}", 2.0 / rate),
+                "-c:a".into(),
+                "pcm_s16le".into(),
+                path.to_string_lossy().to_string(),
+            ];
+            let result = run_ffmpeg(&args).expect("launch FFmpeg");
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let bytes = std::fs::read(&path).expect("read audio");
+            let mut offset = 12;
+            let mut samples = Vec::new();
+            while offset + 8 <= bytes.len() {
+                let length =
+                    u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                if &bytes[offset..offset + 4] == b"data" {
+                    samples = bytes[offset + 8..offset + 8 + length]
+                        .chunks_exact(2)
+                        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f64 / 32768.0)
+                        .collect();
+                    break;
+                }
+                offset += 8 + length + length % 2;
+            }
+            assert!(!samples.is_empty());
+            assert!((samples.len() as f64 / 48000.0 - 2.0 / rate).abs() < 0.01);
+            assert!((samples[samples.len() / 4] - 0.1).abs() < 0.03);
+            assert!((samples[samples.len() * 3 / 4] - 0.3).abs() < 0.03);
+            assert!(
+                samples.iter().all(|sample| sample.abs() < 0.5),
+                "Deleted middle audio leaked into output"
+            );
+        }
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn delivery_companions_are_exact_siblings_of_the_selected_video() {
@@ -1421,30 +1574,6 @@ mod tests {
             false,
         )
         .expect("complete streaming capture");
-    }
-
-    #[test]
-    fn zoom_expression_contains_each_segment() {
-        let keyframes = vec![
-            ExportKeyframe {
-                time: 0.0,
-                x: 0.5,
-                y: 0.5,
-                scale: 1.0,
-                duration: 0.0,
-            },
-            ExportKeyframe {
-                time: 1000.0,
-                x: 0.25,
-                y: 0.75,
-                scale: 2.0,
-                duration: 400.0,
-            },
-        ];
-        let filter = build_zoompan_expr(&keyframes, 60, 1280, 720);
-        assert!(filter.contains("zoompan"));
-        assert!(filter.contains("2.00000"));
-        assert!(filter.contains("fps=60"));
     }
 
     #[test]

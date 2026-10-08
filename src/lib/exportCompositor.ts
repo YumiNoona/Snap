@@ -1,9 +1,12 @@
+import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "./screenTilt";
+import { animatedLayer, anchoredLayer } from "./layerAnimation";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer, VideoLayer } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
+import { retainedClips } from "./videoEditing";
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
@@ -17,6 +20,7 @@ export interface ExportCompositor {
   canvas: HTMLCanvasElement;
   clickTimesMs: number[];
   setFrameConsumer: (consumer: (() => void) | null) => void;
+  renderFrame: () => void;
   destroy: () => void;
 }
 
@@ -95,6 +99,7 @@ export async function createExportCompositor(
   let rafId = 0;
   let frameConsumer: (() => void) | null = null;
   const cleanup = () => {
+    releaseScreenTilt(canvas);
     destroyed = true;
     if (rafId) cancelAnimationFrame(rafId);
     video.pause();
@@ -197,8 +202,15 @@ export async function createExportCompositor(
     clickIdx = i;
   }
 
+  const footageClips = retainedClips(config.videoClips, config.trimStart, config.trimEnd || video.duration);
   function drawFrame() {
     if (destroyed) return;
+    // Keep the last retained canvas at cut boundaries, rather than drawing
+    // deleted footage while the transport seeks to the next segment.
+    if (video.seeking || !footageClips.some(clip => video.currentTime >= clip.start && video.currentTime < clip.end)) {
+      rafId = requestAnimationFrame(drawFrame);
+      return;
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -294,24 +306,26 @@ export async function createExportCompositor(
     }
     ctx.restore();
 
+    const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
+    const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
     if (config.shadow.enabled) {
-      ctx.save();
-      ctx.shadowColor = config.shadow.color;
-      ctx.shadowBlur = config.shadow.blur;
-      ctx.shadowOffsetX = config.shadow.offsetX;
-      ctx.shadowOffsetY = config.shadow.offsetY;
-      ctx.fillStyle = "#0f172a";
-      ctx.beginPath();
-      roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
-      ctx.fill();
-      ctx.restore();
+      screenCtx.save();
+      screenCtx.shadowColor = config.shadow.color;
+      screenCtx.shadowBlur = config.shadow.blur;
+      screenCtx.shadowOffsetX = config.shadow.offsetX;
+      screenCtx.shadowOffsetY = config.shadow.offsetY;
+      screenCtx.fillStyle = "#0f172a";
+      screenCtx.beginPath();
+      roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR);
+      screenCtx.fill();
+      screenCtx.restore();
     }
 
-    ctx.save();
-    ctx.beginPath();
-    roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR);
-    ctx.clip();
+    screenCtx.save();
+    screenCtx.beginPath();
+    roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR);
+    screenCtx.clip();
 
     const srcX = baseX + zoomX * baseW - (baseW / zoomScale) / 2;
     const srcY = baseY + zoomY * baseH - (baseH / zoomScale) / 2;
@@ -330,7 +344,7 @@ export async function createExportCompositor(
         ? { x: (zoomX - previousZoom.x) * videoW, y: (zoomY - previousZoom.y) * videoH, scale: zoomScale - previousZoom.scale }
         : null;
       drawVideoWithMotionBlur(
-        ctx, video,
+        screenCtx, video,
         { x: coverX, y: coverY, w: coverW, h: coverH },
         { x: offsetX, y: offsetY, w: videoW, h: videoH },
         config.motionBlur, zoomDelta
@@ -339,8 +353,8 @@ export async function createExportCompositor(
     }
 
     if (config.inset > 0) {
-      ctx.save(); ctx.strokeStyle = config.insetColor; ctx.lineWidth = config.inset * 2;
-      ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.stroke(); ctx.restore();
+      screenCtx.save(); screenCtx.strokeStyle = config.insetColor; screenCtx.lineWidth = config.inset * 2;
+      screenCtx.beginPath(); roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR); screenCtx.stroke(); screenCtx.restore();
     }
 
     // Cursor overlay — custom pack, default styled cursor, or none, exactly
@@ -364,7 +378,7 @@ export async function createExportCompositor(
         const zoomedCursorY = (c.y - coverY) / coverH * videoH + offsetY;
         if (zoomedCursorX >= offsetX && zoomedCursorX <= offsetX + videoW &&
             zoomedCursorY >= offsetY && zoomedCursorY <= offsetY + videoH) {
-          ctx.save(); ctx.globalAlpha = idleAlpha;
+          screenCtx.save(); screenCtx.globalAlpha = idleAlpha;
           const pack = config.cursorStyle.pack;
           const trailImage = pack ? loadCachedImage(pack.imageUrl, cursorImages) : null;
           const trailHotspot = pack ? (config.cursorHotspots[pack.id] ?? { x: 10, y: 10 }) : null;
@@ -373,13 +387,13 @@ export async function createExportCompositor(
             const dx = zoomedCursorX - prevCursor.x, dy = zoomedCursorY - prevCursor.y;
             if (Math.hypot(dx, dy) > 2) {
               for (let ghost = 3; ghost >= 1; ghost--) {
-                ctx.save(); ctx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
+                screenCtx.save(); screenCtx.globalAlpha = idleAlpha * 0.08 * (4 - ghost);
                 if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
-                  drawCursorImage(ctx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
+                  drawCursorImage(screenCtx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
                 } else {
-                  drawCursor(ctx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                  drawCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
                 }
-                ctx.restore();
+                screenCtx.restore();
               }
             }
           }
@@ -389,18 +403,18 @@ export async function createExportCompositor(
             if (img && img.complete && img.naturalWidth > 0) {
               lastPack = { path: pack.imageUrl, img };
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              drawCursorImage(ctx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
+              drawCursorImage(screenCtx, img, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else if (lastPack) {
               const prev = lastPack.img;
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
-              drawCursorImage(ctx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
+              drawCursorImage(screenCtx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
-              drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+              drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
             }
           } else {
-            drawCursor(ctx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+            drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
           }
-          ctx.restore();
+          screenCtx.restore();
         }
       }
     }
@@ -411,11 +425,12 @@ export async function createExportCompositor(
       if (age > clickEffectDuration(config.cursorStyle.clickEffect)) return false;
       const rx = (r.x - coverX) / coverW * videoW + offsetX;
       const ry = (r.y - coverY) / coverH * videoH + offsetY;
-      drawClickEffect(ctx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
+      drawClickEffect(screenCtx, rx, ry, age, config.cursorStyle.color, config.cursorStyle.clickEffect, r.ts);
       return true;
     });
 
-    ctx.restore();
+    screenCtx.restore();
+    finishScreenTilt(ctx,tiltPass);
 
     if (camera && cameraMedia) {
       const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
@@ -425,7 +440,7 @@ export async function createExportCompositor(
         if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
         if (video.paused) camera.pause();
         else if (camera.paused) void camera.play().catch(() => {});
-        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay);
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay, video.currentTime);
       } else if (!camera.paused) {
         camera.pause();
       }
@@ -434,7 +449,7 @@ export async function createExportCompositor(
     // Timed annotation and mask layers. Masks sample the fully composited
     // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
-    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02);
+    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
     reconcileVideoLayers(config.layers, videoTs, !video.paused, layerVideoCache);
     if (maskSourceCtx && activeLayers.some((layer) => layer.type === "mask")) {
       maskSourceCtx.clearRect(0, 0, outputW, outputH);
@@ -502,6 +517,7 @@ export async function createExportCompositor(
     canvas,
     clickTimesMs: clickEvents.map((event) => event.ts),
     setFrameConsumer: (consumer) => { frameConsumer = consumer; },
+    renderFrame: () => { cancelAnimationFrame(rafId); drawFrame(); },
     destroy: cleanup,
   };
 }

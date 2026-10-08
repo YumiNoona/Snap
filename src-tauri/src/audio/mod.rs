@@ -47,13 +47,23 @@ struct AudioSignal {
 
 impl AudioSignal {
     fn observe_pcm16(&mut self, bytes: &VecDeque<u8>) {
-        let contiguous = bytes.as_slices();
-        for slice in [contiguous.0, contiguous.1] {
-            for sample in slice.chunks_exact(2) {
-                let value = i16::from_le_bytes([sample[0], sample[1]]) as f64 / 32768.0;
-                self.sum_squares += value * value;
-                self.samples += 1;
-            }
+        let (front, mut back) = bytes.as_slices();
+        let (front_samples, remainder) = front.as_chunks::<2>();
+        let mut observe = |sample: [u8; 2]| {
+            let value = i16::from_le_bytes(sample) as f64 / 32768.0;
+            self.sum_squares += value * value;
+            self.samples += 1;
+        };
+        for sample in front_samples {
+            observe(*sample);
+        }
+        // The ring can wrap between the low and high bytes of one sample.
+        if let (Some(low), Some(high)) = (remainder.first(), back.first()) {
+            observe([*low, *high]);
+            back = &back[1..];
+        }
+        for sample in back.as_chunks::<2>().0 {
+            observe(*sample);
         }
     }
 
@@ -1331,6 +1341,19 @@ fn capture_microphone(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pcm_level_preserves_samples_split_across_ring_wrap() {
+        let mut bytes = std::collections::VecDeque::with_capacity(8);
+        bytes.extend([0u8; 8]);
+        for _ in 0..7 { bytes.pop_front(); }
+        bytes.extend([0x40, 0x00, 0x40]);
+        assert_eq!(bytes.as_slices().0.len(), 1);
+        let mut signal = super::AudioSignal::default();
+        signal.observe_pcm16(&bytes);
+        assert_eq!(signal.samples, 2);
+        assert!((signal.sum_squares - 0.5).abs() < 1e-9);
+    }
+
     use super::*;
 
     #[test]

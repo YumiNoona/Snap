@@ -10,7 +10,7 @@ The findings below describe the original review, before fixes. The desktop sourc
 - Recording lifecycle operations are serialized; slow initialization runs off the command thread. Failed starts clean up participants and encoder processes.
 - Recording waits for the editor to save and unmount. Media decoders and shared caches are released before capture, and opening the editor during recording is prevented. Hardware recording defaults remain unchanged; no software fallback or silent quality reduction was added.
 - Video layers have independent playback cursors and bounded inactive caches. Audio edits participate in undo/redo.
-- The former split control is honestly labeled as a marker, with a working shortcut. Actual editable clip splitting remains a future feature.
+- The former split control was relabeled as a marker. The 8 October workspace update adds actual footage segments, Razor/split, edge trimming, snapping, ripple delete, joined sequence/source views, and matching preview/export timing. These newer timeline changes are not part of the published 9.0.1 release.
 - User-facing errors hide raw paths/stacks; diagnostics are available through an explicit copy action. Export settings, focus handling, and GIF subtitle choices were corrected.
 
 Verification: desktop tests pass (72 tests), TypeScript/Vite production build passes, and native library tests pass (39 passed, one intentionally ignored model-download test). npm audit reports zero vulnerabilities after a targeted dependency update. Website source was not changed; its lint/build passed during the original review.

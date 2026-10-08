@@ -3,6 +3,18 @@ import { audioTrackPath, captionsToSrt, captionsToVtt, chunkCaptionSegments, cre
 import type { AudioTrack, CaptionTrack } from "./types";
 
 describe("caption audio source selection", () => {
+  it("retains saved audio timing and automation after rediscovering recording files",()=>{
+    const discovered=createAudioTrack("D:\\new\\clip.mp4","microphone");
+    const saved={...discovered,path:"D:\\old\\mic.wav",linked:false,start:2,fadeIn:.3,volumeKeys:[{time:1,volume:.5}]};
+    expect(mergeAudioTracks([discovered],[saved])[0]).toMatchObject({path:discovered.path,linked:false,start:2,fadeIn:.3,volumeKeys:saved.volumeKeys});
+  });
+  it("keeps measured words with their matching caption and clips word timing on trim",()=>{
+    const words=[{text:"Hello",startMs:100,endMs:400},{text:"world",startMs:500,endMs:900}];
+    const result=chunkCaptionSegments([{text:"Hello world",startMs:0,endMs:1000,words}]);
+    expect(result[0]).toMatchObject({startMs:100,endMs:900,words});
+    const segment={...result[0],id:"c",language:"en",sourceTrackIds:[],userEdited:false};
+    expect(updateCaptionTiming([segment],"c","start",300)[0].words?.[0].startMs).toBe(300);
+  });
   it("keeps microphone transcription independent from system audio", () => {
     const mic = createAudioTrack("C:\\Videos\\Snap\\demo.mp4", "microphone");
     const system = createAudioTrack("C:\\Videos\\Snap\\demo.mp4", "system");

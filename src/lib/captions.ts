@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AudioTrack, AudioTrackKind, CaptionSegment, CaptionTrack } from "./types";
+import type { AudioTrack, AudioTrackKind, CaptionSegment, CaptionTrack, CaptionWord } from "./types";
 import { recordingDataPaths } from "./recordingPaths";
 
 export type TranscriptionLanguage = "auto" | "en" | "hi" | "es" | "fr" | "de" | "it" | "pt" | "ja" | "zh" | "ko";
@@ -16,7 +16,7 @@ export interface TranscriptionEnvironment {
 interface NativeTranscriptionResult {
   language: string;
   sourcePath: string;
-  segments: Array<{ startMs: number; endMs: number; text: string }>;
+  segments: Array<{ startMs: number; endMs: number; text: string; words?: CaptionWord[] }>;
 }
 
 const MAX_CAPTION_WORDS = 7;
@@ -54,11 +54,15 @@ export function chunkCaptionSegments(segments: NativeTranscriptionResult["segmen
         for (let i = 0; i < subWords.length; i += per) timed.push({ startMs: 0, endMs: 0, text: subWords.slice(i, i + per).join(" ") });
       }
     }
-    let cursor = segment.startMs;
+    let cursor = segment.startMs, wordCursor=0;
     const totalWeight = timed.reduce((sum, item) => sum + item.text.length, 0);
+    const measured=segment.words?.length===words.length&&segment.words.every((word,index)=>word.text.trim()===words[index])?segment.words:undefined;
     return timed.map((item, index) => {
-      const endMs = index === timed.length - 1 ? segment.endMs : Math.min(segment.endMs, cursor + Math.max(350, Math.round(duration * item.text.length / totalWeight)));
-      const result = { ...item, startMs: cursor, endMs };
+      const count=item.text.split(/\s+/).length;
+      const itemWords=measured?.slice(wordCursor,wordCursor+count); wordCursor+=count;
+      const startMs=itemWords?.[0]?.startMs??cursor;
+      const endMs=itemWords?.[itemWords.length-1]?.endMs??(index === timed.length - 1 ? segment.endMs : Math.min(segment.endMs, cursor + Math.max(350, Math.round(duration * item.text.length / totalWeight))));
+      const result = { ...item, startMs, endMs, ...(itemWords?.length?{words:itemWords.map(word=>({...word}))}:{}) };
       cursor = endMs;
       return result;
     });
@@ -128,7 +132,7 @@ export function mergeAudioTracks(discovered: AudioTrack[], saved: AudioTrack[]):
   const refreshed = discovered.map((track) => {
     const previous = savedByKind.get(track.kind);
     return previous
-      ? { ...track, id: previous.id || track.id, label: previous.label || track.label, muted: previous.muted, volume: previous.volume }
+      ? { ...previous, ...track, id: previous.id || track.id, label: previous.label || track.label, muted: previous.muted, volume: previous.volume }
       : track;
   });
   const imported = saved.filter((track) => track.kind === "imported" && track.path.trim());
@@ -164,6 +168,7 @@ export function normalizeCaptionTimeline(
     if (current.endMs <= current.startMs) {
       if (previous) {
         previous.text = `${previous.text.trim()} ${current.text.trim()}`;
+        previous.words = previous.words && current.words ? [...previous.words,...current.words] : undefined;
         previous.endMs = Math.max(previous.endMs, current.endMs);
       }
       continue;
@@ -177,6 +182,7 @@ export function normalizeCaptionTimeline(
       if (gap <= SHORT_CAPTION_MERGE_GAP_MS
         && (previousDuration < MIN_READABLE_CAPTION_MS || currentDuration < MIN_READABLE_CAPTION_MS)) {
         updatedPrevious.text = `${updatedPrevious.text.trim()} ${current.text.trim()}`;
+        updatedPrevious.words = updatedPrevious.words && current.words ? [...updatedPrevious.words,...current.words] : undefined;
         updatedPrevious.endMs = Math.max(updatedPrevious.endMs, current.endMs);
         continue;
       }
@@ -253,6 +259,8 @@ export function updateCaptionTiming(
       userEdited: true,
     };
   }
+  const updated=ordered[index];
+  updated.words=updated.words?.map(word=>({...word,startMs:Math.max(updated.startMs,word.startMs),endMs:Math.min(updated.endMs,word.endMs)})).filter(word=>word.endMs>word.startMs);
   return ordered;
 }
 

@@ -1,0 +1,20 @@
+/* Advanced controls use the same section, switch, dropdown and action-button components as the editor. */
+.webcam-animation-tools .ss-section-heading { display:flex; align-items:center; gap:8px; }
+.webcam-animation-tools .ss-section-heading svg { color:var(--text-secondary); flex-shrink:0; }
+.webcam-animation-tools p, .webcam-animation-tools small { color:var(--text-secondary); font-size:12px; line-height:1.5; }
+.webcam-animation-tools label { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0; min-height:32px; font-size:12px; color:var(--text-secondary); }
+.webcam-animation-tools input { box-sizing:border-box; min-width:0; width:112px; height:32px; padding:6px 9px; color:var(--text-primary); background:var(--bg-surface-sunken); border:1px solid var(--border-default); border-radius:7px; font:12px var(--font-family); outline:none; }
+.webcam-animation-tools input:focus { border-color:var(--border-focus); }
+.webcam-animation-tools .ss-drawer-action-btn { display:flex; align-items:center; justify-content:center; gap:7px; min-height:34px; font-size:12px; }
+.webcam-animation-tools .ss-drawer-action-btn:disabled { opacity:.35; cursor:default; transform:none; }
+.editor-tool-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:12px 0; }
+.webcam-animation-tools fieldset { min-width:0; margin:12px 0; padding:10px 0; border:0; border-top:1px solid var(--border-subtle); }
+.webcam-animation-tools legend { padding:0 6px 0 0; font-size:12px; color:var(--text-secondary); }
+/* Tilt follows Canvas Styling's shared sections and field layout. */
+.tilt-presets { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:2px 0 4px; }
+.tilt-presets .subtab-btn { min-width:0; padding:0 5px; font-size:11px; }
+.tilt-reset-pose { display:flex; align-items:center; justify-content:center; gap:7px; }
+.tilt-keyframe-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.tilt-keyframe-actions { display:grid; grid-template-columns:38px 38px; gap:8px; }
+.tilt-keyframe-actions .ss-drawer-action-btn { display:flex; align-items:center; justify-content:center; gap:7px; }
+.tilt-remove-key:disabled { opacity:.35; cursor:default; transform:none; }
