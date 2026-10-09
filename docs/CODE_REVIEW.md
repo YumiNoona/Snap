@@ -38,3 +38,16 @@ This review covers the desktop import graph, native capture/audio/export lifecyc
 - Headless browser style check confirms white panel surfaces, a lighter preview workspace, a blue playhead, darker keyframes and pale zoom bars. This was a CSS fixture check, not live Windows capture testing.
 
 Live capture during gaming, device-disconnect tests and older-laptop CPU/GPU measurements remain hardware validation work. This cleanup does not change the screen capture encoder or add processing to its frame loop.
+
+
+## Follow-up integration — 9 October 2026
+
+Implemented the requested follow-ups except automatic preview adaptation: consistent effect locks, bounded/cancellable metadata and derivative preparation, content-aware waveform cache identity, keyboard-safe dropdowns with automatic placement, source-frame trimming, independent per-clip zoom/caption/tilt overrides, animation keyframe selection/copy/paste/nudging/snapping, live boundary previews, and a bounded post-recording encoder summary. Scoped effects persist in clip data and export resolves an explicit clip identity, including repeated source ranges. Caption sidecar output honors local caption styles and visibility; disabling burned captions also suppresses local overrides.
+
+Recording diagnostics add counters to existing five-second health checks and write a small JSON companion after capture finalization. There is no new React work or media analysis during capture. Hardware gaming/Unreal performance still requires measurements on target devices; the diagnostic summary does not infer dropped frames from static capture intervals.
+
+## Timeline assembly follow-up — 9 October 2026
+
+Added explicit gap entries, per-clip rates and persisted audio clip segments. Normal deletion/trimming now preserves time; ripple edits are explicit. Source-to-sequence mapping is shared by transport, thumbnails/waveforms, animation lanes, captions, delivery metadata and canvas export. Native source segments carry gap/rate flags, while explicit audio segments carry absolute placement and pitch policy. Each tempo-filter segment is bounded to its planned duration, and audio placement uses sample delays.
+
+Fixed float cut-boundary selection, gap-frame leakage into the next exported clip, slip/duplicate association of explicit linked audio, playback reconciliation after structural edits, animation drag timing at non-unit clip speed and gap-aware playhead dragging. Transition boundary frames are decoded deterministically, independent of previous scrubbing, and temporary decoders/canvases are released. The redesigned inspector reuses existing dropdowns and theme variables. Recording loops and website isolation receive no new editor workload.

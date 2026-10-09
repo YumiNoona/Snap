@@ -1,6 +1,14 @@
 import type { ScreenTiltConfig } from "./screenTilt";
 /** Non-destructive retained ranges in the original recording's clock. */
-export interface VideoClip { id: string; start: number; end: number; groupId?: string }
+export interface ClipEffects {
+  config: Pick<EditorConfig, "screenTilt" | "zoomEnabled" | "zoomLevel" | "zoomMovement" | "fixedZoomPart" | "zoomMode">;
+  keyframes: Keyframe[];
+  captions: CaptionTrack[];
+}
+export interface VideoClip { id: string; start: number; end: number; groupId?: string; sourceClipId?: string; effects?: ClipEffects; gap?: boolean; speed?: number; transition?: ClipTransition }
+
+export type TransitionEffect = "none" | "fade" | "dissolve" | "slide" | "push" | "wipe" | "zoom";
+export interface ClipTransition { effect: TransitionEffect; duration: number; direction?: "left" | "right" | "up" | "down"; easing?: Keyframe["easing"] }
 
 export interface InputEvent {
   ts: number;
@@ -24,6 +32,7 @@ export interface Keyframe {
 }
 
 export interface ZoomRegionSelection {
+  clipId?: string;
   startMs: number;
   endMs: number;
   regionId?: string;
@@ -84,6 +93,10 @@ export interface ShadowConfig {
 export type LayerType = "text" | "shape" | "mask" | "image" | "video";
 
 export interface BaseLayer {
+  /** Imported media follows the edited sequence; legacy annotations follow source time. */
+  timeSpace?: "sequence";
+  transition?: ClipTransition;
+  exitTransition?: ClipTransition;
   id: string;
   type: LayerType;
   start: number;
@@ -162,6 +175,8 @@ export interface ImageLayer extends BaseLayer {
 }
 
 export interface VideoLayer extends BaseLayer {
+  sourceOffset?: number;
+  sourceDuration?: number;
   type: "video";
   path: string;
   fit?: "cover" | "contain";
@@ -271,6 +286,7 @@ export interface CameraOverlayConfig {
 
 export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 
+export interface AudioClip { id: string; sourceStart: number; sourceEnd: number; start: number; videoClipId?: string; linked?: boolean; speed?: number; volume?: number; fadeIn?: number; fadeOut?: number }
 export interface AudioTrack {
   id: string;
   kind: AudioTrackKind;
@@ -287,6 +303,8 @@ export interface AudioTrack {
   noiseReduction?: boolean;
   ducking?: number;
   volumeKeys?: Array<{ time: number; volume: number }>;
+  clips?: AudioClip[];
+  preservePitch?: boolean;
 }
 
 export interface CaptionWord {
@@ -309,6 +327,7 @@ export interface CaptionSegment {
 }
 
 export interface CaptionSegmentSelection {
+  clipId?: string;
   trackId: string;
   segmentId: string;
 }

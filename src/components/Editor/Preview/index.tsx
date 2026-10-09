@@ -1,7 +1,12 @@
+import { projectMediaLayers } from "../../../lib/mediaTimeline";
+import { sequenceTime } from "../../../lib/videoEditing";
+import { renderTransitionBoundary } from "../../../lib/exportCompositor";
+import { FootageTransitions } from "../../../lib/transitions";
+import { drawGapLayers } from "../../../lib/gapLayers";
 import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "../../../lib/screenTilt";
 import { animatedLayer, anchoredLayer } from "../../../lib/layerAnimation";
 import { userError } from "../../../lib/userError";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer, MaskLayer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
@@ -23,6 +28,7 @@ import "./Preview.css";
 interface Props {
   videoPath: string;
   sourceDuration?: number;
+  readyToPaint?:boolean;
   inputLogPath: string;
   config: EditorConfig;
   keyframes: Keyframe[];
@@ -50,6 +56,10 @@ interface Props {
   hasExternalAudio?: boolean;
   cameraMedia?: { path: string; startOffsetMs: number } | null;
   originalOnly?: boolean;
+  gapTime?: number;
+  activeClipId?: string;
+  transitionConfig?:EditorConfig;
+  transitionKeyframes?:Keyframe[];
 }
 
 type GizmoHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
@@ -103,6 +113,7 @@ function firstClickAfter(clicks: InputEvent[], timestampMs: number) {
 export default function Preview({
   videoPath,
   sourceDuration=0,
+  readyToPaint=true,
   inputLogPath,
   config,
   keyframes,
@@ -128,6 +139,9 @@ export default function Preview({
   hasExternalAudio = false,
   cameraMedia = null,
   originalOnly = false,
+  gapTime,
+  activeClipId,
+  transitionConfig=config,transitionKeyframes=keyframes,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -141,6 +155,8 @@ export default function Preview({
   const [playbackPath, setPlaybackPath] = useState(videoPath);
   const previewRepairAttemptedRef = useRef(false);
   const decodedFrameCallbackRef = useRef<number | null>(null);
+  const transitionsRef=useRef(new FootageTransitions());
+  useEffect(()=>()=>transitionsRef.current.clear(),[videoPath]);
   const renderRef = useRef<() => void>(() => {});
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
   const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
@@ -168,7 +184,11 @@ export default function Preview({
   const lastPackRef = useRef<{ path: string; img: HTMLImageElement } | null>(null);
   const smoothedCursorRef = useRef<{ x: number; y: number; ts: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [canvasSize, setCanvasSize] = useState({ w: 1280, h: 720 });
+  const [canvasSize, setCanvasSize] = useState({ w: 0, h: 0 });
+  const [frameReady,setFrameReady]=useState(false);
+  const frameReadyRef=useRef(false);
+  const transitionPendingRef=useRef<string|null>(null);
+  const transitionCacheRef=useRef<{config:EditorConfig;keys:Keyframe[];w:number;h:number;path:string}|null>(null);
   const [eventsReady, setEventsReady] = useState(false);
   const [currentZoom, setCurrentZoom] = useState(1.0);
   const [zoomTargetDragging, setZoomTargetDragging] = useState(false);
@@ -208,12 +228,14 @@ export default function Preview({
   }, []);
 
   useEffect(() => {
-    reconcileVideoLayers(config.layers, videoRef.current?.currentTime ?? 0, playing, layerVideoCacheRef.current);
-  }, [config.layers, playing]);
+    const time=videoRef.current?.currentTime??0;
+    reconcileVideoLayers(projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)), time, playing, layerVideoCacheRef.current);
+  }, [config.layers, config.videoClips, config.trimStart, activeClipId, gapTime, playing]);
 
   useEffect(() => {
     setPlaybackPath(videoPath);
     setVideoReady(false);
+    frameReadyRef.current=false;setFrameReady(false);
     setLoadError("");
     previewRepairAttemptedRef.current = false;
   }, [videoPath]);
@@ -414,7 +436,8 @@ export default function Preview({
       }
 
       const quality = config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1;
-      setCanvasSize({ w: Math.max(16, Math.round(outW * quality)), h: Math.max(16, Math.round(outH * quality)) });
+      const w=Math.max(16,Math.round(outW*quality)),h=Math.max(16,Math.round(outH*quality));
+      setCanvasSize(previous=>previous.w===w&&previous.h===h?previous:{w,h});
     },
     [config.aspectRatio, config.previewQuality]
   );
@@ -474,14 +497,40 @@ export default function Preview({
     [config.cursorStyle.showClickRipples, config.cursorStyle.clickEffect, config.cursorStyle.clickSound, screenToVideo, playClickSound]
   );
 
+  useLayoutEffect(()=>{
+    const list=transitionConfig.videoClips??[],index=list.findIndex(clip=>clip.id===activeClipId);
+    const cached=transitionCacheRef.current;
+    if(!cached||cached.config!==transitionConfig||cached.keys!==transitionKeyframes||cached.w!==canvasSize.w||cached.h!==canvasSize.h||cached.path!==videoPath){
+      transitionsRef.current.clear();transitionCacheRef.current={config:transitionConfig,keys:transitionKeyframes,w:canvasSize.w,h:canvasSize.h,path:videoPath};
+    }
+    const targets=[index,index+1].filter(i=>i>=0&&list[i]?.transition&&list[i-1]&&!list[i-1].gap&&!transitionsRef.current.isReady(list[i].id));
+    transitionPendingRef.current=targets.includes(index)?activeClipId??null:null;
+    if(!targets.length||!canvasSize.w||!canvasSize.h)return;
+    const abort=new AbortController();
+    void (async()=>{for(const target of targets){
+      if(abort.signal.aborted)break;
+      const clip=list[target],previous=list[target-1];
+      try{
+        const snapshot=await renderTransitionBoundary(videoPath,inputLogPath,transitionKeyframes,transitionConfig,previous.id,canvasSize.w,canvasSize.h,abort.signal);
+        if(!abort.signal.aborted){transitionsRef.current.setOutgoing(clip.id,snapshot);if(transitionPendingRef.current===clip.id)transitionPendingRef.current=null;renderRef.current();}
+        snapshot.width=snapshot.height=0;
+      }catch{if(!abort.signal.aborted&&transitionPendingRef.current===clip.id){transitionPendingRef.current=null;renderRef.current();}}
+    }})();
+    return ()=>abort.abort();
+  },[activeClipId,transitionConfig,transitionKeyframes,videoPath,inputLogPath,canvasSize.w,canvasSize.h]);
+
   // ── Render ──────────────────────────────────────────────────────────────
   const render = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || canvasSize.w === 0) return;
+    if (!video || !canvas || canvasSize.w === 0 || !readyToPaint) return;
+    if(gapTime===undefined&&(video.readyState<2||video.seeking||!eventsReady))return;
+    const transitionClip=config.videoClips?.find(clip=>clip.id===activeClipId);
+    if(transitionClip?.transition&&transitionPendingRef.current===activeClipId)return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    if(!frameReadyRef.current){frameReadyRef.current=true;setFrameReady(true);}
 
     // Each frame starts from a known compositor state. This protects the
     // video from stale caption alpha/filter/shadow state after a WebView2
@@ -632,6 +681,7 @@ export default function Preview({
     }
     ctx.restore();
 
+    if (gapTime !== undefined) { cameraRef.current?.pause(); drawGapLayers(ctx,config.layers,gapTime,playing,layerVideoCacheRef.current,{x:offsetX,y:offsetY,w:videoW,h:videoH},config.playbackRate||1); return; }
     const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
     const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
@@ -783,6 +833,8 @@ export default function Preview({
 
     screenCtx.restore();
     finishScreenTilt(ctx,tiltPass);
+    const clipIndex=config.videoClips?.findIndex(clip=>clip.id===activeClipId)??-1;
+    transitionsRef.current.draw(ctx,config.videoClips?.[clipIndex],video.currentTime,config.videoClips?.[clipIndex+1]);
 
     const camera = cameraRef.current;
     if (camera && cameraMedia) {
@@ -801,8 +853,9 @@ export default function Preview({
 
     // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
-    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
-    reconcileVideoLayers(config.layers, videoTs, playing, layerVideoCacheRef.current);
+    const timedLayers = projectMediaLayers(config.layers, videoTs, (config.videoClips?.length?sequenceTime(config.videoClips,videoTs,activeClipId):videoTs-config.trimStart));
+    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
+    reconcileVideoLayers(timedLayers, videoTs, playing, layerVideoCacheRef.current);
     const activeMasks = (simplified ? [] : activeLayers).filter((layer) => layer.type === "mask");
 
     // Masks sample the already-composited preview, not the raw video. This
@@ -854,7 +907,7 @@ export default function Preview({
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
-      drawVisualLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh);
+      drawVisualLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh, layer.timeSpace === "sequence" ? config.playbackRate || 1 : video.playbackRate);
       ctx.restore();
     }
 
@@ -1004,7 +1057,7 @@ export default function Preview({
     }
 
   }, [
-    canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
+    canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, eventsReady, activeClipId, gapTime, readyToPaint, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
     getCursorAt, screenToVideo, spawnClickRipples
   ]);
   renderRef.current = render;
@@ -1088,7 +1141,7 @@ export default function Preview({
         const p = canvasToBacking(e.clientX, e.clientY);
         const g = geomRef.current;
         const time = videoRef.current?.currentTime ?? 0;
-        const active = config.layers.filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02).map(layer=>anchoredLayer(animatedLayer(layer,time),sourceViewRef.current,videoRef.current?.videoWidth??1,videoRef.current?.videoHeight??1));
+        const active = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02).map(layer=>anchoredLayer(animatedLayer(layer,time),sourceViewRef.current,videoRef.current?.videoWidth??1,videoRef.current?.videoHeight??1));
         const selected = active.find((layer) => layer.id === selectedLayerId) ?? null;
         let target = selected;
         let handle: GizmoHandle | undefined;
@@ -1123,7 +1176,7 @@ export default function Preview({
         e.preventDefault(); e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
         layerDrag.current = {
-          mode, handle, layer: { ...target }, startX: p.x, startY: p.y,
+          mode, handle, layer: { ...target, start: config.layers.find(l=>l.id===target!.id)!.start, end: config.layers.find(l=>l.id===target!.id)!.end }, startX: p.x, startY: p.y,
           centerX: rect.cx, centerY: rect.cy,
           startAngle: Math.atan2(p.y - rect.cy, p.x - rect.cx) * 180 / Math.PI,
         };
@@ -1135,7 +1188,7 @@ export default function Preview({
       const p = canvasToBacking(e.clientX, e.clientY);
       cropDrag.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
     },
-    [cropMode, zoomTargetMode, onZoomTargetPick, zoomTargetFromClient, canvasToBacking, config.layers, selectedLayerId, onLayerChange, emitLayerChange, onLayerSelect]
+    [cropMode, zoomTargetMode, onZoomTargetPick, zoomTargetFromClient, canvasToBacking, config.layers, config.videoClips, config.trimStart, activeClipId, gapTime, selectedLayerId, onLayerChange, emitLayerChange, onLayerSelect]
   );
 
   const handleCropMouseMove = useCallback(
@@ -1187,7 +1240,7 @@ export default function Preview({
       }
       if (!cropMode && !zoomTargetMode && canvasRef.current) {
         const time = videoRef.current?.currentTime ?? 0;
-        const selected = config.layers.find((layer) => layer.id === selectedLayerId && time >= layer.start - .02 && time <= layer.end + .02);
+        const selected = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).find((layer) => layer.id === selectedLayerId && time >= layer.start - .02 && time <= layer.end + .02);
         if (selected) {
           const g = geomRef.current;
           const rect = layerCanvasRect(selected, g);
@@ -1208,7 +1261,7 @@ export default function Preview({
       cropDrag.current.x1 = p.x;
       cropDrag.current.y1 = p.y;
     },
-    [cropMode, zoomTargetMode, canvasToBacking, zoomTargetFromClient, onZoomTargetPick, onLayerChange, emitLayerChange, config.layers, selectedLayerId]
+    [cropMode, zoomTargetMode, canvasToBacking, zoomTargetFromClient, onZoomTargetPick, onLayerChange, emitLayerChange, config.layers, config.videoClips, config.trimStart, activeClipId, gapTime, selectedLayerId]
   );
 
   const handleCropMouseUp = useCallback((event?: React.PointerEvent) => {
@@ -1257,10 +1310,7 @@ export default function Preview({
   // handled separately by requestVideoFrameCallback below; running a second
   // unconditional rAF compositor doubled canvas work and could make otherwise
   // smooth 60 fps recordings visibly stutter.
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => renderRef.current());
-    return () => cancelAnimationFrame(frame);
-  }, [render, videoReady]);
+  useLayoutEffect(() => { renderRef.current(); }, [render, videoReady, eventsReady]);
 
   // `currentTime` and the decoded texture exposed by WebView2 are not always
   // advanced atomically. In particular, replaying an MP4 after it reaches the
@@ -1378,6 +1428,7 @@ export default function Preview({
       onPointerUp={handleCropMouseUp}
       onPointerCancel={handleCropMouseUp}
     >
+      {!frameReady&&!loadError&&<span className="preview-loading" role="status">Loading recording…</span>}
       {proxyStatus && <small className="preview-proxy-status">{proxyStatus}</small>}
       {loadError && <p className="preview-error">{loadError}</p>}
       <canvas
@@ -1385,7 +1436,7 @@ export default function Preview({
         width={canvasSize.w}
         height={canvasSize.h}
         className="preview-canvas"
-        style={{ width: canvasSize.w / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), height: canvasSize.h / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), cursor: cropMode ? "crosshair" : zoomTargetMode ? (zoomTargetDragging ? "grabbing" : "grab") : selectedLayerId ? "move" : undefined }}
+        style={{ visibility:frameReady?"visible":"hidden", width: canvasSize.w / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), height: canvasSize.h / (config.previewQuality === "quarter" ? .25 : config.previewQuality === "half" ? .5 : 1), cursor: cropMode ? "crosshair" : zoomTargetMode ? (zoomTargetDragging ? "grabbing" : "grab") : selectedLayerId ? "move" : undefined }}
       />
       {cropMode && (
         <div className="crop-hint">

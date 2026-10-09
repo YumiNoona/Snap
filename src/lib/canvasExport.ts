@@ -5,7 +5,7 @@ import { captionsToSrt, captionsToVtt } from "./captions";
 import { createIvfHeader, wrapIvfFrame, type IvfCodec } from "./ivf";
 import { exportPlaybackRate, renderProgress } from "./exportTiming";
 import { ExportWriteBudget } from "./exportWriteBudget";
-import { retainedClips, sequenceDuration, sequenceTime, mapCaptionTracks } from "./videoEditing";
+import { retainedClips, sequenceDuration, sequenceTime, clipSpeed, clipDuration, mapCaptionTracks } from "./videoEditing";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
@@ -79,7 +79,8 @@ export async function runCanvasExport(
     cameraMedia,
     exportSettings.width,
     exportSettings.height,
-    signal
+    signal,
+    exportSettings.captions === "burned" || exportSettings.captions === "burned-srt"
   );
 
   const stagingBasePath = exportSettings.outputPath.replace(/\.(mp4|webm|gif)$/i, "");
@@ -210,7 +211,7 @@ export async function runCanvasExport(
     }
 
     compositor.video.defaultPlaybackRate = playbackRate;
-    compositor.video.playbackRate = playbackRate;
+    compositor.video.playbackRate = playbackRate * clipSpeed(clips[0]);
     // A tainted canvas can display normally but browsers prohibit exporting
     // pixels from it. Verify the sought frame before spending time rendering.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -248,12 +249,15 @@ export async function runCanvasExport(
         submittedFrames += 1;
       }
     };
+    let gapElapsed = 0, gapWall = performance.now();
     let clipIndex = 0;
+    compositor.setClip?.(clips[0].id);
+    await compositor.prepareClip?.(clips[0].id);
     let changingClip = false;
     compositor.setFrameConsumer(() => {
       const clip = clips[clipIndex];
-      if (changingClip || compositor.video.seeking || compositor.video.currentTime < clip.start || compositor.video.currentTime >= clip.end) return;
-      const sourceElapsed = sequenceTime(clips, compositor.video.currentTime, clips[clipIndex].id);
+      if (changingClip || clip.gap && gapElapsed >= clip.end || !clip.gap && (compositor.video.seeking || compositor.video.currentTime < clip.start || compositor.video.currentTime >= clip.end)) return;
+      const sourceElapsed = sequenceTime(clips, clip.gap ? gapElapsed : compositor.video.currentTime, clips[clipIndex].id);
       const exportElapsed = sourceElapsed / playbackRate;
       try {
         submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
@@ -262,7 +266,7 @@ export async function runCanvasExport(
       }
     });
     compositor.renderFrame();
-    await compositor.video.play();
+    if(!clips[0].gap) await compositor.video.play();
 
     await new Promise<void>((resolve, reject) => {
       let lastTime = compositor.video.currentTime;
@@ -280,13 +284,21 @@ export async function runCanvasExport(
         }
         if (changingClip) { requestAnimationFrame(check); return; }
         const clip = clips[clipIndex];
-        if (compositor.video.currentTime >= clip.end || compositor.video.ended) {
+        const now=performance.now();
+        if(clip.gap&&!heldForEncoder)gapElapsed+=(now-gapWall)/1000*playbackRate;
+        gapWall=now;
+        if(clip.gap){compositor.setGapTime?.(sequenceTime(clips,gapElapsed,clip.id));compositor.renderFrame();}
+        const mediaTime=clip.gap?gapElapsed:compositor.video.currentTime;
+        if (mediaTime >= clip.end || !clip.gap && compositor.video.ended) {
           compositor.video.pause();
-          try { submitFramesThrough(Math.ceil((sequenceTime(clips, clip.start, clip.id) + clip.end - clip.start) / playbackRate * fps)); }
+          try { submitFramesThrough(Math.ceil((sequenceTime(clips, clip.start, clip.id) + clipDuration(clip)) / playbackRate * fps)); }
           catch (error) { reject(error); return; }
           if (clipIndex === clips.length - 1) { resolve(); return; }
           clipIndex += 1;
+          compositor.setClip?.(clips[clipIndex].id);
           heldForEncoder = false;
+          gapElapsed=0;gapWall=performance.now();
+          if(clips[clipIndex].gap){compositor.setGapTime?.(sequenceTime(clips,0,clips[clipIndex].id));compositor.renderFrame();requestAnimationFrame(check);return;}
           changingClip = true;
           const target = clips[clipIndex].start;
           const seekNext = new Promise<void>((done, fail) => {
@@ -296,12 +308,13 @@ export async function runCanvasExport(
             const timer = setTimeout(() => { cleanup(); fail(new Error("Video seek timed out")); }, 15_000);
             compositor.video.addEventListener("seeked", ready, { once: true });
             signal?.addEventListener("abort", abort, { once: true });
+            if(Math.abs(compositor.video.currentTime-target)<.001&&!compositor.video.seeking){ready();return;}
             try { compositor.video.currentTime = target; } catch (error) { cleanup(); fail(error); }
           });
-          void seekNext.then(async () => {
+          void Promise.all([seekNext,compositor.prepareClip?.(clips[clipIndex].id)]).then(async () => {
             lastTime = target; lastAdvance = performance.now();
             changingClip = false;
-            if (!signal?.aborted) { compositor.renderFrame(); await compositor.video.play(); }
+            if (!signal?.aborted) { compositor.video.playbackRate=playbackRate*clipSpeed(clips[clipIndex]);compositor.renderFrame(); await compositor.video.play(); }
           }).catch(error => { changingClip = false; encoderError = error instanceof Error ? error : new Error(String(error)); });
           requestAnimationFrame(check); return;
         }
@@ -327,12 +340,12 @@ export async function runCanvasExport(
           }
           if (currentBacklog <= resumeThreshold && writeBudget.canResume) {
             heldForEncoder = false;
-            void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
+            if(!clip.gap)void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
           }
           requestAnimationFrame(check);
           return;
         }
-        if (compositor.video.currentTime !== lastTime) { lastTime = compositor.video.currentTime; lastAdvance = performance.now(); }
+        if (mediaTime !== lastTime) { lastTime = mediaTime; lastAdvance = performance.now(); }
         if (compositor.video.error || performance.now() - lastAdvance > 15000) {
           reject(new Error("Export stopped because video playback stalled. Check that the source file is readable."));
           return;
@@ -343,7 +356,7 @@ export async function runCanvasExport(
         }
         onProgress({
           phase: "recording",
-          progress: renderProgress(sequenceTime(clips, compositor.video.currentTime), 0, editedDuration),
+          progress: renderProgress(sequenceTime(clips, mediaTime, clip.id), 0, editedDuration),
           message: "Recording composited frames…",
         });
         requestAnimationFrame(check);
@@ -373,13 +386,13 @@ export async function runCanvasExport(
         exportSettings,
         captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(outputCaptions, 0, editedDuration, playbackRate) : null,
         clickTimesMs: config.cursorStyle.clickSound
-          ? clips.flatMap(c => compositor.clickTimesMs.filter(time => time >= c.start * 1000 && time < c.end * 1000).map(time => (sequenceTime(clips, c.start, c.id) * 1000 + time - c.start * 1000) / playbackRate))
+          ? clips.filter(c=>!c.gap).flatMap(c => compositor.clickTimesMs.filter(time => time >= c.start * 1000 && time < c.end * 1000).map(time => (sequenceTime(clips, c.start, c.id) * 1000 + (time - c.start * 1000) / clipSpeed(c)) / playbackRate))
           : [],
         audioMix: config.audio,
         audioTracks,
         trimStartSeconds: trimStart,
         exportDurationSeconds: Math.max(0.01, editedDuration / playbackRate),
-        sourceSegments: clips.map(c => ({ start: c.start, end: c.end })),
+        sourceSegments: clips.map(c => ({ start: c.start, end: c.end, speed: clipSpeed(c), gap: c.gap ?? false })),
         playbackRate,
       },
     });

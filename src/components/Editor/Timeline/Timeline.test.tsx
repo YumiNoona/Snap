@@ -2,7 +2,7 @@ import { createElement, useState, type ComponentProps } from "react";
 import { act, create } from "react-test-renderer";
 import { expect, it, vi } from "vitest";
 import Timeline from "./index";
-import { DEFAULT_EDITOR_CONFIG, type VideoClip } from "../../../lib/types";
+import { DEFAULT_EDITOR_CONFIG, type VideoClip, type AudioTrack } from "../../../lib/types";
 vi.mock("react-dom", () => ({ createPortal: (node: unknown) => node }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), convertFileSrc: (path: string) => path }));
 
@@ -35,7 +35,7 @@ it("redraws loaded audio waveforms when the editor theme changes", async () => {
   }
 });
 
-it("splits with the toolbar and razor, selects footage and ripple deletes it", async () => {
+it("splits with the toolbar and razor, selects footage and leaves a gap when deleting", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
@@ -67,10 +67,11 @@ it("splits with the toolbar and razor, selects footage and ripple deletes it", a
     expect(current!.map(c => [c.start, c.end])).toEqual([[0, 4], [4, 7], [7, 10]]);
     await act(async () => { button("Selection tool").props.onClick(); });
     await act(async () => { button("Footage segment 2").props.onClick(mouse(500)); });
-    expect(button("Ripple delete selected footage").props.disabled).toBe(false);
-    await act(async () => { button("Ripple delete selected footage").props.onClick(); });
-    expect(current!.map(c => [c.start, c.end])).toEqual([[0, 4], [7, 10]]);
-    expect(button("Footage segment 2").props.style.left).toBe(button("Footage segment 1").props.style.width);
+    expect(button("Delete selected footage").props.disabled).toBe(false);
+    await act(async () => { button("Delete selected footage").props.onClick(); });
+    expect(current!.map(c => [c.start, c.end])).toEqual([[0, 4], [0,3], [7, 10]]);
+    expect(current![1].gap).toBe(true);
+    expect(button("Footage segment 3").props.style.left).toBe(700);
     expect(seek).toHaveBeenCalledWith(5, expect.any(String));
     await act(async () => { renderer.root.findAllByProps({ title: "Trim segment end" })[0].props.onMouseDown(mouse(400)); });
     const callbacks = vi.mocked(document.addEventListener).mock.calls;
@@ -79,9 +80,10 @@ it("splits with the toolbar and razor, selects footage and ripple deletes it", a
     await act(async () => { move({ clientX: 300 }); });
     expect(current![0].end).toBe(4); // Drag is a draft until mouse release.
     await act(async () => { up(); });
-    expect(current![0].end).toBeCloseTo(3.3);
+    expect(current![0].end).toBeCloseTo(3);
+    expect(current![1].gap).toBe(true);
     await act(async () => { renderer.root.findByProps({ title: "Switch between joined sequence and original source timeline" }).props.onClick(); });
-    expect(button("Footage segment 2").props.style.left).toBe(700);
+    expect(button("Footage segment 3").props.style.left).toBe(700);
     await act(async () => { button("Restore original footage").props.onClick(); });
     expect(current).toBeNull();
     expect(button("Footage segment 1").props.style.width).toBe(1000);
@@ -155,6 +157,52 @@ it("shows added tilt keys in the timeline, including duplicated footage occurren
     const calls=vi.mocked(window.addEventListener).mock.calls;
     const move=calls.filter(call=>call[0]==="pointermove").slice(-1)[0][1] as (event:unknown)=>void;
     const up=calls.filter(call=>call[0]==="pointerup").slice(-1)[0][1] as ()=>void;
-    await act(async()=>{move({clientX:800});up();});expect(retime).toHaveBeenLastCalledWith("tilt","tilt",2,3);
+    await act(async()=>{move({clientX:800});up();});expect(retime).toHaveBeenLastCalledWith("tilt","tilt",2,3,"b");
   }finally{if(renderer)await act(async()=>renderer.unmount());warn.mockRestore();vi.unstubAllGlobals();}
+});
+
+
+it("invalidates waveform cache when an existing media path changes", async () => {
+  const { invoke } = await import("@tauri-apps/api/core");
+  let fingerprint = "100:1";
+  const read = vi.fn(async (command: string) => command === "editor_media_fingerprint" ? fingerprint : [.2,.5]);
+  vi.mocked(invoke).mockImplementation(read as typeof invoke);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("window", {addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("document", {addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("ResizeObserver", class {observe(){} disconnect(){}});
+  vi.stubGlobal("getComputedStyle", ()=>({getPropertyValue:()=>"#aaa"}));
+  const warn=vi.spyOn(console,"error").mockImplementation(()=>{});
+  const props={editorTheme:"dark",inputLogPath:"",audioTracks:[{id:"system",kind:"system",path:"modified-audio.wav",label:"Desktop",muted:false,volume:1}],duration:5,currentTime:0,keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:5},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null} as unknown as ComponentProps<typeof Timeline>;
+  let renderer:ReturnType<typeof create>|undefined;
+  const mount=async()=>{await act(async()=>{renderer=create(createElement(Timeline,props),{createNodeMock:node=>node.type==="canvas"?{parentElement:{clientWidth:100,clientHeight:30},getContext:()=>({clearRect(){},fillRect(){},fillStyle:""})}:{clientWidth:100,getBoundingClientRect:()=>({left:0,width:100})}});});};
+  try {
+    await mount(); await act(async()=>renderer!.unmount());
+    const firstReads = read.mock.calls.filter(call=>call[0]==="audio_waveform").length;
+    expect(firstReads).toBeGreaterThan(0);
+    await mount(); await act(async()=>renderer!.unmount());
+    expect(read.mock.calls.filter(call=>call[0]==="audio_waveform")).toHaveLength(firstReads);
+    fingerprint="100:2"; await mount();
+    expect(read.mock.calls.filter(call=>call[0]==="audio_waveform")).toHaveLength(firstReads * 2);
+  } finally { if(renderer)await act(async()=>renderer!.unmount());warn.mockRestore();vi.unstubAllGlobals(); }
+});
+
+it("cuts selected audio independently and respects its track lock",async()=>{
+ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});
+ const warn=vi.spyOn(console,"error").mockImplementation(()=>{});let audio:AudioTrack|undefined,locked=false;const changeVideo=vi.fn();
+ function Harness(){const [track,setTrack]=useState<AudioTrack>({id:"system",kind:"system",path:"cut-test.wav",label:"Desktop",muted:false,volume:1});audio=track;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[track],audioDurations:{system:4},duration:4,currentTime:2,activeClipId:"a",keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:4,videoClips:[{id:"a",start:0,end:4}],lockedTracks:locked?["system","video"]:["video"]},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onAudioTrackChange:setTrack,onVideoClipsChange:changeVideo} as unknown as ComponentProps<typeof Timeline>);}
+ let renderer!:ReturnType<typeof create>;try{await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000,top:500}),style:{}})});});
+ await act(async()=>renderer.root.findByProps({"aria-label":"Razor tool"}).props.onClick());
+ await act(async()=>renderer.root.findByProps({"aria-label":"Desktop audio clip"}).props.onPointerMove({clientX:510,currentTarget:{getBoundingClientRect:()=>({left:0,width:1000})}}));expect(renderer.root.findAllByProps({className:"timeline-cut-guide"})).toHaveLength(1);
+ await act(async()=>renderer.root.findByProps({"aria-label":"Selection tool"}).props.onClick());expect(renderer.root.findAllByProps({className:"timeline-cut-guide"})).toHaveLength(0);
+ await act(async()=>renderer.root.findByProps({"aria-label":"Desktop audio clip"}).props.onClick({stopPropagation:vi.fn()}));expect(renderer.root.findByProps({"aria-label":"Split at playhead"}).props.disabled).toBe(false);await act(async()=>renderer.root.findByProps({"aria-label":"Split at playhead"}).props.onClick());expect(audio!.clips).toHaveLength(2);expect(changeVideo).not.toHaveBeenCalled();
+ locked=true;await act(async()=>renderer.update(createElement(Harness)));const before=audio;const segment=renderer.root.findAllByProps({"aria-label":"Desktop audio clip"})[0];await act(async()=>segment.props.onKeyDown({key:"Delete",preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(audio).toBe(before);
+ locked=false;await act(async()=>renderer.update(createElement(Harness)));await act(async()=>renderer.root.findAllByProps({"aria-label":"Desktop audio clip"})[0].props.onKeyDown({key:"Delete",preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(audio!.clips).toHaveLength(1);expect(audio!.clips![0].start).toBe(2);expect(changeVideo).not.toHaveBeenCalled();
+ }finally{if(renderer)await act(async()=>renderer.unmount());warn.mockRestore();vi.unstubAllGlobals();}
+});
+
+it("adds transitions at cuts and adjusts their duration without moving footage",async()=>{
+ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});const warn=vi.spyOn(console,"error").mockImplementation(()=>{});let current:VideoClip[]=[];
+ function Harness(){const [clips,setClips]=useState<VideoClip[]>([{id:"a",start:0,end:1},{id:"b",start:1,end:2}]);current=clips;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[],duration:2,currentTime:1.2,activeClipId:"b",frameRate:60,keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:2,videoClips:clips},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onVideoClipsChange:setClips} as unknown as ComponentProps<typeof Timeline>);}
+ let renderer!:ReturnType<typeof create>;try{await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000,top:500}),style:{}})});});await act(async()=>renderer.root.findByProps({"aria-label":"Add transition at this cut"}).props.onClick({stopPropagation:vi.fn()}));expect(current[1].transition).toEqual({effect:"dissolve",duration:.3});await act(async()=>renderer.root.findByProps({"aria-label":"Transition length"}).props.onKeyDown({key:"ArrowRight",shiftKey:true,preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(current[1].transition!.duration).toBeCloseTo(.3+10/60);expect(current.map(clip=>[clip.start,clip.end])).toEqual([[0,1],[1,2]]);await act(async()=>renderer.root.findByProps({"aria-label":"none transition"}).props.onClick());expect(current[1].transition).toBeUndefined();}finally{if(renderer)await act(async()=>renderer.unmount());warn.mockRestore();vi.unstubAllGlobals();}
 });

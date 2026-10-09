@@ -53,3 +53,21 @@ it("starts independent audio at its sequence offset, gates paused sound and rele
   }finally{if(renderer)await act(async()=>renderer.unmount());}
   expect(close).toHaveBeenCalledOnce();expect(audio.src).toBe("");
 });
+
+it("plays through gaps, pauses linked audio there, and applies the next clip speed",async()=>{
+ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.spyOn(console,"error").mockImplementation(()=>{});
+ vi.stubGlobal("window",{setTimeout,clearTimeout,setInterval,clearInterval,addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("HTMLMediaElement",{HAVE_METADATA:1,HAVE_CURRENT_DATA:2,HAVE_FUTURE_DATA:3});
+ let wall=100;vi.spyOn(performance,"now").mockImplementation(()=>wall);let frame:(()=>void)|null=null;
+ vi.stubGlobal("requestAnimationFrame",(fn:()=>void)=>{frame=fn;return 1;});vi.stubGlobal("cancelAnimationFrame",()=>{frame=null;});
+ const events=new EventTarget(),video=Object.assign(events,{currentTime:0,duration:6,readyState:4,seeking:false,ended:false,error:null,paused:true,playbackRate:1,play:async()=>{Object.assign(video,{paused:false});events.dispatchEvent(new Event("playing"));},pause:()=>{Object.assign(video,{paused:true});events.dispatchEvent(new Event("pause"));},load:()=>{}}) as unknown as HTMLVideoElement;
+ let controller!:ReturnType<typeof usePlaybackController>;
+ const clips=[{id:"a",start:0,end:1},{id:"gap",start:0,end:.5,gap:true},{id:"b",start:3,end:4,speed:2}];
+ function Harness(){controller=usePlaybackController({videoPath:"gap.mp4",duration:6,trimStart:0,trimEnd:6,playbackRate:1,audioTracks:[],audioMix:DEFAULT_EDITOR_CONFIG.audio,videoClips:clips});return null;}
+ let renderer!:ReturnType<typeof create>;
+ try{await act(async()=>{renderer=create(createElement(Harness));});await act(async()=>controller.setMediaElement(video));await act(async()=>controller.togglePlay());
+ await act(async()=>{video.currentTime=1;wall=1100;frame?.();});expect(controller.inGap).toBe(true);expect(video.paused).toBe(true);expect(controller.playing).toBe(true);
+ await act(async()=>{wall=1350;frame?.();});expect(controller.sequencePosition).toBeCloseTo(1.25);
+ await act(async()=>{wall=1650;frame?.();});expect(controller.activeClipId).toBe("b");expect(video.currentTime).toBe(3);expect(video.playbackRate).toBe(2);
+ await act(async()=>{controller.pausePlayback();controller.seekSequence(1.2);});expect(controller.inGap).toBe(true);expect(controller.sequencePosition).toBeCloseTo(1.2);expect(controller.playing).toBe(false);
+ }finally{if(renderer)await act(async()=>renderer.unmount());}
+});

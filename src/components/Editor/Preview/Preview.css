@@ -76,3 +76,5 @@
   border-radius: var(--radius-pill);
   opacity: 0.85;
 }
+
+.preview-loading { position:absolute; color:var(--text-secondary); font-size:12px; letter-spacing:.01em; }

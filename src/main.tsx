@@ -19,6 +19,7 @@ const rootEl = document.getElementById("root") as HTMLElement;
 // dependency on Tauri's IPC bridge being ready — it can never race.
 const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
 document.body.classList.add(`window-${windowLabel}`);
+if(windowLabel==="editor")document.body.dataset.editorTheme=localStorage.getItem("snap.editorTheme.v1")==="light"?"light":"dark";
 
 // Snap supplies purpose-built context menus for timeline clips, zooms,
 // captions, audio, and annotation layers. Suppress WebView2's browser menu so
@@ -72,7 +73,7 @@ window.addEventListener("unhandledrejection", (e) => showError("Unhandled Promis
 
 try {
   ReactDOM.createRoot(rootEl).render(
-    <Suspense fallback={<div role="status" style={{ padding: 24 }}>Loading workspace...</div>}><App /></Suspense>,
+    <Suspense fallback={<div role="status" style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontSize:12 }}>Loading workspace...</div>}><App /></Suspense>,
   );
 } catch (err) {
   showError("React Mount Failed", err);

@@ -5,6 +5,7 @@ mod caption_install;
 mod capture;
 mod export;
 mod editor_cache;
+mod recording_health;
 mod input_hook;
 mod mobile;
 mod process;
@@ -1900,6 +1901,8 @@ pub fn run() {
             export::extract_video_frame,
             editor_cache::editor_cached_media,
             editor_cache::editor_source_frame_rate,
+            editor_cache::editor_media_fingerprint,
+            recording_health::recording_health,
             editor_cache::cancel_editor_cached_media,
             export::write_delivery_package,
             open_editor_window,

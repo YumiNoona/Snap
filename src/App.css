@@ -443,3 +443,5 @@ button:active:not(:disabled),
 @media (max-width: 560px) {
   .donate-modal-body { grid-template-columns: 1fr; }.donate-qr-frame { width: 190px; margin: 0 auto; }
 }
+
+body.window-editor[data-editor-theme="light"] { background:#f5f4f1; color:#333; }

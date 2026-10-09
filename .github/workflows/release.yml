@@ -42,7 +42,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.0.1 releases the heavy editor before capture, coordinates recording startup and stop, bounds export memory, protects project recovery and autosave, and fixes delivery packages, audio undo/redo, media cleanup, and user-facing errors. Hardware recording defaults remain unchanged.
+            Snap 9.1.0 improves timeline editing with gap-preserving trims and deletes, movable trimmed clips, independent audio cuts, clip speed controls, transitions, and drag-and-drop media layers. Imported videos retain their timing through cuts, gaps, project reloads, and export.
+
+            The editor includes a cleaner clip inspector, consistent custom dropdowns, a scissors cursor with a frame-snapped cut guide, clearer keyframes, smoother startup, and transition rendering fixes. This release also adds recording health diagnostics and bounds editor media caching.
+
+            Validation: 140 frontend tests, native unit tests, production builds, and browser checks for timeline drag/drop and imported-video export.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

@@ -1,3 +1,4 @@
+import { TRANSITION_EFFECTS } from "../../../lib/transitions";
 import { Section, SelectRow, CheckRow } from "./PanelControls";
 import ScreenTiltTools from "./ScreenTiltTools";
 import CameraAnimation from "./CameraAnimation";
@@ -27,6 +28,7 @@ interface Props {
   inputLogPath: string;
   onConfigChange: (cfg: EditorConfig) => void;
   duration: number;
+  frameRate?: number;
   currentTime: number;
   layers: Layer[];
   selectedLayerId: string | null;
@@ -136,7 +138,7 @@ const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
 };
 
 export default function Panels({
-  config, inputLogPath, onConfigChange, duration, currentTime,
+  config, inputLogPath, onConfigChange, duration, currentTime, frameRate = 30,
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
@@ -703,7 +705,7 @@ export default function Panels({
       )}
       {activeTab === "tilt" && (
         <div className="ss-drawer-content">
-          <ScreenTiltTools config={config} time={currentTime} onChange={onConfigChange}/>
+          <ScreenTiltTools config={config} time={currentTime} frameRate={frameRate} onChange={onConfigChange}/>
         </div>
       )}
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
@@ -1069,6 +1071,9 @@ export default function Panels({
                 <Slider label="Opacity" value={Math.round((selectedLayer.opacity ?? 1) * 100)} min={5} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ opacity: value / 100 })} />
                 {selectedLayer.type !== "mask" && <div className="layer-icon-pills"><button className={selectedLayer.flipX ? "active" : ""} onClick={() => updateSelectedLayer({ flipX: !selectedLayer.flipX })} title="Flip horizontally"><FlipHorizontal2 size={17} /><span>Flip X</span></button><button className={selectedLayer.flipY ? "active" : ""} onClick={() => updateSelectedLayer({ flipY: !selectedLayer.flipY })} title="Flip vertically"><FlipVertical2 size={17} /><span>Flip Y</span></button></div>}
               </Section>
+              {selectedLayer.type!=="mask"&&<Section title="Transitions">
+                {(["transition","exitTransition"] as const).map(kind=><div key={kind}><SelectRow label={kind==="transition"?"In":"Out"} value={selectedLayer[kind]?.effect??"none"} options={TRANSITION_EFFECTS} onChange={effect=>updateSelectedLayer({[kind]:effect==="none"?undefined:{effect,duration:selectedLayer[kind]?.duration??.3}})}/>{selectedLayer[kind]&&<Slider label="Duration" value={selectedLayer[kind]!.duration} min={.05} max={Math.min(2,(selectedLayer.end-selectedLayer.start)/2)} step={.05} unit="s" onChange={value=>updateSelectedLayer({[kind]:{...selectedLayer[kind],duration:value}})}/>}</div>)}
+              </Section>}
               <Section title="Timing">
                 <Slider label="Start" value={selectedLayer.start} min={config.trimStart} max={Math.max(config.trimStart, selectedLayer.end - .2)} step={0.05} unit="s" onChange={(start) => updateSelectedLayer({ start: Math.min(start, selectedLayer.end - .2) })} />
                 <Slider label="End" value={selectedLayer.end} min={selectedLayer.start + .2} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(end) => updateSelectedLayer({ end: Math.max(end, selectedLayer.start + .2) })} />

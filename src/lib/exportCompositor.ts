@@ -1,3 +1,6 @@
+import { projectMediaLayers } from "./mediaTimeline";
+import { FootageTransitions } from "./transitions";
+import { drawGapLayers } from "./gapLayers";
 import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "./screenTilt";
 import { animatedLayer, anchoredLayer } from "./layerAnimation";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -6,7 +9,8 @@ import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
 import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
-import { retainedClips } from "./videoEditing";
+import { retainedClips, sequenceTime } from "./videoEditing";
+import { resolveClipEffects } from "./clipEffects";
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
@@ -15,12 +19,29 @@ import {
   drawCameraBubble, reconcileVideoLayers,
 } from "./canvasDraw";
 
+async function seekOverlay(media: HTMLVideoElement, time: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve,reject)=>{
+    const cleanup=()=>{clearTimeout(timer);media.removeEventListener("seeked",ready);media.removeEventListener("loadeddata",ready);media.removeEventListener("loadedmetadata",ready);media.removeEventListener("error",failed);signal?.removeEventListener("abort",aborted);};
+    let requested=false;
+    const ready=()=>{if(!Number.isFinite(media.duration)||media.duration<=0)return;if(!requested){requested=true;const target=Math.max(0,Math.min(media.duration-.02,time));if(Math.abs(media.currentTime-target)>.001){media.currentTime=target;return;}}if(media.readyState<2||media.seeking)return;cleanup();resolve();};
+    const failed=()=>{cleanup();reject(new Error("Could not decode imported video"));};
+    const aborted=()=>{cleanup();reject(new DOMException("Cancelled","AbortError"));};
+    const timer=setTimeout(()=>{cleanup();reject(new Error("Imported video seek timed out"));},15000);
+    media.addEventListener("seeked",ready);media.addEventListener("loadeddata",ready);media.addEventListener("loadedmetadata",ready);media.addEventListener("error",failed);signal?.addEventListener("abort",aborted,{once:true});
+    if(signal?.aborted){aborted();return;}
+    media.pause();ready();
+  });
+}
+
 export interface ExportCompositor {
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   clickTimesMs: number[];
   setFrameConsumer: (consumer: (() => void) | null) => void;
   renderFrame: () => void;
+  setGapTime?: (time:number) => void;
+  setClip?: (clipId: string) => void;
+  prepareClip?: (clipId:string) => Promise<void>;
   destroy: () => void;
 }
 
@@ -42,7 +63,9 @@ export async function createExportCompositor(
   cameraMedia: { path: string; startOffsetMs: number } | null,
   outputW: number,
   outputH: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  renderCaptions = true,
+  screenOnly = false
 ): Promise<ExportCompositor> {
   await Promise.all(config.layers.filter((layer) => layer.type === "image").map(async (layer) => {
     const image = preloadImageAsset(layer.path);
@@ -50,14 +73,10 @@ export async function createExportCompositor(
     try { await image.decode(); } catch { /* draw loop leaves an unreadable image empty */ }
   }));
   const layerVideoCache = new Map<string, HTMLVideoElement>();
-  await Promise.all(config.layers.filter((layer): layer is VideoLayer => layer.type === "video" && config.trimStart >= layer.start && config.trimStart < layer.end).map((layer) => new Promise<void>((resolve) => {
-    const media = loadCachedVideo(layer.path, layerVideoCache, layer.id);
-    if (media.readyState >= 2) { resolve(); return; }
-    const finish = () => { media.removeEventListener("canplay", finish); media.removeEventListener("error", finish); resolve(); };
-    media.addEventListener("canplay", finish, { once: true });
-    media.addEventListener("error", finish, { once: true });
-    window.setTimeout(finish, 2500);
-  })));
+  try { await Promise.all(config.layers.filter((layer): layer is VideoLayer => layer.type === "video" && (layer.timeSpace === "sequence" || config.trimStart >= layer.start && config.trimStart < layer.end)).map(async layer => {
+    const media=loadCachedVideo(layer.path,layerVideoCache,layer.id);
+    await seekOverlay(media,layer.sourceOffset??0,signal);
+  })); } catch(error) { for(const media of layerVideoCache.values()){media.pause();media.removeAttribute("src");media.load();} layerVideoCache.clear();throw error; }
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.src = convertFileSrc(videoPath);
@@ -203,11 +222,18 @@ export async function createExportCompositor(
   }
 
   const footageClips = retainedClips(config.videoClips, config.trimStart, config.trimEnd || video.duration);
+  const sharedConfig = config, sharedKeyframes = keyframes, sharedCaptions = captionTracks;
+  const transitions=new FootageTransitions();
+  let gapTime = 0;
+  let effectClipId = footageClips[0]?.id;
   function drawFrame() {
     if (destroyed) return;
+    const activeClip = footageClips.find(clip => clip.id === effectClipId);
+    const effects = resolveClipEffects(activeClip, sharedConfig, sharedKeyframes, sharedCaptions);
+    config = effects.config; keyframes = effects.keyframes; captionTracks = renderCaptions ? effects.captions : [];
     // Keep the last retained canvas at cut boundaries, rather than drawing
     // deleted footage while the transport seeks to the next segment.
-    if (video.seeking || !footageClips.some(clip => video.currentTime >= clip.start && video.currentTime < clip.end)) {
+    if (!activeClip?.gap && (video.readyState<2 || video.seeking || !footageClips.some(clip => video.currentTime >= clip.start && video.currentTime < clip.end))) {
       rafId = requestAnimationFrame(drawFrame);
       return;
     }
@@ -306,6 +332,7 @@ export async function createExportCompositor(
     }
     ctx.restore();
 
+    if(activeClip?.gap) { camera?.pause(); drawGapLayers(ctx,config.layers,gapTime,true,layerVideoCache,{x:offsetX,y:offsetY,w:videoW,h:videoH},config.playbackRate||1);frameConsumer?.();rafId=requestAnimationFrame(drawFrame);return; }
     const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
     const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
@@ -431,6 +458,8 @@ export async function createExportCompositor(
 
     screenCtx.restore();
     finishScreenTilt(ctx,tiltPass);
+    if(screenOnly){frameConsumer?.();return;}
+    transitions.draw(ctx,activeClip,video.currentTime,footageClips[footageClips.findIndex(clip=>clip.id===effectClipId)+1]);
 
     if (camera && cameraMedia) {
       const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
@@ -449,8 +478,9 @@ export async function createExportCompositor(
     // Timed annotation and mask layers. Masks sample the fully composited
     // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
-    const activeLayers = config.layers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
-    reconcileVideoLayers(config.layers, videoTs, !video.paused, layerVideoCache);
+    const timedLayers = projectMediaLayers(config.layers,videoTs,sequenceTime(footageClips,videoTs,effectClipId));
+    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
+    reconcileVideoLayers(timedLayers, videoTs, !video.paused, layerVideoCache);
     if (maskSourceCtx && activeLayers.some((layer) => layer.type === "mask")) {
       maskSourceCtx.clearRect(0, 0, outputW, outputH);
       maskSourceCtx.drawImage(canvas, 0, 0);
@@ -487,7 +517,7 @@ export async function createExportCompositor(
       ctx.rotate((layer.rotation ?? 0) * Math.PI / 180);
       ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
       ctx.translate(-(lx + lw / 2), -(ly + lh / 2));
-      drawVisualLayer(ctx, layer, videoTs, !video.paused, layerVideoCache, lx, ly, lw, lh);
+      drawVisualLayer(ctx, layer, videoTs, !video.paused, layerVideoCache, lx, ly, lw, lh, layer.timeSpace === "sequence" ? config.playbackRate || 1 : video.playbackRate);
       ctx.restore();
     }
     for (const track of captionTracks) {
@@ -518,6 +548,46 @@ export async function createExportCompositor(
     clickTimesMs: clickEvents.map((event) => event.ts),
     setFrameConsumer: (consumer) => { frameConsumer = consumer; },
     renderFrame: () => { cancelAnimationFrame(rafId); drawFrame(); },
-    destroy: cleanup,
+    setGapTime: (time) => { gapTime=time; },
+    prepareClip: async (clipId) => {
+      if(screenOnly)return;
+      const index=footageClips.findIndex(clip=>clip.id===clipId),clip=footageClips[index],previous=footageClips[index-1];
+      if(clip){
+        const source=clip.gap?0:clip.start,sequence=sequenceTime(footageClips,source,clip.id);
+        const timed=projectMediaLayers(sharedConfig.layers,source,sequence);
+        await Promise.all(timed.filter((layer):layer is VideoLayer=>layer.type==="video"&&source>=layer.start&&source<layer.end).map(layer=>seekOverlay(loadCachedVideo(layer.path,layerVideoCache,layer.id),source-layer.start+(layer.sourceOffset??0),signal)));
+      }
+
+      if(!clip?.transition||!previous||previous.gap)return;
+      const snapshot=await renderTransitionBoundary(videoPath,inputLogPath,sharedKeyframes,sharedConfig,previous.id,outputW,outputH,signal);
+      if(!destroyed)transitions.setOutgoing(clipId,snapshot);
+      snapshot.width=snapshot.height=0;
+    },
+    setClip: (clipId) => { if (effectClipId !== clipId) { previousZoom = null; previousCursorDraw = null; smoothedCursor = null; prevTs = -1; clickIdx = 0; clickRipples = []; } effectClipId = clipId; },
+    destroy: () => { transitions.clear(); cleanup(); },
   };
+}
+
+/** A deterministic held boundary frame, independent of the user's last seek. */
+export async function renderTransitionBoundary(videoPath:string,inputLogPath:string,keyframes:Keyframe[],config:EditorConfig,clipId:string,width:number,height:number,signal?:AbortSignal):Promise<HTMLCanvasElement>{
+  const clip=config.videoClips?.find(item=>item.id===clipId);
+  if(!clip)throw new Error("Transition footage is missing");
+  const renderer=await createExportCompositor(videoPath,inputLogPath,keyframes,{...config,layers:config.layers.filter(layer=>layer.type==="mask")},[],null,width,height,signal,false,true);
+  try{
+    renderer.setClip?.(clipId);
+    const target=Math.max(clip.start,clip.end-1/60);
+    await new Promise<void>((resolve,reject)=>{
+      const cleanup=()=>{clearTimeout(timer);renderer.video.removeEventListener("seeked",ready);renderer.video.removeEventListener("loadeddata",ready);renderer.video.removeEventListener("error",failed);signal?.removeEventListener("abort",aborted);};
+      const ready=()=>{if(renderer.video.readyState<2||renderer.video.seeking)return;cleanup();resolve();};
+      const failed=()=>{cleanup();reject(new Error("Could not load transition footage"));};
+      const aborted=()=>{cleanup();reject(new DOMException("Cancelled","AbortError"));};
+      const timer=setTimeout(()=>{cleanup();reject(new Error("Transition seek timed out"));},15000);
+      renderer.video.addEventListener("seeked",ready);renderer.video.addEventListener("loadeddata",ready);renderer.video.addEventListener("error",failed);signal?.addEventListener("abort",aborted,{once:true});
+      if(signal?.aborted){aborted();return;}
+      renderer.video.currentTime=target;ready();
+    });
+    renderer.renderFrame();
+    const snapshot=document.createElement("canvas");snapshot.width=width;snapshot.height=height;snapshot.getContext("2d")!.drawImage(renderer.canvas,0,0);
+    return snapshot;
+  }finally{renderer.destroy();}
 }

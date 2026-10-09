@@ -18,3 +18,6 @@
 .tilt-keyframe-actions { display:grid; grid-template-columns:38px 38px; gap:8px; }
 .tilt-keyframe-actions .ss-drawer-action-btn { display:flex; align-items:center; justify-content:center; gap:7px; }
 .tilt-remove-key:disabled { opacity:.35; cursor:default; transform:none; }
+
+.tilt-tools-fieldset { min-width:0; margin:0; padding:0; border:0; }
+.tilt-tools-fieldset:disabled { opacity:.65; }

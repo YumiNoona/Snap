@@ -10,17 +10,20 @@ const PRESETS = [
   { label: "Isometric", tiltX: 18, tiltY: -24, scale: .9 },
   { label: "Flat", tiltX: 0, tiltY: 0, scale: 1 },
 ];
-export default function ScreenTiltTools({config,time,onChange}:{config:EditorConfig;time:number;onChange:(config:EditorConfig)=>void}) {
+export default function ScreenTiltTools({config,time,onChange,frameRate=30}:{config:EditorConfig;time:number;frameRate?:number;onChange:(config:EditorConfig)=>void}) {
   const effect=config.screenTilt??DEFAULT_SCREEN_TILT;
   const pose=resolveScreenTilt({...effect,enabled:true},time);
-  const key=effect.keys.find(k=>Math.abs(k.time-time)<1/60);
-  const update=(patch:Partial<typeof effect>)=>onChange({...config,screenTilt:{...effect,...patch}});
+  const rate = Number.isFinite(frameRate) && frameRate >= 1 ? Math.min(240, frameRate) : 30;
+  const frameTime = Math.round(time * rate) / rate;
+  const key=effect.keys.find(k=>Math.abs(k.time-frameTime)<.5/rate);
+  const locked=config.lockedTracks?.includes("tilt")??false;
+  const update=(patch:Partial<typeof effect>)=>!locked&&onChange({...config,screenTilt:{...effect,...patch}});
   const setKey=(patch:Partial<ScreenTiltPose>={})=>{
-    const next:ScreenTiltKey={...pose,time,easing:key?.easing??"ease-in-out",...patch};
-    update({enabled:true,keys:[...effect.keys.filter(k=>Math.abs(k.time-time)>=1/60),next].sort((a,b)=>a.time-b.time)});
+    const next:ScreenTiltKey={...pose,time:frameTime,easing:key?.easing??"ease-in-out",...patch};
+    update({enabled:true,keys:[...effect.keys.filter(k=>Math.abs(k.time-frameTime)>=.5/rate),next].sort((a,b)=>a.time-b.time)});
   };
   const change=(patch:Partial<ScreenTiltPose>)=>effect.keys.length?setKey(patch):update(patch);
-  return <>
+  return <fieldset className="tilt-tools-fieldset" disabled={locked}>
     <Section title="3D Tilt">
       <CheckRow label="Enable tilt" checked={effect.enabled} onChange={enabled=>update({enabled})}/>
       {effect.enabled && <>
@@ -48,5 +51,5 @@ export default function ScreenTiltTools({config,time,onChange}:{config:EditorCon
       </div>
       {key && <SelectRow label="Easing" value={key.easing} options={["linear","ease-in","ease-out","ease-in-out","sine","smoother"]} optionLabels={{linear:"Linear","ease-in":"Ease in","ease-out":"Ease out","ease-in-out":"Smooth",sine:"Sine",smoother:"Gentle"}} onChange={easing=>update({keys:effect.keys.map(k=>k===key?{...k,easing:easing as ScreenTiltKey["easing"]}:k)})}/>}
     </Section>}
-  </>;
+  </fieldset>;
 }

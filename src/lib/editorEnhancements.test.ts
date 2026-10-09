@@ -20,7 +20,7 @@ describe("editor assembly",()=>{
     expect(slipClip(clips,"b",20,10)[1]).toMatchObject({start:8,end:10});
     const rolled=rollCut(clips,"a",1,10);
     expect(rolled.slice(0,2).map(c=>[c.start,c.end])).toEqual([[0,3],[5,6]]);
-    expect(rollCut(clips,"a",30,10)[1].end-rollCut(clips,"a",30,10)[1].start).toBeCloseTo(.1);
+    expect(rollCut(clips,"a",30,10)[1].end-rollCut(clips,"a",30,10)[1].start).toBeCloseTo(1/30);
     expect(combineClips([{id:"a",start:0,end:2},{id:"b",start:2,end:4}],["a","b"])).toEqual([{id:"a",start:0,end:4}]);
   });
   it("repeats captions in the right sequence positions",()=>{

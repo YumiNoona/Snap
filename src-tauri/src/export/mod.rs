@@ -490,10 +490,13 @@ pub struct CanvasExportRequest {
     pub source_segments: Vec<SourceSegment>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Default)]
 pub struct SourceSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub gap: bool,
+    pub speed: Option<f64>,
 }
 
 fn source_audio_filter(
@@ -513,7 +516,14 @@ fn source_audio_filter(
     }
     filter.push(';');
     for (i, segment) in segments.iter().enumerate() {
-        filter.push_str(&format!("[{label}_src{idx}_{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS[{label}_cut{idx}_{i}];", segment.start, segment.end));
+        let mut tempo = String::new();
+        let mut rate = segment.speed.unwrap_or(1.0).clamp(0.25,4.0);
+        while rate < 0.5 { tempo.push_str(",atempo=0.5"); rate /= 0.5; }
+        while rate > 2.0 { tempo.push_str(",atempo=2.0"); rate /= 2.0; }
+        if (rate-1.0).abs()>0.000001 { tempo.push_str(&format!(",atempo={rate:.6}")); }
+        let silence=if segment.gap {",volume=0"} else {""};
+        let length=(segment.end-segment.start)/segment.speed.unwrap_or(1.0).clamp(0.25,4.0);
+        filter.push_str(&format!("[{label}_src{idx}_{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{silence}{tempo},apad,atrim=duration={length:.6}[{label}_cut{idx}_{i}];", segment.start, segment.end));
     }
     for i in 0..segments.len() {
         filter.push_str(&format!("[{label}_cut{idx}_{i}]"));
@@ -534,6 +544,8 @@ pub struct CanvasAudioTrack {
     pub muted: bool,
     pub volume: f64,
     pub linked: Option<bool>,
+    pub clips: Option<Vec<CanvasAudioClip>>,
+    pub preserve_pitch: Option<bool>,
     pub start: Option<f64>,
     pub source_start: Option<f64>,
     pub source_end: Option<f64>,
@@ -543,6 +555,45 @@ pub struct CanvasAudioTrack {
     pub ducking: Option<f64>,
     #[serde(default)]
     pub volume_keys: Vec<AudioVolumeKey>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all="camelCase")]
+pub struct CanvasAudioClip {
+    pub source_start: f64,
+    pub source_end: f64,
+    pub start: f64,
+    pub speed: Option<f64>,
+    pub volume: Option<f64>,
+    pub fade_in: Option<f64>,
+    pub fade_out: Option<f64>,
+}
+
+fn clip_audio_filter(idx:usize,volume:f64,normalize:&str,speed:&str,label:&str,clips:&[CanvasAudioClip],edits:(f64,bool))->String {
+    let (duration,preserve_pitch)=edits;
+    if clips.is_empty(){return format!("[{idx}:a]volume=0,atrim=duration={duration:.6},apad[{label}]");}
+    let global=speed.trim_start_matches(",atempo=").parse::<f64>().unwrap_or(1.0).clamp(0.5,2.0);
+    let mut filter=format!("[{idx}:a]asplit={}",clips.len());
+    for i in 0..clips.len(){filter.push_str(&format!("[{label}_split{i}]"));}filter.push(';');
+    for (i,clip) in clips.iter().enumerate(){
+        let combined=clip.speed.unwrap_or(1.0)*global;
+        let mut rate=combined;
+        let mut tempo=String::new();
+        while rate<0.5{tempo.push_str(",atempo=0.5");rate/=0.5;}
+        while rate>2.0{tempo.push_str(",atempo=2.0");rate/=2.0;}
+        tempo.push_str(&format!(",atempo={rate:.6}"));
+        if !preserve_pitch { tempo=format!(",aresample=48000,asetrate={:.3},aresample=48000",48000.0*combined); }
+        let length=clip.source_end-clip.source_start;
+        let output_length=length/combined;
+        let fade_in=clip.fade_in.unwrap_or(0.0).clamp(0.0,length);
+        let fade_out=clip.fade_out.unwrap_or(0.0).clamp(0.0,length);
+        let mut fades=String::new();
+        if fade_in>0.0{fades.push_str(&format!(",afade=t=in:st=0:d={fade_in:.6}"));}
+        if fade_out>0.0{fades.push_str(&format!(",afade=t=out:st={:.6}:d={fade_out:.6}",length-fade_out));}
+        filter.push_str(&format!("[{label}_split{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{fades},volume={:.6}{tempo},apad,atrim=duration={output_length:.6},aresample=48000,adelay={}S:all=1,apad,atrim=duration={duration:.6}[{label}_clip{i}];",clip.source_start,clip.source_end,clip.volume.unwrap_or(1.0).clamp(0.0,2.0),(clip.start/global*48000.0).round() as u64));
+    }
+    for i in 0..clips.len(){filter.push_str(&format!("[{label}_clip{i}]"));}
+    filter.push_str(&format!("amix=inputs={}:normalize=0:duration=longest,volume={volume:.6}{normalize}[{label}]",clips.len()));filter
 }
 
 #[derive(Deserialize, Clone)]
@@ -633,18 +684,13 @@ fn edited_audio_filter(
     let input_label = format!("edit{idx}");
     let mut filter = format!("[{idx}:a]{effects},apad[{input_label}];");
     let raw_label = format!("raw{label}");
-    let mut base = source_audio_filter(
-        idx,
-        volume,
-        normalize,
-        speed,
-        &raw_label,
-        if linked { segments } else { &[] },
-    );
+    let mut base = if let Some(clips)=&track.clips {
+        clip_audio_filter(idx,volume,normalize,speed,&raw_label,clips,(duration,track.preserve_pitch.unwrap_or(true)))
+    } else { source_audio_filter(idx,volume,normalize,speed,&raw_label,if linked { segments } else { &[] }) };
     base = base.replace(&format!("[{idx}:a]"), &format!("[{input_label}]"));
     // Linked source ranges use original timestamps, so preserve their offset
     // after trimming. Unlinked audio is positioned in sequence time.
-    if linked && start > 0.0 {
+    if (linked || track.clips.is_some()) && start > 0.0 {
         filter = filter.replace(
             &format!(",apad[{input_label}]"),
             &format!(
@@ -657,7 +703,7 @@ fn edited_audio_filter(
     filter.push(';');
     let duck = finite(track.ducking, 0.0).min(100.0);
     let shifted = format!("shift{label}");
-    if linked {
+    if linked || track.clips.is_some() {
         filter.push_str(&format!("[{raw_label}]anull[{shifted}];"));
     } else {
         filter.push_str(&format!(
@@ -846,6 +892,9 @@ fn finalize_canvas_export_blocking(
         return Err("Invalid export dimensions, frame rate or duration".into());
     }
     for track in &request.audio_tracks {
+        if let Some(clips)=&track.clips {
+            if clips.len()>1000 || clips.iter().any(|clip| !clip.source_start.is_finite()||!clip.source_end.is_finite()||!clip.start.is_finite()||clip.source_start<0.0||clip.source_end<=clip.source_start||clip.source_end>86400.0||!(0.0..=86400.0).contains(&clip.start)||clip.speed.is_some_and(|rate|!rate.is_finite()||!(0.25..=4.0).contains(&rate))||[clip.volume,clip.fade_in,clip.fade_out].iter().flatten().any(|value|!value.is_finite()||*value<0.0)) { return Err("Invalid audio clip".into()); }
+        }
         crate::access::require(&app, std::path::Path::new(&track.path))?;
     }
     let playback_rate = request.playback_rate.clamp(0.5, 2.0);
@@ -862,7 +911,9 @@ fn finalize_canvas_export_blocking(
         {
             return Err("Invalid source segment range".into());
         }
-        source_duration += segment.end - segment.start;
+        let rate=segment.speed.unwrap_or(1.0);
+        if !rate.is_finite() || !(0.25..=4.0).contains(&rate) { return Err("Invalid clip speed".into()); }
+        source_duration += (segment.end - segment.start) / rate;
     }
     if !request.source_segments.is_empty()
         && (source_duration / playback_rate - request.export_duration_seconds).abs() > 0.05
@@ -1327,14 +1378,17 @@ mod tests {
             SourceSegment {
                 start: 2.0,
                 end: 3.0,
+                ..Default::default()
             },
             SourceSegment {
                 start: 0.0,
                 end: 1.0,
+                ..Default::default()
             },
             SourceSegment {
                 start: 2.0,
                 end: 3.0,
+                ..Default::default()
             },
         ];
         let mut track:CanvasAudioTrack=serde_json::from_value(serde_json::json!({"path":"music.wav","label":"Music","kind":"imported","muted":false,"volume":1,"linked":true,"sourceStart":0.2,"sourceEnd":3.0,"fadeIn":0.1,"fadeOut":0.2,"noiseReduction":true,"ducking":75,"volumeKeys":[{"time":0,"volume":1},{"time":2,"volume":0.5}]})).unwrap();
@@ -1391,6 +1445,29 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires FFmpeg on PATH; validates gaps, speed and independent audio clips"]
+    fn gaps_speed_and_audio_clip_filters_render() {
+        let segments=vec![SourceSegment{start:0.0,end:0.2,gap:true,speed:None},SourceSegment{start:0.0,end:1.0,gap:false,speed:Some(2.0)},SourceSegment{start:0.0,end:0.3,gap:true,speed:None}];
+        let linked=source_audio_filter(0,1.0,"","","a",&segments);
+        let track:CanvasAudioTrack=serde_json::from_value(serde_json::json!({"path":"audio.wav","label":"Audio","kind":"imported","muted":false,"volume":1,"linked":false,"clips":[{"sourceStart":0.2,"sourceEnd":0.8,"start":0.1,"speed":2,"volume":0.8,"fadeIn":0.1,"fadeOut":0.1},{"sourceStart":1,"sourceEnd":1.5,"start":0.5,"speed":0.5}]})).unwrap();
+        for filter in [linked,edited_audio_filter(0,1.0,"","","a",&segments,AudioFilterEdits{track:Some(&track),microphone:None,duration:1.5})] {
+            let args=vec!["-v".into(),"error".into(),"-f".into(),"lavfi".into(),"-i".into(),"sine=frequency=440:sample_rate=48000:duration=3".into(),"-filter_complex".into(),filter,"-map".into(),"[a]".into(),"-t".into(),"1.5".into(),"-f".into(),"null".into(),"-".into()];
+            let result=run_ffmpeg(&args).unwrap();assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+        }
+
+        let filter=source_audio_filter(0,1.0,"","","a",&segments);
+        let path=std::env::temp_dir().join(format!("snap_gap_pcm_{}.raw",std::process::id()));
+        let args=vec!["-y".into(),"-v".into(),"error".into(),"-f".into(),"lavfi".into(),"-i".into(),"sine=frequency=440:sample_rate=48000:duration=3".into(),"-filter_complex".into(),filter,"-map".into(),"[a]".into(),"-t".into(),"1".into(),"-ac".into(),"1".into(),"-f".into(),"s16le".into(),path.to_string_lossy().into_owned()];
+        let result=run_ffmpeg(&args).unwrap();assert!(result.status.success());
+        let bytes=std::fs::read(&path).unwrap();let _=std::fs::remove_file(path);
+        let samples:Vec<f32>=bytes.chunks_exact(2).map(|bytes|i16::from_le_bytes(bytes.try_into().unwrap()) as f32/32768.0).collect();
+        assert_eq!(samples.len(),48000);
+        assert!(samples[..9000].iter().all(|sample|sample.abs()<0.00001),"Leading gap contains audio");
+        assert!(samples[34560..].iter().all(|sample|sample.abs()<0.00001),"Trailing gap contains audio");
+        assert!(samples[14400..28800].iter().any(|sample|sample.abs()>0.05),"Sped-up audio missing");
+    }
+
+    #[test]
     #[ignore = "Requires FFmpeg on PATH; run explicitly when validating footage edits"]
     fn footage_audio_removes_deleted_samples_and_preserves_both_retained_ranges() {
         let path =
@@ -1399,10 +1476,12 @@ mod tests {
             SourceSegment {
                 start: 0.0,
                 end: 1.0,
+                ..Default::default()
             },
             SourceSegment {
                 start: 2.0,
                 end: 3.0,
+                ..Default::default()
             },
         ];
         for rate in [0.5, 1.0, 2.0] {

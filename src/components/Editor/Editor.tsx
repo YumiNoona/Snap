@@ -1,3 +1,5 @@
+import { reconcileAudioClips, resolvedAudioClips } from "../../lib/audioEditing";
+import { resolveClipEffects, editClipEffects, replaceAnimationKeys } from "../../lib/clipEffects";
 import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
 import { userError } from "../../lib/userError";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
@@ -28,7 +30,7 @@ import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
 import { clearInputLogCache, loadInputLog } from "../../lib/inputLog";
 import { clearImageAssets } from "../../lib/canvasDraw";
 import { buildDeliveryPackage } from "../../lib/deliveryPackage";
-import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
+import { retainedClips, sequenceDuration, sequenceTime, mapCaptionTracks } from "../../lib/videoEditing";
 import "./Editor.css";
 
 interface Props {
@@ -59,8 +61,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     ...DEFAULT_EDITOR_CONFIG,
     cursorHotspots: loadCursorHotspots(),
   }));
-  const [keyframes, setKeyframes] = useState<Keyframe[]>([]);
-  const [captionTracks, setCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [sharedKeyframes, setSharedKeyframes] = useState<Keyframe[]>([]);
+  const [sharedCaptionTracks, setSharedCaptionTracks] = useState<CaptionTrack[]>([]);
   const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
   const [audioError, setAudioError] = useState("");
   const [cameraMedia, setCameraMedia] = useState<{ path: string; startOffsetMs: number } | null>(null);
@@ -88,6 +90,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [showProjectHealth, setShowProjectHealth] = useState(false);
+  const [recordingHealth, setRecordingHealth] = useState<{ encoders: string[]; encodedFrames: number; mediaSeconds: number; quietIntervals: number; recoveryAttempts: number; interrupted: boolean } | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    setRecordingHealth(null);
+    invoke<typeof recordingHealth>("recording_health", { path: videoPath }).then(summary => { if (!disposed) setRecordingHealth(summary); }).catch(() => {});
+    return () => { disposed = true; };
+  }, [videoPath]);
   const [fileActionStatus, setFileActionStatus] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
   const [lastExportPath, setLastExportPath] = useState("");
@@ -118,6 +127,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   useEffect(() => {
     localStorage.setItem(EDITOR_THEME_STORAGE_KEY, editorTheme);
+    document.body.dataset.editorTheme=editorTheme;
   }, [editorTheme]);
 
   // The file menu and floating tool inspector occupy the same left-side
@@ -126,16 +136,46 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if (activeTool) setShowFileMenu(false);
   }, [activeTool]);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
-    config, keyframes, captions: captionTracks, audioTracks, setAudioTracks, setConfig, setKeyframes, setCaptions: setCaptionTracks,
+    config, keyframes: sharedKeyframes, captions: sharedCaptionTracks, audioTracks, setAudioTracks, setConfig, setKeyframes: setSharedKeyframes, setCaptions: setSharedCaptionTracks,
   });
   useEffect(()=>()=>{void invoke("cancel_editor_cached_media").catch(()=>{});},[videoPath]);
   const [sourceFrameRate,setSourceFrameRate]=useState(30);
   useEffect(()=>{let cancelled=false;setSourceFrameRate(30);void invoke<number>("editor_source_frame_rate",{path:videoPath}).then(rate=>{if(!cancelled&&Number.isFinite(rate))setSourceFrameRate(rate);}).catch(()=>{});return ()=>{cancelled=true;};},[videoPath]);
-  const { currentTime, audioDurations, activeClipId, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
+  const { currentTime, audioDurations, activeClipId, inGap, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
     frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: config.videoClips,
   });
   const footageClips = useMemo(() => retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration), [config.videoClips, config.trimStart, config.trimEnd, duration]);
+  const activeEffectsClip = footageClips.find(clip=>clip.id===activeClipId);
+  const effects = resolveClipEffects(activeEffectsClip, config, sharedKeyframes, sharedCaptionTracks);
+  const visualConfig = effects.config;
+  const keyframes = effects.keyframes;
+  const captionTracks = effects.captions;
+  const effectEditRef = useRef({ config, activeClipId });
+  effectEditRef.current = { config, activeClipId };
+  const setKeyframes = useCallback((action: Keyframe[] | ((frames:Keyframe[])=>Keyframe[]), requestedClipId?: string) => {
+    const { config: latest, activeClipId: active } = effectEditRef.current;
+    if (latest.lockedTracks?.includes("zoom")) return;
+    const clipId = requestedClipId ?? active;
+    const clip = latest.videoClips?.find(c => c.id === clipId);
+    if (clip?.effects) setConfig(current => {
+      const keys = current.videoClips?.find(c=>c.id===clipId)?.effects?.keyframes ?? [];
+      return editClipEffects(current, clipId!, { keyframes: typeof action === "function" ? action(keys) : action });
+    });
+    else setSharedKeyframes(action);
+  }, []);
+  const setCaptionTracks = useCallback((action: CaptionTrack[] | ((tracks:CaptionTrack[])=>CaptionTrack[]), requestedClipId?: string) => {
+    const { config: latest, activeClipId: active } = effectEditRef.current;
+    if (latest.lockedTracks?.includes("caption")) return;
+    const clipId = requestedClipId ?? active;
+    const clip = latest.videoClips?.find(c=>c.id===clipId);
+    if (clip?.effects) setConfig(current => {
+      const tracks = current.videoClips?.find(c=>c.id===clipId)?.effects?.captions ?? [];
+      return editClipEffects(current,clipId!,{ captions: typeof action === "function" ? action(tracks) : action });
+    });
+    else setSharedCaptionTracks(action);
+  }, []);
+  const sequenceCaptions = useMemo(() => mapCaptionTracks(sharedCaptionTracks, footageClips), [sharedCaptionTracks, footageClips]);
   const editedDuration = sequenceDuration(footageClips) / (config.playbackRate || 1);
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
@@ -152,8 +192,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     initialProjectPath,
     duration,
     config,
-    keyframes,
-    captions: captionTracks,
+    keyframes: sharedKeyframes,
+    captions: sharedCaptionTracks,
     audioTracks,
     restore: replaceWithoutHistory,
     restoreAudioTracks: (saved) => setAudioTracks((current) => current.length > 0 ? mergeAudioTracks(current, saved) : saved),
@@ -271,12 +311,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     return () => { cancelled = true; };
   }, [videoPath]);
 
-  const addAudioSources = useCallback(async (sources: string[]) => {
+  const addAudioSources = useCallback(async (sources: string[], atTime = 0) => {
     setAudioError("");
     try {
       if (sources.length === 0) return;
       const additions = await Promise.all(sources.map(async (source, index): Promise<AudioTrack> => {
         const path = await invoke<string>("import_audio_file", { videoPath, sourcePath: source });
+        const length = await invoke<number>("probe_media_duration", {path});
         const label = source.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || `Audio ${index + 1}`;
         return {
           id: `audio-imported-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
@@ -286,42 +327,51 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           muted: false,
           volume: 1,
           linked: false,
-          start: 0,
+          start: atTime,
+          sourceStart:0, sourceEnd:length,
         };
       }));
-      setAudioTracks((current) => {
-        const known = new Set(current.map((track) => track.path.toLowerCase()));
-        return [...current, ...additions.filter((track) => !known.has(track.path.toLowerCase()))];
+      setAudioTracks(current => [...current,...additions]);
+      setConfig(current => {
+        const clips=retainedClips(current.videoClips,current.trimStart,current.trimEnd||duration);
+        const extra=Math.max(...additions.map(track=>(track.start??0)+(track.sourceEnd??0)))-sequenceDuration(clips);
+        return extra>0?{...current,videoClips:[...clips,{id:`gap-${crypto.randomUUID()}`,start:0,end:extra,gap:true}]}:current;
       });
       setActiveTool("audio");
     } catch (error) {
       setAudioError(`Audio could not be added: ${userError(error)}`);
     }
-  }, [videoPath]);
+  }, [videoPath, duration]);
 
-  const addMediaToTimeline = useCallback((paths: string[], atTime = currentTime) => {
-    const audio = paths.filter((path) => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
-    if (audio.length) void addAudioSources(audio);
-    const visuals = paths.filter((path) => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm)$/i.test(path));
+  const addMediaToTimeline = useCallback(async (paths: string[], atTime = sequencePosition) => {
+    const audio = paths.filter(path => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
+    if (audio.length) void addAudioSources(audio, atTime);
+    if (config.lockedTracks?.includes("annotations")) return;
+    const visuals = paths.filter(path => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm)$/i.test(path));
     if (!visuals.length) return;
-    const projectEnd = config.trimEnd || duration || atTime + 3;
-    const start = Math.max(config.trimStart, Math.min(atTime, Math.max(config.trimStart, projectEnd - .2)));
-    const end = Math.min(projectEnd, start + 3);
-    const additions: Layer[] = visuals.map((path, index) => {
-      const type = /\.(mp4|mov|mkv|webm)$/i.test(path) ? "video" as const : "image" as const;
-      return {
-      id: `${type}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-      type, path, fit: "contain", cornerRadius: 10,
-      start, end: Math.max(start + .2, end),
-      x: .25 + (index % 3) * .035, y: .2 + (index % 3) * .035, w: .5, h: .5,
-      opacity: 1, rotation: 0, flipX: false, flipY: false,
-    }; });
-    setConfig((current) => ({ ...current, layers: [...current.layers, ...additions] }));
-    setSelectedLayerId(additions[additions.length - 1].id);
-    setSelectedCaption(null);
-    setSelectedZoomRegion(null);
-    setActiveTool("annotations");
-  }, [addAudioSources, config.trimEnd, config.trimStart, currentTime, duration]);
+    const start = Math.max(0, Math.round(atTime * sourceFrameRate) / sourceFrameRate);
+    try {
+      const additions = await Promise.all(visuals.map(async (path, index): Promise<Layer> => {
+        const type = /\.(mp4|mov|mkv|webm)$/i.test(path) ? "video" as const : "image" as const;
+        const length = type === "video" ? await invoke<number>("probe_media_duration", {path}) : 5;
+        if (!Number.isFinite(length) || length <= 0) throw new Error("Media duration is unavailable");
+        return {
+          id: `${type}-${crypto.randomUUID()}`, type, path, timeSpace: "sequence", fit: "contain", cornerRadius: 10,
+          start, end: start + length, ...(type === "video" ? {sourceDuration:length,sourceOffset:0} : {}),
+          x: .25 + (index % 3) * .035, y: .2 + (index % 3) * .035, w: .5, h: .5,
+          opacity: 1, rotation: 0, flipX: false, flipY: false,
+        };
+      }));
+      setConfig(current => {
+        if (current.lockedTracks?.includes("annotations")) return current;
+        const clips = retainedClips(current.videoClips,current.trimStart,current.trimEnd||duration);
+        const extra = Math.max(...additions.map(l=>l.end)) - sequenceDuration(clips);
+        return {...current, layers:[...current.layers,...additions], videoClips:extra>0 ? [...clips,{id:`gap-${crypto.randomUUID()}`,gap:true,start:0,end:extra}] : current.videoClips};
+      });
+      setSelectedLayerId(additions[additions.length - 1].id);
+      setSelectedCaption(null); setSelectedZoomRegion(null); setActiveTool("annotations");
+    } catch (error) { setAudioError(`Media could not be added: ${userError(error)}`); }
+  }, [addAudioSources, config.lockedTracks, duration, sequencePosition, sourceFrameRate]);
 
   useEffect(() => {
     if (isBrowserPreview || !appWindow) return;
@@ -338,12 +388,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       const timeline = target?.closest<HTMLElement>(".ss-timeline-col");
       if (timeline && duration > 0) {
         const rect = timeline.getBoundingClientRect();
-        const at = Math.max(0, Math.min(duration, (clientX - rect.left) / rect.width * duration));
-        addMediaToTimeline(payload.paths, at);
+        const length = Number(timeline.dataset.timelineDuration) || sequenceDuration(footageClips);
+        const at = Math.max(0, Math.min(length, (clientX - rect.left) / rect.width * length));
+        addMediaToTimeline(payload.paths, timeline.dataset.timeView === "source" ? sequenceTime(footageClips,at) : at);
       }
     });
     return () => { void unlisten.then((stop) => stop()); };
-  }, [addMediaToTimeline, appWindow, duration, isBrowserPreview]);
+  }, [addMediaToTimeline, appWindow, duration, footageClips, isBrowserPreview]);
 
   const handleAddAudio = useCallback(async () => {
     const selected = await openDialog({
@@ -514,7 +565,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const applyKeyframes=useCallback((frames:Keyframe[])=>{if(!zoomLocked)setKeyframes(frames);},[zoomLocked,setKeyframes]);
   const applyConfigEdit=(next:EditorConfig)=>setConfig(current=>{
     const locked=(id:string)=>current.lockedTracks?.includes(id)&&next.lockedTracks?.includes(id);
-    return {...next,layers:locked("annotations")?current.layers:next.layers,videoClips:locked("video")?current.videoClips:next.videoClips,trimStart:locked("video")?current.trimStart:next.trimStart,trimEnd:locked("video")?current.trimEnd:next.trimEnd,actionOverlay:locked("action")?current.actionOverlay:next.actionOverlay};
+    const independent=current.videoClips?.find(c=>c.id===activeClipId)?.effects;
+    if(independent) {
+      const effectConfig={...independent.config,screenTilt:locked("tilt")?independent.config.screenTilt:next.screenTilt,zoomEnabled:locked("zoom")?independent.config.zoomEnabled:next.zoomEnabled,zoomLevel:locked("zoom")?independent.config.zoomLevel:next.zoomLevel,zoomMovement:locked("zoom")?independent.config.zoomMovement:next.zoomMovement,fixedZoomPart:locked("zoom")?independent.config.fixedZoomPart:next.fixedZoomPart,zoomMode:locked("zoom")?independent.config.zoomMode:next.zoomMode};
+      next={...next,videoClips:editClipEffects(current,activeClipId!,{config:effectConfig}).videoClips,screenTilt:current.screenTilt,zoomEnabled:current.zoomEnabled,zoomLevel:current.zoomLevel,zoomMovement:current.zoomMovement,fixedZoomPart:current.fixedZoomPart,zoomMode:current.zoomMode};
+    }
+    return {...next,layers:locked("annotations")?current.layers:next.layers,videoClips:locked("video")?current.videoClips?.map(clip=>({...clip,effects:next.videoClips?.find(item=>item.id===clip.id)?.effects??clip.effects}))??null:next.videoClips,trimStart:locked("video")?current.trimStart:next.trimStart,trimEnd:locked("video")?current.trimEnd:next.trimEnd,actionOverlay:locked("action")?current.actionOverlay:next.actionOverlay,screenTilt:locked("tilt")?current.screenTilt:next.screenTilt,cameraOverlay:locked("camera")?current.cameraOverlay:next.cameraOverlay,zoomEnabled:locked("zoom")?current.zoomEnabled:next.zoomEnabled,zoomLevel:locked("zoom")?current.zoomLevel:next.zoomLevel,zoomMovement:locked("zoom")?current.zoomMovement:next.zoomMovement,fixedZoomPart:locked("zoom")?current.fixedZoomPart:next.fixedZoomPart,zoomMode:locked("zoom")?current.zoomMode:next.zoomMode};
   });
 
   const handleTrimStart = (t: number) => {
@@ -544,10 +600,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       const result = await runCanvasExport(
         videoPath,
         inputLogPath,
-        keyframes,
+        sharedKeyframes,
         config,
-        captionTracks,
-        audioTracks,
+        sharedCaptionTracks,
+        audioTracks.map(track=>({...track,linked:false,clips:resolvedAudioClips(track,footageClips,audioDurations[track.id]??duration)})),
         cameraMedia,
         settings,
         config.trimStart,
@@ -569,7 +625,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         try {
           await invoke("write_delivery_package", {
             outputPath: settings.outputPath,
-            ...buildDeliveryPackage(captionTracks, keyframes, config.trimStart, config.trimEnd || duration, config.playbackRate, config.videoClips),
+            ...buildDeliveryPackage(sharedCaptionTracks, sharedKeyframes, config.trimStart, config.trimEnd || duration, config.playbackRate, config.videoClips),
           });
         } catch (error) {
           console.error("[Snap] Delivery package failed:", error);
@@ -596,8 +652,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, []);
 
   const resolvedSelectedZoom = useMemo(
-    () => findZoomRegion(keyframes, selectedZoomRegion, Math.round((config.trimEnd || duration) * 1000)),
-    [config.trimEnd, duration, keyframes, selectedZoomRegion]
+    () => selectedZoomRegion?.clipId && selectedZoomRegion.clipId !== activeClipId ? null : findZoomRegion(keyframes, selectedZoomRegion, Math.round((config.trimEnd || duration) * 1000)),
+    [config.trimEnd, duration, keyframes, selectedZoomRegion, activeClipId]
   );
 
   const updateSelectedZoom = useCallback((patch: Partial<ZoomRegionSettings>) => {
@@ -635,7 +691,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     }).sort((a, b) => a.time - b.time);
 
     setKeyframes(updated);
-    setSelectedZoomRegion({ startMs, endMs, regionId: region.regionId });
+    setSelectedZoomRegion({ startMs, endMs, regionId: region.regionId, clipId: activeClipId });
   }, [config.lockedTracks, config.trimEnd, config.trimStart, duration, keyframes, resolvedSelectedZoom]);
 
   const deleteSelectedZoom = useCallback(() => {
@@ -664,7 +720,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       if (!region) return current;
       const memberSet = new Set(region.memberIndices);
       return current.filter((_, index) => !memberSet.has(index));
-    });
+    }, selection.clipId);
     if (!selection.regionId || selectedZoomRegion?.regionId === selection.regionId) setSelectedZoomRegion(null);
   }, [config.lockedTracks, config.trimEnd, duration, selectedZoomRegion?.regionId]);
 
@@ -700,11 +756,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       source: "manual" as const,
     }));
     const next = [...keyframes, ...copies].sort((a, b) => a.time - b.time);
-    setKeyframes(next);
-    setSelectedZoomRegion({ startMs: destination, endMs: destination + regionDuration, regionId });
+    setKeyframes(next, selection.clipId);
+    setSelectedZoomRegion({ startMs: destination, endMs: destination + regionDuration, regionId, clipId: selection.clipId });
     setActiveTool("motion");
     pausePlayback();
-    seekTo(destination / 1000);
+    seekTo(destination / 1000, selection.clipId);
   }, [config.lockedTracks, config.trimEnd, config.trimStart, duration, getOccupiedZoomRanges, keyframes, pausePlayback, seekTo]);
 
   const duplicateLayer = useCallback((id: string) => {
@@ -777,7 +833,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     // Manual camera moves use the same speed setting as auto zoom. The old
     // hard 450ms ceiling made every manual region snap in and out regardless
     // of the selected movement speed.
-    const requestedTransitionMs = Math.max(600, Math.min(1500, getMovementDuration(config.zoomMovement)));
+    const requestedTransitionMs = Math.max(600, Math.min(1500, getMovementDuration(visualConfig.zoomMovement)));
     const transitionMs = Math.max(450, Math.min(requestedTransitionMs, Math.floor((available - 500) / 2)));
     const zoomInMs = Math.min(endMs, startMs + transitionMs);
     const holdUntilMs = Math.max(zoomInMs, endMs - transitionMs);
@@ -787,7 +843,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       duration: transitionMs,
       x: 0.5,
       y: 0.5,
-      scale: config.zoomLevel || 2.0,
+      scale: visualConfig.zoomLevel || 2.0,
       easing: "ease-in-out",
       source: "manual",
       regionId,
@@ -808,13 +864,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       : [{ time: 0, duration: 0, x: 0.5, y: 0.5, scale: 1, easing: "ease" as const }];
     const updated = [...base, zoomKf, holdKf, resetKf].sort((a, b) => a.time - b.time);
     setKeyframes(updated);
-    setConfig((current) => ({ ...current, zoomMode: "manual" }));
+    applyConfigEdit({ ...visualConfig, zoomMode: "manual" });
     manualTargetRangeRef.current = { startMs, endMs, regionId };
-    setSelectedZoomRegion({ startMs, endMs, regionId });
+    setSelectedZoomRegion({ startMs, endMs, regionId, clipId: activeClipId });
     // The bar exists immediately. The next preview click only changes its
     // focus point; Escape keeps the new centered bar.
     setZoomTargetMode(true);
-  }, [config.lockedTracks, config.trimEnd, config.trimStart, config.zoomLevel, config.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
+  }, [config.lockedTracks, config.trimEnd, config.trimStart, visualConfig.zoomLevel, visualConfig.zoomMovement, currentTime, duration, getOccupiedZoomRanges, keyframes]);
 
   const updateManualZoomTarget = useCallback((point: { x: number; y: number }, commit = true) => {
     if(config.lockedTracks?.includes("zoom"))return;
@@ -896,7 +952,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const filteredCommands = commandItems.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(commandQuery.trim().toLowerCase()));
 
   return (
-    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} onPointerMove={revealPreviewControls}>
+    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} data-restore-ready={projectReady} onPointerMove={revealPreviewControls}>
+      {!projectReady&&<div className="editor-opening" role="status">Opening editor…</div>}
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
         <div className="ss-drag-area" data-tauri-drag-region />
@@ -1088,9 +1145,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <Preview
             videoPath={videoPath}
             sourceDuration={duration}
+            readyToPaint={projectReady}
             inputLogPath={isBrowserPreview ? "" : inputLogPath}
             cameraMedia={cameraMedia}
-            config={config}
+            config={visualConfig}
+            transitionConfig={config}
+            transitionKeyframes={sharedKeyframes}
             keyframes={compareZoom && zoomProposal ? zoomProposal : keyframes}
             onKeyframesChange={applyKeyframes}
             onAutoZoomProposal={setZoomProposal}
@@ -1122,17 +1182,19 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             }}
             onLayerChange={(updated) => setConfig((c) => ({
               ...c,
-              layers: c.lockedTracks?.includes("annotations") ? c.layers : editLayerAtTime(c.layers, updated, currentTime),
+              layers: c.lockedTracks?.includes("annotations") ? c.layers : editLayerAtTime(c.layers, updated, updated.timeSpace === "sequence" ? sequencePosition : currentTime),
             }))}
             zoomTargetMode={activeTool === "motion" && zoomTargetMode}
             zoomFocusPoint={activeTool === "motion" && zoomTargetMode && resolvedSelectedZoom ? { x: resolvedSelectedZoom.x, y: resolvedSelectedZoom.y } : null}
-            zoomFocusSource={resolvedSelectedZoom?.source ?? config.zoomMode}
+            zoomFocusSource={resolvedSelectedZoom?.source ?? visualConfig.zoomMode}
             onZoomTargetPick={updateManualZoomTarget}
           autoZoomRevision={autoZoomRevision}
           autoZoomReady={projectReady}
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
             captionTracks={captionTracks}
             hasExternalAudio={audioTracks.length > 0}
+            activeClipId={activeClipId}
+            gapTime={inGap ? sequencePosition : undefined}
             originalOnly={false}
           />
           {zoomProposal && <div className="editor-enhancements"><strong>Suggested camera movement</strong><p>{keyframes.length} current keys · {zoomProposal.length} suggested keys</p><div className="editor-tool-row"><button aria-pressed={compareZoom} onClick={() => setCompareZoom(value => !value)}>{compareZoom ? "Show current" : "Preview suggestion"}</button><button disabled={config.lockedTracks?.includes("zoom")} onClick={() => { setKeyframes(zoomProposal); setZoomProposal(null); setCompareZoom(false); }}>Apply suggestion</button><button onClick={() => { setZoomProposal(null); setCompareZoom(false); }}>Discard</button></div></div>}
@@ -1153,11 +1215,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
         {/* Right Tool Settings Panel Drawer */}
         {activeTool && <Panels
-          config={config}
+          config={visualConfig}
+          frameRate={sourceFrameRate}
           inputLogPath={inputLogPath}
           onConfigChange={applyConfigEdit}
           duration={duration}
-          currentTime={currentTime}
+          currentTime={activeTool === "annotations" && config.layers.find(l=>l.id===selectedLayerId)?.timeSpace === "sequence" ? sequencePosition : currentTime}
           layers={config.layers}
           selectedLayerId={selectedLayerId}
           onAddLayer={(layer: Layer) => setConfig((c) => c.lockedTracks?.includes("annotations") ? c : ({ ...c, layers: [...c.layers, layer] }))}
@@ -1165,12 +1228,14 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           activeTab={activeTool}
           onAddManualZoom={handleAddManualZoom}
           onRegenerateAutoZoom={() => {
-            setConfig((c) => ({ ...c, zoomMode: "auto" }));
+            if (config.lockedTracks?.includes("zoom")) return;
+            applyConfigEdit({ ...visualConfig, zoomMode: "auto" });
             setSelectedZoomRegion(null);
             setAutoZoomRevision((value) => value + 1);
           }}
           onZoomModeChange={(mode) => {
-            setConfig((c) => ({ ...c, zoomMode: mode }));
+            if (config.lockedTracks?.includes("zoom")) return;
+            applyConfigEdit({ ...visualConfig, zoomMode: mode });
             setZoomTargetMode(false);
             manualTargetRangeRef.current = null;
           }}
@@ -1187,7 +1252,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           onAudioTracksChange={(next) => setAudioTracks(current => [...next.filter(t => !config.lockedTracks?.includes(t.id)),...current.filter(t => config.lockedTracks?.includes(t.id))])}
           captionTracks={captionTracks}
           onCaptionTracksChange={(tracks) => {if(!config.lockedTracks?.includes("caption"))setCaptionTracks(tracks);}}
-          selectedCaption={selectedCaption}
+          selectedCaption={selectedCaption?.clipId && selectedCaption.clipId !== activeClipId ? null : selectedCaption}
           onSelectCaption={(selection) => { setSelectedCaption(selection); if(selection) { const segment=captionTracks.find(track=>track.id===selection.trackId)?.segments.find(s=>s.id===selection.segmentId); if(segment) { pausePlayback(); seekTo(segment.startMs/1000); } } }}
           selectedActionId={selectedActionId}
           onSelectAction={setSelectedActionId}
@@ -1202,32 +1267,31 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         activeClipId={activeClipId}
         videoPath={videoPath}
         onTrackLocksChange={lockedTracks => setConfig(c => ({ ...c, lockedTracks }))}
-        onAnimationKeyChange={(kind, id, time, nextTime) => {
+        onAnimationKeysChange={(kind, id, keys, clipId) => setConfig(c => replaceAnimationKeys(c, kind, id, keys, clipId))}
+        onAnimationKeyChange={(kind, id, time, nextTime, clipId) => {
           setConfig(c => {
-            if (c.lockedTracks?.includes(kind === "layer" ? "annotations" : kind)) return c;
-            const retime = <T extends { time: number }>(keys: T[]): T[] => {
-              const key = keys.find(item => Math.abs(item.time-time)<.000001);
-              if (!key) return keys;
-              const rest = keys.filter(item => item !== key && (nextTime === null || Math.abs(item.time-nextTime)>.000001));
-              return nextTime === null ? rest : [...rest, { ...key, time: nextTime }].sort((a,b)=>a.time-b.time);
-            };
-            if (kind === "tilt" && c.screenTilt) return { ...c, screenTilt: { ...c.screenTilt, keys: retime(c.screenTilt.keys) } };
-            if (kind === "camera") return { ...c, cameraOverlay: { ...c.cameraOverlay, animation: retime(c.cameraOverlay.animation??[]) } };
-            return { ...c, layers: c.layers.map(layer => layer.id === id ? { ...layer, animation: retime(layer.animation??[]) } : layer) };
+            const clip = c.videoClips?.find(item => item.id === clipId);
+            const keys = kind === "tilt" ? (clip?.effects?.config.screenTilt ?? c.screenTilt)?.keys ?? [] : kind === "camera" ? c.cameraOverlay.animation ?? [] : c.layers.find(layer => layer.id === id)?.animation ?? [];
+            const key = keys.find(item => Math.abs(item.time - time) < .000001);
+            if (!key) return c;
+            const rest = keys.filter(item => item !== key && (nextTime === null || Math.abs(item.time - nextTime) > .000001));
+            return replaceAnimationKeys(c, kind, id, nextTime === null ? rest : [...rest, { ...key, time: nextTime }].sort((a,b) => a.time - b.time), clipId);
           });
         }}
         onTrackClear={(kind, id) => {
           const lockId = kind === "layer" ? "annotations" : kind;
           if (config.lockedTracks?.includes(lockId)) return;
           if (kind === "zoom") {
-            setKeyframes([]);
+            setSharedKeyframes([]);
+            setConfig(c=>({...c,videoClips:c.videoClips?.map(clip=>clip.effects?{...clip,effects:{...clip.effects,keyframes:[]}}:clip)??null}));
             setSelectedZoomRegion(null);
-            setConfig(c => ({ ...c, zoomMode: "manual" }));
+            setConfig(c => ({ ...c, zoomMode: "manual", videoClips: c.videoClips?.map(clip=>clip.effects?{...clip,effects:{...clip.effects,config:{...clip.effects.config,zoomMode:"manual"}}}:clip)??null }));
           } else if (kind === "caption") {
-            setCaptionTracks(tracks => tracks.map(track => track.id === id ? { ...track, segments: [] } : track));
+            setSharedCaptionTracks(tracks => tracks.map(track => track.id === id ? { ...track, segments: [] } : track));
+            setConfig(c=>({...c,videoClips:c.videoClips?.map(clip=>clip.effects?{...clip,effects:{...clip.effects,captions:clip.effects.captions.map(track=>track.id===id?{...track,segments:[]}:track)}}:clip)??null}));
             setSelectedCaption(null);
           } else if (kind === "layer") {
-            setConfig(c => ({ ...c, layers: c.layers.filter(layer => layer.type !== id) }));
+            setConfig(c => ({ ...c, layers: c.layers.filter(layer => layer.type !== id && layer.id !== id) }));
             setSelectedLayerId(null);
           } else if (kind === "action") {
             setConfig(c => ({ ...c, actionOverlay: { ...c.actionOverlay, enabled: false } }));
@@ -1242,7 +1306,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         audioTracks={audioTracks}
         duration={duration}
         currentTime={currentTime}
-        keyframes={keyframes}
+        keyframes={sharedKeyframes}
         config={config}
         playing={playing}
         playbackStatus={playbackStatus}
@@ -1253,7 +1317,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         onCutsChange={(newCuts: number[]) =>
             setConfig((c) => ({ ...c, cuts: newCuts }))
         }
-        onVideoClipsChange={(videoClips) => { if(config.lockedTracks?.includes("video"))return; pausePlayback(); setConfig(c => ({ ...c, videoClips })); }}
+        onVideoClipsChange={(videoClips) => { if(config.lockedTracks?.includes("video"))return; pausePlayback(); const next=retainedClips(videoClips,config.trimStart,config.trimEnd||duration);setAudioTracks(tracks=>reconcileAudioClips(tracks,footageClips,next));setConfig(c => ({ ...c, videoClips })); }}
         onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
@@ -1274,7 +1338,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           setActiveTool("motion");
           manualTargetRangeRef.current = region;
           setZoomTargetMode(true);
-          seekTo(region.startMs / 1000);
+          seekTo(region.startMs / 1000, region.clipId);
         }}
         onZoomRegionDuplicate={duplicateZoomRegion}
         onZoomRegionDelete={deleteZoomRegion}
@@ -1286,9 +1350,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           },
         }))}
         onAddAudio={handleAddAudio}
+        onLayerSplit={(layer,parts)=>setConfig(c=>c.lockedTracks?.includes("annotations")?c:{...c,layers:c.layers.flatMap(item=>item.id===layer.id?parts:[item])})}
         onMediaDrop={addMediaToTimeline}
         onAddCaptionAtTime={addManualCaptionAt}
-        onAudioTrackChange={(updated) => { if(!config.lockedTracks?.includes(updated.id))setAudioTracks((tracks) => tracks.map((track) => track.id === updated.id ? updated : track)); }}
+        onAudioTrackChange={(updated) => {
+          if(config.lockedTracks?.includes(updated.id))return;
+          pausePlayback();setAudioTracks(tracks=>tracks.map(track=>track.id===updated.id?updated:track));
+          const end=resolvedAudioClips(updated,footageClips,audioDurations[updated.id]??duration).reduce((maximum,clip)=>Math.max(maximum,clip.end),0),length=sequenceDuration(footageClips);
+          if(end>length+1e-6&&!config.lockedTracks?.includes("video"))setConfig(c=>({...c,videoClips:[...footageClips,{id:`gap-${crypto.randomUUID()}`,start:0,end:end-length,gap:true}]}));
+        }}
         onAudioTrackRemove={(trackId) => { if(!config.lockedTracks?.includes(trackId))setAudioTracks((tracks) => tracks.filter((track) => track.id !== trackId)); }}
         selectedActionId={selectedActionId}
         onActionSelect={(id) => {
@@ -1319,7 +1389,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           setSelectedCaption(null);
           setActiveTool("annotations");
           const layer = config.layers.find((candidate) => candidate.id === id);
-          if (layer && (currentTime < layer.start || currentTime > layer.end)) seekTo(layer.start + 0.01);
+          if (layer) { const clock=layer.timeSpace === "sequence" ? sequencePosition : currentTime; if(clock<layer.start||clock>layer.end){if(layer.timeSpace === "sequence")seekSequence(layer.start+.01);else seekTo(layer.start+.01);} }
         }}
         onLayerChange={(updated) => setConfig((current) => ({
           ...current,
@@ -1327,8 +1397,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         }))}
         onLayerDuplicate={duplicateLayer}
         onLayerDelete={deleteLayer}
-        captionTracks={captionTracks}
-        selectedCaption={selectedCaption}
+        captionTracks={sharedCaptionTracks}
+        selectedCaption={selectedCaption?.clipId && selectedCaption.clipId !== activeClipId ? null : selectedCaption}
         onCaptionSegmentSelect={(selection) => {
           pausePlayback();
           setSelectedCaption(selection);
@@ -1336,16 +1406,17 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           setSelectedZoomRegion(null);
           setZoomTargetMode(false);
           setActiveTool("captions");
-          const track = captionTracks.find((candidate) => candidate.id === selection.trackId);
+          const clip = config.videoClips?.find(item=>item.id===selection.clipId);
+          const track = (clip?.effects?.captions ?? sharedCaptionTracks).find((candidate) => candidate.id === selection.trackId);
           const segment = track?.segments.find((candidate) => candidate.id === selection.segmentId);
-          if (segment && (currentTime < segment.startMs / 1000 || currentTime >= segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01);
+          if (segment && (currentTime < segment.startMs / 1000 || currentTime >= segment.endMs / 1000)) seekTo(segment.startMs / 1000 + .01, selection.clipId);
         }}
-        onCaptionSegmentChange={(trackId, segment) => setCaptionTracks((tracks) => config.lockedTracks?.includes("caption") ? tracks : tracks.map((track) => track.id === trackId ? {
+        onCaptionSegmentChange={(trackId, segment, clipId) => setCaptionTracks((tracks) => config.lockedTracks?.includes("caption") ? tracks : tracks.map((track) => track.id === trackId ? {
           ...track,
           segments: track.segments
             .map((item) => item.id === segment.id ? segment : item)
             .sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs),
-        } : track))}
+        } : track),clipId)}
         onCaptionSegmentDuplicate={(trackId, segmentId) => setCaptionTracks((tracks) => config.lockedTracks?.includes("caption") ? tracks : tracks.map((track) => {
           if (track.id !== trackId) return track;
           const source = track.segments.find((segment) => segment.id === segmentId);
@@ -1386,14 +1457,20 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
         <section className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
           <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>
-          <div className="ss-health-score"><strong>{duration > 0 && (config.trimEnd || duration) > config.trimStart ? "Ready" : "Needs attention"}</strong><span>{editedDuration.toFixed(1)}s edited duration</span></div>
+          <div className="ss-health-score"><strong>{duration > 0 && editedDuration > 0 ? "Ready" : "Needs attention"}</strong><span>{editedDuration.toFixed(1)}s edited duration</span></div>
           <ul>
             <li className={duration > 0 ? "ok" : "warn"}><span>Source video</span><strong>{duration > 0 ? "Loaded" : "Metadata missing"}</strong></li>
             <li className={inputLogPath ? "ok" : "warn"}><span>Input actions</span><strong>{inputLogPath ? "Available" : "Imported video"}</strong></li>
             <li className={cameraMedia ? "ok" : "neutral"}><span>Webcam track</span><strong>{cameraMedia ? "Connected" : "Not recorded"}</strong></li>
             <li className="ok"><span>Visual layers</span><strong>{config.layers.length}</strong></li>
             <li className="ok"><span>Audio tracks</span><strong>{audioTracks.length}</strong></li>
-            <li className={captionTracks.length ? "ok" : "neutral"}><span>Captions</span><strong>{captionTracks.reduce((sum, track) => sum + track.segments.length, 0)} segments</strong></li>
+            <li className={sequenceCaptions.length ? "ok" : "neutral"}><span>Captions</span><strong>{sequenceCaptions.reduce((sum, track) => sum + track.segments.length, 0)} segments</strong></li>
+            {recordingHealth && <>
+              <li className="ok"><span>Recording encoder</span><strong>{recordingHealth.encoders.join(", ")}</strong></li>
+              <li className="ok"><span>Encoded frames</span><strong>{recordingHealth.encodedFrames.toLocaleString()}</strong></li>
+              <li className={recordingHealth.recoveryAttempts || recordingHealth.interrupted ? "warn" : "ok"}><span>Capture recovery</span><strong>{recordingHealth.interrupted ? "Interrupted" : recordingHealth.recoveryAttempts ? `${recordingHealth.recoveryAttempts} recoveries` : "No resets"}</strong></li>
+              {recordingHealth.quietIntervals > 0 && <li className="neutral"><span>Intervals without new frames</span><strong>{recordingHealth.quietIntervals} × 5s (may be static)</strong></li>}
+            </>}
             <li className={projectDirty ? "warn" : "ok"}><span>Project file</span><strong>{projectDirty ? "Unsaved changes" : "Saved"}</strong></li>
           </ul>
           <button className="ss-health-export" onClick={() => { setShowProjectHealth(false); setShowExport(true); }}><Upload size={16} /> Continue to export</button>
@@ -1404,7 +1481,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           videoPath={videoPath}
           duration={duration}
           config={config}
-          captionTrackCount={captionTracks.length}
+          captionTrackCount={sequenceCaptions.filter(track => track.segments.length > 0).length}
           status={exportStatus}
           progress={exportProgress}
           exportedPath={lastExportPath}

@@ -1321,3 +1321,15 @@
 .ss-health-score { display: flex; align-items: baseline; justify-content: space-between; margin: 18px 0 10px; padding: 15px; background: var(--bg-sunken); border-radius: 12px; }.ss-health-score strong { color: #68e0b0; font-size: 22px; }.ss-health-score span { color: var(--text-tertiary); font-size: 10px; }
 .ss-health-panel ul { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 11px; }.ss-health-panel li { display: flex; justify-content: space-between; padding: 10px 12px; font-size: 11px; background: var(--bg-surface-raised); }.ss-health-panel li strong { font-size: 10px; }.ss-health-panel li.ok strong { color: #68e0b0; }.ss-health-panel li.warn strong { color: #f6b86a; }.ss-health-panel li.neutral strong { color: var(--text-tertiary); }
 .ss-health-export { width: 100%; display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 14px; padding: 11px; color: #06120d; font-weight: 750; background: #68e0b0; border: 0; border-radius: 10px; cursor: pointer; }
+
+.screenstudio-editor-layout :is(.ss-panels-drawer,.ss-section-body,.custom-select-menu,.caption-language-menu,.caption-model-menu) { scrollbar-width:none; }
+.screenstudio-editor-layout :is(.ss-panels-drawer,.ss-section-body,.custom-select-menu,.caption-language-menu,.caption-model-menu)::-webkit-scrollbar { display:none; }
+
+.screenstudio-editor-layout .ss-panels-drawer { animation:none; }
+.screenstudio-editor-layout[data-restore-ready="false"] > :not(.editor-opening) { visibility:hidden; }
+.editor-opening { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:var(--bg-base); color:var(--text-secondary); font-size:12px; z-index:200; }
+
+.screenstudio-editor-layout :not(.ss-tracks-wrapper):not(.ss-timeline-scroll) { scrollbar-width:none; }
+.screenstudio-editor-layout :not(.ss-tracks-wrapper):not(.ss-timeline-scroll)::-webkit-scrollbar { display:none; }
+.timeline-context-menu,.aspect-dropdown-portal { scrollbar-width:none; }
+.timeline-context-menu::-webkit-scrollbar,.aspect-dropdown-portal::-webkit-scrollbar { display:none; }

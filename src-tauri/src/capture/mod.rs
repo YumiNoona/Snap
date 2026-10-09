@@ -996,6 +996,7 @@ fn run_segmented_gpu_capture(
     let mut excluded_encoders = HashSet::new();
     let mut terminal_failure = None;
     let mut total_frames = 0u64;
+    let mut summary = crate::recording_health::RecordingHealth::default();
 
     while is_recording.load(Ordering::Relaxed) {
         let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
@@ -1033,6 +1034,7 @@ fn run_segmented_gpu_capture(
             // input remain paused until set_paused(false) observes this flag.
             resume_ready.store(true, Ordering::Release);
         }
+        if !summary.encoders.iter().any(|item| item == encoder) { summary.encoders.push(encoder.to_string()); }
         eprintln!("[Snap] GPU {source_label} segment {part_index} started ({encoder})");
         let mut exited = false;
         let mut paused_segment = false;
@@ -1071,6 +1073,7 @@ fn run_segmented_gpu_capture(
                     size as f64 / 1_048_576.0
                 );
                 if frame == last_progress_frame {
+                    summary.quiet_intervals += 1;
                     eprintln!("[Snap] No new encoded frame in 5 seconds; the target may be static or temporarily unavailable");
                 }
                 last_progress_frame = frame;
@@ -1089,6 +1092,7 @@ fn run_segmented_gpu_capture(
         last_diagnostics = stderr_reader.join().unwrap_or_default();
         let _ = progress_reader.join();
         total_frames = total_frames.saturating_add(progress.frame.load(Ordering::Relaxed));
+        summary.media_seconds += progress.out_time_us.load(Ordering::Relaxed) as f64 / 1_000_000.0;
         if !segment_exit_status.is_empty() {
             if !last_diagnostics.is_empty() {
                 last_diagnostics.push('\n');
@@ -1140,6 +1144,10 @@ fn run_segmented_gpu_capture(
 
     crate::input_hook::mark_capture_end(total_frames, options.fps);
     finalize_capture_parts(&parts, output_path, &last_diagnostics, options)?;
+    summary.encoded_frames = total_frames;
+    summary.recovery_attempts = recovery_attempts;
+    summary.interrupted = terminal_failure.is_some();
+    crate::recording_health::write(output_path, &summary);
     for part in parts {
         let _ = std::fs::remove_file(part);
     }

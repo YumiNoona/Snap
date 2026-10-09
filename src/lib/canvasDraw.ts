@@ -1,3 +1,4 @@
+import { applyLayerTransition, transitionProgress } from "./transitions";
 import { motionEase } from "./easing";
 export { motionEase } from "./easing";
 import { animatedLayer } from "./layerAnimation";
@@ -237,11 +238,13 @@ export function drawVideoLayer(
   y: number,
   w: number,
   h: number,
+  playbackRate = 1,
 ): void {
   const video = loadCachedVideo(layer.path, cache, layer.id);
   if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
-  const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), timeSeconds - layer.start));
+  const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), timeSeconds - layer.start + (layer.sourceOffset ?? 0)));
   if (Math.abs(video.currentTime - localTime) > (playing ? .18 : .035) && !video.seeking) video.currentTime = localTime;
+  video.playbackRate = Math.max(.0625,Math.min(16,playbackRate));
   if (playing && video.paused) void video.play().catch(() => undefined);
   if (!playing && !video.paused) video.pause();
   ctx.save();
@@ -274,11 +277,17 @@ export function drawVisualLayer(
   y: number,
   w: number,
   h: number,
+  playbackRate = 1,
 ): void {
+  ctx.save();
+  const frame={x,y,w,h},maximum=Math.max(.001,(layer.end-layer.start)/2);
+  applyLayerTransition(ctx,layer.transition,transitionProgress(layer.transition,timeSeconds-layer.start,maximum),frame);
+  applyLayerTransition(ctx,layer.exitTransition,transitionProgress(layer.exitTransition,layer.end-timeSeconds,maximum),frame,true);
   if (layer.type === "text") drawTextLayer(ctx, layer, x, y, w, h);
   else if (layer.type === "shape") drawShapeLayer(ctx, layer, x, y, w, h);
   else if (layer.type === "image") drawImageLayer(ctx, layer, x, y, w, h);
-  else drawVideoLayer(ctx, layer, timeSeconds, playing, videoCache, x, y, w, h);
+  else drawVideoLayer(ctx, layer, timeSeconds, playing, videoCache, x, y, w, h, playbackRate);
+  ctx.restore();
 }
 
 export function paintGradient(
