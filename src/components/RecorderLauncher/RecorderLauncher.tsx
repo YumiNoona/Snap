@@ -858,11 +858,12 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           <div className="recording-mode-stack">
             <div className="focusee-mode-cards-grid">
             {/* Card 1: Full Screen */}
-            <div className="focusee-card" onClick={handleFullScreen}>
+            <div className="focusee-card" onClick={handleFullScreen} title="GPU display capture · supports full-screen games">
               <div className="card-thumb-frame">
                 <div className="wallpaper-preview full-screen-preview" />
               </div>
               <span className="card-title-text"><strong>Full Screen</strong></span>
+              {targets.filter(t=>t.target_type==="monitor").length>1 && <div className="full-screen-display" onClick={event=>event.stopPropagation()}><Dropdown value={selectedTarget} onChange={setSelectedTarget} placeholder="Select game display" options={targets.filter(t=>t.target_type==="monitor").map(t=>({value:t.id,label:t.name}))}/></div>}
             </div>
 
             {/* Card 2: Custom Region */}

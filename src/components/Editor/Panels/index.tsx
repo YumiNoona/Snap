@@ -1096,10 +1096,9 @@ export default function Panels({
           {selectedZoomRegion ? <>
             <div className="layer-inspector-header">
               <button onClick={onClearSelectedZoom} title="Back to motion tools" aria-label="Back to motion tools"><ArrowLeft size={17} /></button>
-              <span><strong>{selectedZoomRegion.source === "auto" ? "Auto zoom" : "Manual zoom"}</strong><small>{(selectedZoomRegion.startMs / 1000).toFixed(1)}s–{(selectedZoomRegion.endMs / 1000).toFixed(1)}s</small></span>
+              <span><strong>{selectedZoomRegion.source === "auto" ? "Auto zoom" : "Manual zoom"}</strong></span>
             </div>
             <Section title="Camera framing">
-              <div className="selection-source-badge">{selectedZoomRegion.source === "auto" ? "Generated camera move" : "Custom camera move"}</div>
               <Slider label="Zoom amount" value={selectedZoomRegion.scale} min={1.05} max={5} step={0.05} unit="×" onChange={(scale) => onSelectedZoomChange({ scale })} />
               <Slider label="Focus X" value={Math.round(selectedZoomRegion.x * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ x: value / 100 })} />
               <Slider label="Focus Y" value={Math.round(selectedZoomRegion.y * 100)} min={0} max={100} step={1} unit="%" onChange={(value) => onSelectedZoomChange({ y: value / 100 })} />
@@ -1113,7 +1112,6 @@ export default function Panels({
               <SelectRow label="Motion curve" value={selectedZoomRegion.easing} options={["linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(easing) => onSelectedZoomChange({ easing: easing as ZoomRegionSettings["easing"] })} />
               <Slider label="Start" value={selectedZoomRegion.startMs / 1000} min={config.trimStart} max={Math.max(config.trimStart, selectedZoomRegion.endMs / 1000 - 0.35)} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ startMs: value * 1000 })} />
               <Slider label="End" value={selectedZoomRegion.endMs / 1000} min={selectedZoomRegion.startMs / 1000 + 0.35} max={config.trimEnd || duration} step={0.05} unit="s" onChange={(value) => onSelectedZoomChange({ endMs: value * 1000 })} />
-              <p className="panel-help-text">Drag the focus marker in the preview or use the nine-point framing grid. Timeline edges control the region duration.</p>
               <button className="ss-drawer-action-btn danger" onClick={onDeleteSelectedZoom}><Trash2 size={14} /> Delete Zoom Region</button>
             </Section>
           </> : <>

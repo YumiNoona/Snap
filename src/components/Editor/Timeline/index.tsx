@@ -22,6 +22,7 @@ import "./Timeline.css";
 import { moveClips, duplicateClips, combineClips, deleteClips, changeClipSpeed, placeClip, trimClipRange } from "../../../lib/clipOperations";
 import { sequenceClip } from "../../../lib/videoEditing";
 import TrimPreview from "./TrimPreview";
+import { filmstripFrames } from "../../../lib/timelineFilmstrip";
 
 interface Props {
   editorTheme: "dark" | "light";
@@ -1239,9 +1240,6 @@ export default function Timeline({
               role="button" tabIndex={0} aria-label={`Footage segment ${index + 1}`} aria-pressed={selectedClipId === clip.id}
               className={`amber-clip-block footage-segment ${selectedClipIds.includes(clip.id) || selectedClipId === clip.id ? "selected" : ""} ${editTool === "razor" ? "razor" : ""} ${videoLocked ? "is-locked" : ""} ${dragPreview?.ids.includes(clip.id) ? "is-reordering" : ""} ${clip.groupId ? "combined" : ""} ${clip.gap ? "gap-clip" : ""}`}
               style={{
-                backgroundImage: !clip.gap && thumbnailStrip ? `url("${thumbnailStrip}")` : undefined,
-                backgroundSize: "auto 100%",
-                backgroundPosition: `${Math.min(9,Math.floor(clip.start/Math.max(.1,duration)*10))/9*100}% center`,
                 left: x(clip.start, clip.id),
                 width: (timeView==="sequence"?clipDuration(clip):clip.end-clip.start)/Math.max(.001,timelineDuration)*effectiveWidth,
               }}
@@ -1261,11 +1259,8 @@ export default function Timeline({
               {cutGuide?.id===clip.id&&<span className="timeline-cut-guide" style={{left:cutGuide.left}}><Scissors size={14}/><small>{formatTimecode(sequenceTime(clips,cutGuide.time,clip.id))}</small></span>}
               {clip.transition&&<div className="timeline-transition" style={{width:Math.min(clip.transition.duration,clipDuration(clip))*(timeView==="source"?clipSpeed(clip):1)/Math.max(.001,timelineDuration)*effectiveWidth}} onPointerDown={event=>event.stopPropagation()}><button className="timeline-transition-open" aria-label="Edit transition" title={`${clip.transition.effect} transition`} onClick={event=>{event.stopPropagation();setSelectedAudio(null);setSelectedClipId(clip.id);setInspectorOpen(true);}}><Sparkles size={14}/></button><span className="timeline-transition-handle" role="slider" tabIndex={videoLocked?-1:0} aria-label="Transition length" aria-valuemin={1/frameRate} aria-valuemax={Math.min(2,clipDuration(clip))} aria-valuenow={clip.transition.duration} onPointerDown={event=>resizeTransition(event,clip)} onClick={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key!=="ArrowLeft"&&event.key!=="ArrowRight")return;event.preventDefault();event.stopPropagation();if(!videoLocked)onVideoClipsChange(clips.map(item=>item.id===clip.id?{...item,transition:{...clip.transition!,duration:Math.max(1/frameRate,Math.min(2,clipDuration(clip),clip.transition!.duration+(event.key==="ArrowLeft"?-1:1)*(event.shiftKey?10:1)/frameRate))}}:item));}}/></div>}
               {!clip.transition&&!clip.gap&&index>0&&!clips[index-1].gap&&<button className="timeline-add-transition" aria-label="Add transition at this cut" disabled={videoLocked} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();setSelectedAudio(null);setSelectedClipId(clip.id);setInspectorOpen(true);onVideoClipsChange(clips.map(item=>item.id===clip.id?{...item,transition:{effect:"dissolve",duration:Math.min(.3,clipDuration(clip))}}:item));}}><Plus size={14}/></button>}
-              <div className="clip-tag-content">
-                <GripVertical size={12} className="clip-drag-grip"/>
-                <span>{clip.gap ? "Gap" : `Clip ${index + 1}`}</span>
-                <span className="clip-info">{(clipDuration(clip) / (config.playbackRate || 1)).toFixed(1)}s</span>
-              </div>
+              {!clip.gap && thumbnailStrip && <div className="footage-filmstrip" aria-hidden="true">{filmstripFrames(clip.start,clip.end,duration,(timeView==="sequence"?clipDuration(clip):clip.end-clip.start)/Math.max(.001,timelineDuration)*effectiveWidth).map((frame,i)=><span key={i} style={{backgroundImage:`url("${thumbnailStrip}")`,backgroundPosition:`${frame/9*100}% center`}}/>)}</div>}
+              {clip.gap && <span className="timeline-gap-label">Gap</span>}
               {!clip.gap && <><div className="footage-trim-handle start" title="Trim segment start" onMouseDown={e => trimClip(e, clip, "start")} onClick={e => e.stopPropagation()} />
               <div className="footage-trim-handle end" title="Trim segment end" onMouseDown={e => trimClip(e, clip, "end")} onClick={e => e.stopPropagation()} /></>}
             </div>)}
@@ -1300,7 +1295,7 @@ export default function Timeline({
                   <button className="layer-bar-handle left" aria-label="Trim audio start" onPointerDown={event=>beginAudioEdit(event,track,segment,"start")}/>
                   {cutGuide?.id===segment.id&&<span className="timeline-cut-guide" style={{left:cutGuide.left}}><Scissors size={14}/><small>{formatTimecode(cutGuide.time)}</small></span>}
                   {bins?.length?<WaveRow data={bins} theme={editorTheme}/>:<span className="empty-track-label">{waveformErrors.has(track.id)?"Waveform unavailable":"Reading waveform…"}</span>}
-                  <span className="audio-clip-name">{track.label}</span><button className="layer-bar-handle right" aria-label="Trim audio end" onPointerDown={event=>beginAudioEdit(event,track,segment,"end")}/>
+                  <button className="layer-bar-handle right" aria-label="Trim audio end" onPointerDown={event=>beginAudioEdit(event,track,segment,"end")}/>
                 </div>;
               })}</div>
             </div>;

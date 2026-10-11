@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.2.0-10b981?style=flat-square" alt="Version 9.2.0" />
+    <img src="https://img.shields.io/badge/version-9.2.1-10b981?style=flat-square" alt="Version 9.2.1" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />

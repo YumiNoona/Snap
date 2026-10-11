@@ -1455,7 +1455,6 @@ export default function Preview({
           Drag to crop region • Esc to cancel • tiny click to reset
         </div>
       )}
-      {zoomTargetMode && <div className="crop-hint">Drag anywhere to place the zoom focus • Esc to cancel</div>}
       {config.zoomEnabled && keyframes.length > 0 && currentZoom > 1.02 && (
         <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}

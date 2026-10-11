@@ -445,6 +445,8 @@
   transition: color var(--dur-base) var(--ease-standard);
 }
 .card-title-text strong { font-size: var(--text-sm); }.card-title-text small { color: var(--text-tertiary); font-size: var(--text-xs); font-weight: 500; }
+.full-screen-display { padding:0 8px 8px; background:var(--bg-surface); cursor:default; }
+.full-screen-display .dd-trigger { min-height:28px; padding:4px 7px; font-size:11px; }
 
 .focusee-card:hover .card-title-text {
   color: var(--text-primary);

@@ -1,6 +1,10 @@
 /** Product text must never interpolate backend diagnostics or local paths. */
 export function userError(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (text.includes("[capture-protected]")) return "Windows excludes this window from recording. Capture protection must be turned off in the app or utility applying it before Snap can record this window.";
+  if (text.includes("[gpu-scaling]")) return "GPU resizing could not start. Choose Manual → Native resolution in recording settings and try again.";
+  if (text.includes("[capture-start]")) return "The selected screen or window could not start capture. Restore the window, reselect the target, and try again. For full-screen games, use Full Screen capture.";
+  if (text.includes("[capture-process]")) return "The recording engine could not launch. Update the video engine in Settings and check your recording folder.";
   if (text.includes("save as") || text.includes("recovery failed")) return "Use Save As to preserve your project, then try again.";
   if (text.includes("active export") || text.includes("finish or cancel")) return "Finish or cancel the current export, then try again.";
   if (text.includes("finish the current recording")) return "Stop the current recording before opening the editor.";

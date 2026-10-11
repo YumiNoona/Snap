@@ -1,9 +1,9 @@
 import { userError } from "../../lib/userError";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AppWindow, ChevronRight, RefreshCw, Search, X } from "lucide-react";
+import { AppWindow, RefreshCw, X } from "lucide-react";
 import "./WindowPickerWindow.css";
 
 interface DisplayTarget {
@@ -12,18 +12,22 @@ interface DisplayTarget {
   target_type: string;
 }
 
+const previewMode = import.meta.env.DEV && typeof window !== "undefined"
+  && new URLSearchParams(window.location.search).get("preview") === "1";
+
 export default function WindowPickerWindow() {
   const [targets, setTargets] = useState<DisplayTarget[]>([]);
-  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selecting, setSelecting] = useState("");
+  const [previews, setPreviews] = useState<Record<string, string>>({});
 
   const refresh = async () => {
     setLoading(true);
     setError("");
     try {
-      const next = await invoke<DisplayTarget[]>("enumerate_targets");
+      // Browser-only visual fixture; never included in a packaged build.
+      const next = previewMode ? ["Apex Legends", "Snap", "Browser", "File Explorer", "Terminal", "Notes"].map((name, index) => ({ id: `preview-${index}`, name, target_type: "window" })) : await invoke<DisplayTarget[]>("enumerate_targets");
       setTargets(next.filter((target) => target.target_type === "window"));
     } catch (reason) {
       setError(`Unable to inspect open windows: ${userError(reason)}`);
@@ -33,14 +37,29 @@ export default function WindowPickerWindow() {
   };
 
   useEffect(() => { void refresh(); }, []);
-
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return query ? targets.filter((target) => target.name.toLowerCase().includes(query)) : targets;
-  }, [search, targets]);
+  useEffect(() => {
+    let cancelled = false;
+    const urls: string[] = [];
+    setPreviews({});
+    // Serial, one-shot previews. Never poll or keep a capture alive in the picker.
+    void (async () => {
+      for (const target of targets) {
+        if (cancelled || previewMode) break;
+        try {
+          const bytes = await invoke<number[] | null>("window_preview", { targetId: target.id });
+          if (cancelled || !bytes?.length) continue;
+          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+          urls.push(url);
+          setPreviews((current) => ({ ...current, [target.id]: url }));
+        } catch { /* Unavailable/protected windows keep a neutral preview. */ }
+      }
+    })();
+    return () => { cancelled = true; urls.forEach((url) => URL.revokeObjectURL(url)); };
+  }, [targets]);
 
   const choose = async (target: DisplayTarget) => {
     if (selecting) return;
+    if (previewMode) return;
     setSelecting(target.id);
     try {
       await emitTo("main", "window-target-selected", target.id);
@@ -58,35 +77,26 @@ export default function WindowPickerWindow() {
         <div data-tauri-drag-region>
           <strong data-tauri-drag-region>Select a window</strong>
         </div>
+        <button className="window-picker-refresh" title="Refresh windows" aria-label="Refresh windows" onClick={() => void refresh()} disabled={loading || !!selecting}><RefreshCw size={16} className={loading ? "spin" : ""} /></button>
         <button title="Close" aria-label="Close window picker" onClick={() => getCurrentWindow().close()}><X size={16} /></button>
       </header>
 
       <section className="window-picker-body">
-        <div className="window-picker-intro">
-          <div><h1>Choose a window</h1></div>
-          <button className="window-picker-refresh" onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? "spin" : ""} />Refresh</button>
-        </div>
-
-        <label className="window-picker-search">
-          <Search size={16} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search open windows" autoFocus />
-          {search && <button title="Clear search" onClick={() => setSearch("")}><X size={13} /></button>}
-        </label>
-
-        <div className="window-picker-list" aria-busy={loading}>
+        {error && <p className="window-picker-error" role="alert">{error}</p>}
+        <div className="window-picker-list" aria-label="Open windows" aria-busy={loading}>
           {loading && <div className="window-picker-empty"><RefreshCw size={21} className="spin" /><strong>Finding open windows…</strong></div>}
-          {!loading && error && <div className="window-picker-empty error"><AppWindow size={21} /><strong>Window list unavailable</strong><small>{error}</small></div>}
-          {!loading && !error && filtered.map((target) => (
-            <button key={target.id} className="window-picker-option" disabled={!!selecting} onClick={() => void choose(target)}>
-              <span className="window-picker-option-icon"><AppWindow size={17} /></span>
-              <span><strong>{target.name}</strong></span>
-              {selecting === target.id ? <RefreshCw size={15} className="spin" /> : <ChevronRight size={16} />}
+          {!loading && targets.map((target) => (
+            <button key={target.id} className="window-picker-option" title={target.name} disabled={!!selecting} onClick={() => void choose(target)}>
+              <span className="window-picker-video">
+                {previews[target.id] ? <img src={previews[target.id]} alt="" /> : <AppWindow size={32} aria-label="Preview unavailable" />}
+                {selecting === target.id && <RefreshCw size={20} className="spin" />}
+              </span>
+              <strong>{target.name}</strong>
             </button>
           ))}
-          {!loading && !error && filtered.length === 0 && <div className="window-picker-empty"><Search size={21} /><strong>No matching windows</strong><small>Try refreshing or clearing the search.</small></div>}
+          {!loading && !error && targets.length === 0 && <div className="window-picker-empty"><AppWindow size={21} /><strong>No open windows</strong></div>}
         </div>
 
-        <footer className="window-picker-footer"><span><i />{targets.length} windows</span></footer>
       </section>
     </main>
   );

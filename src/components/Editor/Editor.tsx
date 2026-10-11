@@ -10,7 +10,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -91,15 +91,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [compareZoom, setCompareZoom] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [showFileMenu, setShowFileMenu] = useState(false);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [commandQuery, setCommandQuery] = useState("");
-  const [commandIndex, setCommandIndex] = useState(0);
   const [showProjectHealth, setShowProjectHealth] = useState(false);
   const [inputHealth,setInputHealth]=useState<{state:"loading"|"loaded"|"missing"|"error";count:number}>({state:"loading",count:0});
   useEffect(()=>{let cancelled=false;setInputHealth({state:"loading",count:0});void loadInputLog(inputLogPath).then(log=>{if(!cancelled)setInputHealth({state:log.allEvents.length?"loaded":"missing",count:log.allEvents.length});}).catch(()=>{if(!cancelled)setInputHealth({state:"error",count:0});});return()=>{cancelled=true;};},[inputLogPath]);
   const [showFinishing, setShowFinishing] = useState(false);
   const [voiceBypass, setVoiceBypass] = useState(false);
-  const paletteRef = useModalFocus(showCommandPalette);
   const healthRef = useModalFocus(showProjectHealth);
   const { audio: previewAudioTracks, status: voiceStatus } = useVoicePolish(audioTracks, voiceBypass);
   const [recordingHealth, setRecordingHealth] = useState<{ encoders: string[]; encodedFrames: number; mediaSeconds: number; quietIntervals: number; recoveryAttempts: number; interrupted: boolean } | null>(null);
@@ -519,11 +515,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   useEffect(() => {
     const onCommandKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "p") {
-        if(document.querySelector('[role="dialog"]:not(.ss-command-palette)'))return;
-        event.preventDefault(); setShowCommandPalette((open) => !open); setCommandQuery("");
-      } else if (event.key === "Escape") {
-        setShowCommandPalette(false); setShowProjectHealth(false);
+      if (event.key === "Escape") {
+        setShowProjectHealth(false);
       }
     };
     window.addEventListener("keydown", onCommandKey);
@@ -957,17 +950,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     };
   }, [previewFocusMode, revealPreviewControls]);
 
-  const commandItems = [
-    { label: "Finishing studio", detail: "Transcript cleanup, voice polish, formats, cursor repairs and brand recipes", icon: Layers3, run: () => setShowFinishing(true) },
-    { label: "Freeze frame at playhead", detail: "Adds a still image layer for 2.5 seconds", icon: Snowflake, run: () => void extractFrame("freeze") },
-    { label: "Save current frame as thumbnail", detail: "Exports a full-resolution PNG", icon: ImageIcon, run: () => void extractFrame("thumbnail") },
-    { label: "3D Tilt", detail: "Animate screen perspective and rotation", icon: Box, run: () => setActiveTool("tilt") },
-    { label: "Project health", detail: "Review media, timing, captions, and export readiness", icon: Activity, run: () => setShowProjectHealth(true) },
-    { label: "Keys & Clicks", detail: "Open tutorial action overlays", icon: Keyboard, run: () => setActiveTool("actions") },
-    ...(cameraMedia ? [{ label: "Webcam Studio", detail: "Frame and style the camera track", icon: Camera, run: () => setActiveTool("camera" as const) }] : []),
-  ];
-  const filteredCommands = commandItems.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(commandQuery.trim().toLowerCase()));
-
   return (
     <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} data-restore-ready={projectReady} onPointerMove={revealPreviewControls}>
       {!projectReady&&<div className="editor-opening" role="status">Opening editor…</div>}
@@ -1012,6 +994,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
                 <button role="menuitem" disabled={!projectReady || projectSaving} onClick={() => void handleSaveProjectAs()}>
                   <SaveAll size={16} /><span><strong>Save As…</strong><small>Create another project file</small></span><kbd>Ctrl Shift S</kbd>
                 </button>
+                <div className="ss-file-menu-divider" />
+                <button role="menuitem" onClick={() => { setShowFileMenu(false); void extractFrame("freeze"); }}><Snowflake size={16} /><span>Freeze frame</span></button>
+                <button role="menuitem" onClick={() => { setShowFileMenu(false); void extractFrame("thumbnail"); }}><ImageIcon size={16} /><span>Save frame</span></button>
+                <button role="menuitem" onClick={() => { setShowFileMenu(false); setShowProjectHealth(true); }}><Activity size={16} /><span>Project health</span></button>
                 {fileActionStatus && <p className="ss-file-menu-status" role="status">{fileActionStatus}</p>}
               </div>
             )}
@@ -1024,8 +1010,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
-          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl Shift P)" aria-label="Open command palette"><Search size={16} /></button>
-          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Finishing studio">Finish</button>
+          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Finishing tools" aria-label="Finishing tools"><AudioLines size={16} /></button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -1461,17 +1446,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
       />
-      {showCommandPalette && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowCommandPalette(false)}>
-        <section ref={paletteRef} tabIndex={-1} className="ss-command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
-          <header className="ss-command-header"><span><Search size={16} /></span><div><strong>Quick actions</strong><small>Ctrl Shift P · Jump to an editor tool</small></div><kbd>Esc</kbd></header>
-          <div className="ss-command-search"><Search size={17} /><input autoFocus value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((index) => Math.max(0, Math.min(filteredCommands.length - 1, index + 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); } else if (event.key === "Enter" && filteredCommands[commandIndex]) { filteredCommands[commandIndex].run(); setShowCommandPalette(false); } }} placeholder="Search actions" aria-label="Search quick actions" /></div>
-          <div className="ss-command-list">
-            {filteredCommands.map(({ label, detail, icon: Icon, run }, index) => <button key={label} className={index === commandIndex ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => { run(); setShowCommandPalette(false); }}><i><Icon size={17} /></i><span><strong>{label}</strong><small>{detail}</small></span><em>Open</em></button>)}
-            {!filteredCommands.length && <p>No matching actions</p>}
-          </div>
-          <footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> select</span></footer>
-        </section>
-      </div>}
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
         <section ref={healthRef} tabIndex={-1} className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
           <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>

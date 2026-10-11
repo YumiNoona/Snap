@@ -42,11 +42,13 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.2.0 adds the Finish studio: reviewable transcript and quiet-audio cleanup, local cached voice polish with A/B preview, independent portrait/square/landscape layouts, non-destructive cursor repairs and loop alignment, and reusable local brand recipes.
+            Snap 9.2.1 simplifies the editor and window picker: one-shot window preview cards, direct selection, balanced drawer widths and padding, cleaner zoom controls, icon-based finishing tools, and source-aware timeline filmstrips without repeated clip/audio labels. The top-bar command search and its shortcut have been removed.
 
-            Fixes include project reopening permissions, caption entrance controls, modal keyboard focus, visible editor scrollbars, audio synchronization when switching polished/original sources, and export cancellation reporting. Heavy finishing work remains editor-only and original recordings remain unchanged.
+            Full-screen display recording now uses adapter-bound GPU Desktop Duplication. Window and region recording retain Windows Graphics Capture. Capture startup preserves diagnostics, distinguishes GPU resizing failures, and detects Windows capture-excluded windows before attempting encoding. Hardware encoding remains the default; CPU fallback is explicit opt-in.
 
-            Validation: 157 frontend tests, 45 native unit tests, five real-FFmpeg integration checks, production build, source checks, and strict Rust linting. Full native end-to-end UI verification remains incomplete; review cleanup candidates and voice settings before export. Room-tail reduction is a gate, not neural dereverberation, and cursor repairs require input metadata. See EDITOR_FINISHING.md in the repository for details.
+            Validation: 163 frontend tests, 47 native unit tests, production build, source checks and strict Rust linting. Real GPU recording startup and one-shot window preview capture were also tested locally.
+
+            Known limitation: the tested Apex Legends window reports Windows capture exclusion (WDA_EXCLUDEFROMCAPTURE, 0x11), including in Borderless Windowed mode. Snap reports this restriction and does not bypass it or silently record the desktop instead. The app or utility applying that exclusion must remove it before game-window capture can work. Some GPU drivers also reject D3D11 downscaling; use Manual / Native resolution in that case. See FULLSCREEN_CAPTURE.md for diagnosis and remaining game-specific validation.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

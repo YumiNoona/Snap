@@ -8,3 +8,11 @@ it("never shows diagnostic paths or arbitrary backend text in product errors", (
   expect(userError("Unexpected opaque IPC failure")).not.toContain("IPC");
   expect(userError("Use Save As to preserve the original project")).toMatch(/Save As/);
 });
+
+it("distinguishes capture and resizing failures from unavailable hardware", () => {
+  expect(userError("[capture-protected] NVENC: private diagnostics")).toContain("Windows excludes this window");
+  expect(userError("[capture-start] NVENC: no frames; C:\\private.mp4")).toContain("reselect the target");
+  expect(userError("[gpu-scaling] NVENC: texture creation failed")).toContain("Native resolution");
+  expect(userError("[capture-process] NVENC: access denied")).toContain("engine could not launch");
+  expect(userError("No working hardware H.264 encoder was detected")).toContain("hardware encoder");
+});

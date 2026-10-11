@@ -1865,6 +1865,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             capture::enumerate_targets,
+            capture::window_preview,
             capture::get_target_bounds,
             capture::get_videos_dir,
             capture::get_exports_dir,

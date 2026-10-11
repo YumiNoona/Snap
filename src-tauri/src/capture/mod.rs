@@ -319,7 +319,7 @@ fn recording_preflight_blocking(
         String::from_utf8_lossy(&filters.stdout),
         String::from_utf8_lossy(&filters.stderr)
     );
-    if !filter_text.contains("gfxcapture") {
+    if !filter_text.contains("gfxcapture") && !filter_text.contains("ddagrab") {
         return Err("The installed FFmpeg build has no Windows GPU capture filter. Install a current Gyan Essentials or Full build.".to_string());
     }
     let encoders = crate::process::background_command("ffmpeg")
@@ -520,6 +520,72 @@ fn hwnd_from_id(id: &str) -> Option<HWND> {
         .map(|v| HWND(v as *mut c_void))
 }
 
+/// Window capture needs the game presenting frames, not minimized behind Snap.
+/// Do this only for an explicit recording start, never for picker previews.
+fn prepare_window_capture(target_id: &str) -> std::result::Result<(), String> {
+    let Some(window) = hwnd_from_id(target_id) else { return Ok(()) };
+    unsafe {
+        if !IsWindow(Some(window)).as_bool() {
+            return Err("[capture-start] The selected window no longer exists".into());
+        }
+        if window_capture_protected(window) {
+            return Err("[capture-protected] Windows excludes the selected window from capture (display affinity). Snap cannot record it while this protection is enabled.".into());
+        }
+        if IsIconic(window).as_bool() { let _ = ShowWindow(window, SW_RESTORE); }
+        let _ = SetForegroundWindow(window);
+    }
+    Ok(())
+}
+
+fn capture_affinity_blocks_recording(affinity: u32) -> bool {
+    affinity != WDA_NONE.0
+}
+
+fn window_capture_protected(window: HWND) -> bool {
+    let mut affinity = 0u32;
+    unsafe { GetWindowDisplayAffinity(window, &mut affinity) }.is_ok()
+        && capture_affinity_blocks_recording(affinity)
+}
+
+/// A bounded one-shot preview. No live preview stream or background polling.
+#[tauri::command]
+pub async fn window_preview(target_id: String) -> std::result::Result<Option<Vec<u8>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(window) = hwnd_from_id(&target_id) else { return Ok(None) };
+        if STATE.lock().map_err(|e| e.to_string())?.is_some()
+            || unsafe { !IsWindow(Some(window)).as_bool() || IsIconic(window).as_bool() }
+            || window_capture_protected(window) {
+            return Ok(None);
+        }
+        let source = format!("gfxcapture=hwnd={}:capture_cursor=0:capture_border=0:display_border=0:max_framerate=10:width=384:height=216:resize_mode=scale_aspect:output_fmt=8bit,hwdownload,format=bgra", window.0 as usize);
+        let mut command = background_command("ffmpeg");
+        command.args(["-hide_banner", "-v", "error", "-filter_complex", &source, "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "pipe:1"])
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let Ok(mut child) = spawn_recording_child(&mut command) else { return Ok(None) };
+        let Some(stdout) = child.stdout.take() else { let _ = child.kill(); let _ = child.wait(); return Ok(None) };
+        let reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.take(256 * 1024).read_to_end(&mut bytes);
+            bytes
+        });
+        let started = Instant::now();
+        let success = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status.success(),
+                Err(_) => break false,
+                _ => {}
+            }
+            if started.elapsed() > Duration::from_secs(2)
+                || STATE.lock().map(|state| state.is_some()).unwrap_or(true) { break false; }
+            thread::sleep(Duration::from_millis(20));
+        };
+        if !success { let _ = child.kill(); }
+        let _ = child.wait();
+        let bytes = reader.join().unwrap_or_default();
+        Ok((success && bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9])).then_some(bytes))
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Resolve the owning process for an exact window capture. Display and custom
 /// region captures deliberately return `None` because their pixels may contain
 /// audio from more than one application.
@@ -646,6 +712,32 @@ fn gfxcapture_region_source(
     format!("gfxcapture=hmonitor={monitor}:crop_left={}:crop_top={}:crop_right={right}:crop_bottom={bottom}:{common}", crop.x, crop.y)
 }
 
+/// Resolve indices on the actual display adapter, never a global monitor index.
+fn duplication_target(target_id: &str) -> std::result::Result<(u32, u32), String> {
+    let monitor = hmonitor_from_id(target_id).ok_or("Select a display for full-screen recording")?;
+    let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(|e| e.to_string())?;
+    for adapter_index in 0u32.. {
+        let Ok(adapter) = (unsafe { factory.EnumAdapters1(adapter_index) }) else { break };
+        for output_index in 0u32.. {
+            let Ok(output) = (unsafe { adapter.EnumOutputs(output_index) }) else { break };
+            if unsafe { output.GetDesc() }.is_ok_and(|desc| desc.Monitor == monitor && desc.AttachedToDesktop.as_bool()) {
+                return Ok((adapter_index, output_index));
+            }
+        }
+    }
+    Err("The selected display is disconnected. Select the game display again.".into())
+}
+
+fn duplication_source(output_index: u32, width: u32, height: u32, options: RecordingOptions) -> String {
+    let (w, h) = constrained_size(width, height, options);
+    let capture = format!("ddagrab=output_idx={output_index}:framerate={}:draw_mouse=0:output_fmt=bgra", options.fps);
+    // Avoid allocating a scaler's video-encoder texture on drivers that cannot
+    // support it, especially when no resizing is needed in the first place.
+    if w == width && h == height { capture } else {
+        format!("{capture},scale_d3d11=width={w}:height={h}:format=bgra")
+    }
+}
+
 // ── Enumerate targets (runs fine on any thread) ──────────────────────────────
 
 #[tauri::command]
@@ -674,13 +766,13 @@ fn enumerate_monitors(targets: &mut Vec<DisplayTarget>) -> Result<()> {
             };
 
             let desc = unsafe { output.GetDesc()? };
-            if desc.Monitor.is_invalid() {
+            if desc.Monitor.is_invalid() || !desc.AttachedToDesktop.as_bool() {
                 continue;
             }
 
             targets.push(DisplayTarget {
                 id: format!("monitor:{}", desc.Monitor.0 as usize),
-                name: widestr_to_string(&desc.DeviceName),
+                name: format!("{} · {}×{}", widestr_to_string(&desc.DeviceName).trim_start_matches("\\\\.\\"), desc.DesktopCoordinates.right-desc.DesktopCoordinates.left, desc.DesktopCoordinates.bottom-desc.DesktopCoordinates.top),
                 target_type: "monitor".to_string(),
             });
         }
@@ -807,6 +899,7 @@ fn start_recording_blocking(
     }
     let gpu_vendor = target_gpu_vendor(&target_id);
     let options = options.unwrap_or_default().sanitized();
+    prepare_window_capture(&target_id)?;
     if let Some(selected) = region {
         if selected.w < 256 || selected.h < 144 {
             return Err("Recording region must be at least 256x144 pixels".to_string());
@@ -955,23 +1048,37 @@ fn run_capture_thread(
         }
     }
 
-    // Prefer Windows.Graphics.Capture for windows, regions, and full monitors.
+    // Full-screen games can bypass the compositor's desktop image. Capture
+    // the selected output via Desktop Duplication, on its owning adapter.
+    // Never silently fall back to a compositor-only desktop or CPU readback.
+    if hmonitor_from_id(target_id).is_some() && crop.is_none() {
+        let (adapter, output) = duplication_target(target_id)?;
+        let bounds = get_target_bounds(target_id.to_string())?;
+        let source = duplication_source(output, bounds.w.max(2) as u32, bounds.h.max(2) as u32, options);
+        return run_segmented_gpu_capture(&source, "full display (game-compatible DXGI)", Some(adapter), &abs_path, options, gpu_vendor, runtime).map_err(|error| {
+            if source.contains("scale_d3d11") {
+                format!("{error} If your driver cannot create GPU scaling textures, select Native resolution in manual recording settings. Snap will not substitute a desktop-only or CPU capture path.")
+            } else { error }
+        });
+    }
+    // Prefer Windows.Graphics.Capture for windows and regions.
     // Its compositor-friendly monitor path does not hold Desktop Duplication's
     // output surface continuously, which can starve Chromium video overlays on
     // some hybrid/NVIDIA laptops even when Task Manager reports modest load.
     if has_gfxcapture() {
         if let Some((source, label)) = gfxcapture_source(target_id, crop, options) {
             return run_segmented_gpu_capture(
-                &source, &label, &abs_path, options, gpu_vendor, runtime,
+                &source, &label, None, &abs_path, options, gpu_vendor, runtime,
             );
         }
     }
-    Err("This FFmpeg build cannot provide GPU-resident Windows capture for the selected target. Update FFmpeg in Settings and select the target again. Snap will not silently switch to CPU frame readback or Desktop Duplication.".to_string())
+    Err("This FFmpeg build cannot provide GPU-resident Windows capture for the selected target. Update FFmpeg in Settings and select the target again. Snap will not silently switch to CPU frame readback.".to_string())
 }
 
 fn run_segmented_gpu_capture(
     source: &str,
     source_label: &str,
+    adapter: Option<u32>,
     output_path: &Path,
     options: RecordingOptions,
     gpu_vendor: GpuVendor,
@@ -1009,7 +1116,7 @@ fn run_segmented_gpu_capture(
             progress,
             progress_reader,
             stderr_reader,
-        } = match spawn_gpu_capture(source, &part, options, gpu_vendor, &excluded_encoders) {
+        } = match spawn_gpu_capture(source, adapter, &part, options, gpu_vendor, &excluded_encoders) {
             Ok(value) => value,
             Err(error) if started => {
                 terminal_failure = Some(format!(
@@ -1174,6 +1281,7 @@ struct SpawnedCapture {
 
 fn spawn_gpu_capture(
     source: &str,
+    adapter: Option<u32>,
     destination: &Path,
     options: RecordingOptions,
     gpu_vendor: GpuVendor,
@@ -1332,6 +1440,7 @@ fn spawn_gpu_capture(
         ));
     }
     encoders.sort_by_key(|(name, _, _)| gpu_vendor.encoder_rank(name));
+    let mut failures = Vec::new();
     for (name, capture_filter, codec) in encoders {
         if excluded_encoders.contains(name) {
             continue;
@@ -1362,6 +1471,9 @@ fn spawn_gpu_capture(
         if has_bounded_filter_queue() {
             command.args(["-filter_buffered_frames", "4"]);
         }
+        if let Some(adapter) = adapter {
+            command.args(["-init_hw_device", &format!("d3d11va=snap_capture:{adapter}"), "-filter_hw_device", "snap_capture"]);
+        }
         command.args(["-filter_complex", &capture_filter]);
         // Write independently decodable MP4 fragments as recording proceeds.
         // A normal MP4 stores its `moov` index only during clean shutdown, so
@@ -1381,13 +1493,16 @@ fn spawn_gpu_capture(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if let Ok(mut child) = spawn_recording_child(&mut command) {
+        match spawn_recording_child(&mut command) {
+          Ok(mut child) => {
             let stderr = child.stderr.take();
             let stderr_reader =
                 thread::spawn(move || stderr.map(read_diagnostics).unwrap_or_default());
             let Some(stdout) = child.stdout.take() else {
                 let _ = child.kill();
                 let _ = child.wait();
+                failures.push(format!("{name}: capture progress pipe unavailable"));
+                let _ = stderr_reader.join();
                 continue;
             };
             let (first_frame_tx, first_frame_rx) = std::sync::mpsc::sync_channel(1);
@@ -1439,12 +1554,24 @@ fn spawn_gpu_capture(
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = progress_reader.join();
-                    let _ = stderr_reader.join();
+                    let diagnostics = stderr_reader.join().unwrap_or_default();
+                    failures.push(format!("{name}: {}", if diagnostics.trim().is_empty() { "No frames received from the capture target" } else { diagnostics.trim() }));
                 }
             }
+          }
+          Err(error) => failures.push(format!("[capture-process] {name}: {error}")),
         }
     }
-    Err("Desktop capture could not start with NVENC, AMF, Quick Sync, Media Foundation, or the configured compatibility encoder".to_string())
+    let diagnostics = failures.join("\n");
+    let category = if source.contains("scale_d3d11")
+        && (diagnostics.to_lowercase().contains("texture") || diagnostics.to_lowercase().contains("scale_d3d11")) {
+        "[gpu-scaling]"
+    } else if failures.iter().all(|failure| failure.starts_with("[capture-process]")) && !failures.is_empty() {
+        "[capture-process]"
+    } else {
+        "[capture-start]"
+    };
+    Err(format!("{category} Desktop capture could not start. Encoder attempt diagnostics:\n{diagnostics}"))
 }
 
 /// Parse one `-progress pipe:1` line. A progress block is complete only when
@@ -1948,10 +2075,127 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        constrained_size, editor_ready_fps_filter, gfxcapture_region_source, gfxcapture_source,
+        constrained_size, duplication_source, editor_ready_fps_filter, gfxcapture_region_source, gfxcapture_source,
         parse_gpu_progress_line, validate_capture_segment, CropRect, GpuVendor, RecordingOptions,
         EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
     };
+
+    #[test]
+    #[ignore = "Requires Apex Legends running; verifies protection or captures a short test"]
+    fn apex_window_respects_capture_protection() {
+        use std::io::Write;
+        let mut targets = Vec::new();
+        super::enumerate_windows(&mut targets);
+        let target = targets.iter().find(|t| t.name.contains("Apex Legends")).expect("Apex Legends is not running");
+        let window = super::hwnd_from_id(&target.id).unwrap();
+        let mut affinity = 0u32;
+        let affinity_result = unsafe { super::GetWindowDisplayAffinity(window, &mut affinity) };
+        println!("Apex state: visible={}, minimized={}, foreground={}, affinity={affinity}, affinity_query={affinity_result:?}, bounds={:?}", unsafe { super::IsWindowVisible(window).as_bool() }, unsafe { super::IsIconic(window).as_bool() }, unsafe { super::GetForegroundWindow() == window }, super::get_target_bounds(target.id.clone()).map(|b| (b.x,b.y,b.w,b.h)));
+        if affinity_result.is_ok() && super::capture_affinity_blocks_recording(affinity) {
+            assert!(super::prepare_window_capture(&target.id).unwrap_err().contains("[capture-protected]"));
+            return;
+        }
+        super::prepare_window_capture(&target.id).unwrap();
+        let options = quality_options();
+        let (source, _) = super::gfxcapture_source(&target.id, None, options).unwrap();
+        let destination = std::env::temp_dir().join(format!("snap-apex-test-{}.mp4", std::process::id()));
+        let mut capture = super::spawn_gpu_capture(&source, None, &destination, options, GpuVendor::Nvidia, &std::collections::HashSet::new()).unwrap();
+        capture.control.write_all(b"q\n").unwrap();
+        let start = std::time::Instant::now();
+        while capture.child.try_wait().unwrap().is_none() {
+            if start.elapsed() > Duration::from_secs(10) { let _ = capture.child.kill(); break; }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let status = capture.child.wait().unwrap();
+        capture.progress_reader.join().unwrap();
+        let diagnostic = capture.stderr_reader.join().unwrap();
+        let valid = validate_capture_segment(&destination);
+        if valid.is_ok() {
+            let proof = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("test-results/apex-window-capture.png");
+            std::fs::create_dir_all(proof.parent().unwrap()).unwrap();
+            let result = crate::process::background_command("ffmpeg").args(["-y", "-v", "error", "-i"]).arg(&destination).args(["-frames:v", "1"]).arg(proof).status().unwrap();
+            assert!(result.success());
+        }
+        let _ = std::fs::remove_file(&destination);
+        assert!(status.success(), "{diagnostic}");
+        valid.unwrap();
+    }
+
+    #[test]
+    #[ignore = "Requires a visible Snap window and FFmpeg WGC capture"]
+    fn picker_preview_returns_a_real_jpeg() {
+        let mut targets = Vec::new();
+        super::enumerate_windows(&mut targets);
+        let target = targets.iter().find(|target| super::hwnd_from_id(&target.id).is_some_and(|window| unsafe { super::IsWindowVisible(window).as_bool() && !super::IsIconic(window).as_bool() } && !super::window_capture_protected(window))).expect("No visible capturable window available");
+        let bytes = tauri::async_runtime::block_on(super::window_preview(target.id.clone())).unwrap().expect("No window preview received");
+        assert!(bytes.starts_with(&[0xff, 0xd8]));
+        assert!(bytes.len() < 256 * 1024);
+    }
+
+    #[test]
+    fn capture_protection_is_not_treated_as_an_encoder_failure() {
+        assert!(!super::capture_affinity_blocks_recording(0));
+        assert!(super::capture_affinity_blocks_recording(1));
+        assert!(super::capture_affinity_blocks_recording(0x11));
+    }
+
+    #[test]
+    #[ignore = "Requires an unlocked Windows desktop and a hardware encoder"]
+    fn recording_startup_uses_real_encoder_and_protected_process() {
+        let mut targets = Vec::new();
+        super::enumerate_monitors(&mut targets).unwrap();
+        let target = targets.iter().find(|t| t.target_type == "monitor").unwrap();
+        let (adapter, output) = super::duplication_target(&target.id).unwrap();
+        let bounds = super::get_target_bounds(target.id.clone()).unwrap();
+        let options = quality_options();
+        let source = duplication_source(output, bounds.w as u32, bounds.h as u32, options);
+        let destination = std::env::temp_dir().join(format!("snap-startup-test-{}.mp4", std::process::id()));
+        let mut capture = super::spawn_gpu_capture(&source, Some(adapter), &destination, options, GpuVendor::Nvidia, &std::collections::HashSet::new()).unwrap();
+        use std::io::Write;
+        capture.control.write_all(b"q\n").unwrap();
+        let start = std::time::Instant::now();
+        while capture.child.try_wait().unwrap().is_none() {
+            if start.elapsed() > Duration::from_secs(10) { let _ = capture.child.kill(); break; }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let status = capture.child.wait().unwrap();
+        capture.progress_reader.join().unwrap();
+        let diagnostic = capture.stderr_reader.join().unwrap();
+        let valid = validate_capture_segment(&destination);
+        let _ = std::fs::remove_file(&destination);
+        assert!(status.success(), "{diagnostic}");
+        valid.unwrap();
+    }
+
+    #[test]
+    #[ignore = "Requires an unlocked Windows desktop, FFmpeg and an NVIDIA hardware encoder"]
+    fn game_display_encodes_with_real_gpu_capture() {
+        let mut targets=Vec::new();
+        super::enumerate_monitors(&mut targets).unwrap();
+        let target=targets.iter().find(|t|t.target_type=="monitor").expect("No connected display");
+        let (adapter,output)=super::duplication_target(&target.id).unwrap();
+        let bounds=super::get_target_bounds(target.id.clone()).unwrap();
+        let source=duplication_source(output,bounds.w as u32,bounds.h as u32,quality_options());
+        let mut child=crate::process::background_command("ffmpeg").args(["-hide_banner","-v","error","-init_hw_device",&format!("d3d11va=snap_capture:{adapter}"),"-filter_hw_device","snap_capture","-filter_complex",&source,"-frames:v","10","-an","-r","30","-fps_mode","cfr","-c:v","h264_nvenc","-preset","p1","-f","null","NUL"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+        let start=std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if start.elapsed()>Duration::from_secs(15) {let _=child.kill();let _=child.wait();panic!("GPU display capture timed out");}
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let result=child.wait_with_output().unwrap();
+        assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+    }
+
+    #[test]
+    fn game_display_source_keeps_scaling_and_capture_on_gpu() {
+        let source=duplication_source(2,3840,2160,RecordingOptions::default());
+        assert!(source.starts_with("ddagrab=output_idx=2:framerate=30:draw_mouse=0:"));
+        assert!(source.contains("scale_d3d11=width=1920:height=1080:format=bgra"));
+        assert!(!source.contains("hwdownload"));
+        let native=duplication_source(0,1280,720,quality_options());
+        assert!(!native.contains("scale_d3d11"));
+        assert!(!duplication_source(0,1920,1080,RecordingOptions::default()).contains("scale_d3d11"));
+    }
 
     #[test]
     fn diagnostics_are_drained_and_memory_is_bounded() {
@@ -2027,7 +2271,7 @@ mod tests {
     }
 
     #[test]
-    fn full_display_prefers_the_compositor_friendly_monitor_source() {
+    fn wgc_monitor_source_uses_the_explicit_monitor_handle() {
         let (source, label) = gfxcapture_source("monitor:88", None, quality_options()).unwrap();
         assert_eq!(label, "full display");
         assert!(source.starts_with("gfxcapture=hmonitor=88:"));

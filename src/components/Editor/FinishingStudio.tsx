@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Scissors, AudioLines, Ratio, MousePointer2, Palette, Play, Pause, X } from "lucide-react";
 import { loadInputLog, type LoadedInputLog } from "../../lib/inputLog";
 import { userError } from "../../lib/userError";
 import type {
@@ -242,7 +243,7 @@ export default function FinishingStudio(p: Props) {
   };
   return (
     <div
-      className="ss-command-backdrop"
+      className="ss-command-backdrop finishing-backdrop"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) p.onClose();
       }}
@@ -263,14 +264,13 @@ export default function FinishingStudio(p: Props) {
       >
         <header>
           <div>
-            <h2>Finishing studio</h2>
-            <p>Reversible edits, local processing, reusable layouts.</p>
+            <h2>Finishing tools</h2>
           </div>
-          <button onClick={p.onPlay}>
-            {p.playing ? "Pause" : "Play / listen"}
+          <button className="finishing-icon-button" onClick={p.onPlay} title={p.playing ? "Pause" : "Play"} aria-label={p.playing ? "Pause" : "Play"}>
+            {p.playing ? <Pause size={16} /> : <Play size={16} />}
           </button>
-          <button aria-label="Close finishing studio" onClick={p.onClose}>
-            ×
+          <button className="finishing-icon-button" aria-label="Close finishing studio" onClick={p.onClose}>
+            <X size={16} />
           </button>
         </header>
         <nav aria-label="Finishing tools">
@@ -291,13 +291,14 @@ export default function FinishingStudio(p: Props) {
                 }
               }}
             >
+              {({ cleanup: <Scissors size={16} />, voice: <AudioLines size={16} />, formats: <Ratio size={16} />, cursor: <MousePointer2 size={16} />, recipes: <Palette size={16} /> })[t]}
               {
                 {
-                  cleanup: "Smart cleanup",
-                  voice: "Voice polish",
-                  formats: "Format variants",
-                  cursor: "Cursor repair",
-                  recipes: "Brand recipes",
+                  cleanup: "Cleanup",
+                  voice: "Voice",
+                  formats: "Formats",
+                  cursor: "Cursor",
+                  recipes: "Styles",
                 }[t]
               }
             </button>
@@ -349,8 +350,10 @@ export default function FinishingStudio(p: Props) {
                 Transcript track
                 <select
                   value={transcript[0]?.id ?? ""}
+                  disabled={!p.sequenceCaptions.length}
                   onChange={(e) => setTranscriptTrack(e.target.value)}
                 >
+                  {!p.sequenceCaptions.length && <option value="">No captions</option>}
                   {p.sequenceCaptions.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
@@ -359,10 +362,7 @@ export default function FinishingStudio(p: Props) {
                 </select>
               </label>
               <p>
-                Generate word-timed captions first. Gaps below are transcript
-                gaps, not verified silence. Listen to each candidate before
-                cutting. Hold Shift and select another word to extend your
-                range.
+                Transcript gaps are not verified silence. Listen before cutting.
               </p>
               <div className="finishing-transcript">
                 {words.map((w, i) => (
@@ -392,8 +392,7 @@ export default function FinishingStudio(p: Props) {
                 ))}
                 {!words.length && (
                   <p>
-                    No word timestamps available. Use a manual range or generate
-                    captions in the Captions panel.
+                    Add captions to select words, or set a range above.
                   </p>
                 )}
               </div>
@@ -415,9 +414,7 @@ export default function FinishingStudio(p: Props) {
                 </button>
               </div>
               <p>
-                Speed-up preserves source-anchored effects and linked audio.
-                Independent sequence overlays/audio must be repositioned;
-                speed-up is blocked when those exist.
+                2× preserves linked effects and audio; unavailable with independent sequence overlays.
               </p>
               <h3>Review suggestions</h3>
               {proposals.map((r, i) => (
@@ -450,8 +447,10 @@ export default function FinishingStudio(p: Props) {
                 <select
                   aria-label="Silence analysis track"
                   value={silenceTrack}
+                  disabled={!p.tracks.length}
                   onChange={(e) => setSilenceTrack(e.target.value)}
                 >
+                  {!p.tracks.length && <option value="">No audio</option>}
                   {p.tracks.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.label}
@@ -484,9 +483,7 @@ export default function FinishingStudio(p: Props) {
                 </button>
               </fieldset>
               <p>
-                Quiet intervals are measured on the selected track only; other
-                tracks may contain useful audio. Typing suggestions are for
-                speed-up, not deletion.
+                Only the selected track is measured. Review other audio before cutting; typing is sped up, not deleted.
               </p>
               {proposals
                 .filter((r) => r.kind === "typing")
@@ -1017,10 +1014,7 @@ export default function FinishingStudio(p: Props) {
             </>
           )}
         </div>
-        <footer role="status">
-          {message ||
-            "Project changes are saved with your edit and can be undone."}
-        </footer>
+        {message && <footer role="status">{message}</footer>}
       </section>
     </div>
   );

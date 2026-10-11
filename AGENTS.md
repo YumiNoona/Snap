@@ -17,7 +17,7 @@ All heavy processing is deferred to the editor/export phase.
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| capture | `src-tauri/src/capture/` | Native Rust lifecycle around FFmpeg's Windows Graphics Capture input. Hardware H.264 via NVENC / AMF / QuickSync / Media Foundation; software encoding is an explicit opt-in fallback, never automatic. Region/window selection and recovery segments. |
+| capture | `src-tauri/src/capture/` | Native Rust lifecycle around FFmpeg's GPU capture inputs: adapter-bound Desktop Duplication for full-screen games/displays, Windows Graphics Capture for windows/regions. D3D11 scaling and hardware H.264 via NVENC / AMF / QuickSync / Media Foundation; software encoding is an explicit opt-in fallback, never automatic. Region/window selection and recovery segments. |
 | audio | `src-tauri/src/audio/` | WASAPI dual-track capture: (1) system loopback (speaker output), (2) microphone input. Both synchronized to video capture timestamps. |
 | input_hook | `src-tauri/src/input_hook/` | Low-level Windows input hook (`SetWindowsHookEx` or raw input). Logs timestamped mouse clicks, movement, scroll, and keyboard events to a JSON sidecar file next to the recorded video. |
 
