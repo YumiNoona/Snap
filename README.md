@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.0.1-10b981?style=flat-square" alt="Version 9.0.1" />
+    <img src="https://img.shields.io/badge/version-9.2.0-10b981?style=flat-square" alt="Version 9.2.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -47,6 +47,11 @@ exports without uploading recordings to a cloud service.
 - Versioned projects, autosave, backup recovery, and missing-sidecar handling
 - Disconnect-safe mobile recording recovery and automatic mobile zoom analysis
 - Signed in-app updates delivered through GitHub Releases
+
+The editor's **Finish** studio adds reviewable transcript and quiet-audio cleanup,
+local voice polish with A/B playback, independent format layouts, non-destructive
+cursor repairs, and reusable brand recipes. See [Editor finishing workflows](EDITOR_FINISHING.md)
+for controls, validation, and current limitations.
 
 ## System requirements
 

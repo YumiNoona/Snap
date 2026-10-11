@@ -42,11 +42,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.1.0 improves timeline editing with gap-preserving trims and deletes, movable trimmed clips, independent audio cuts, clip speed controls, transitions, and drag-and-drop media layers. Imported videos retain their timing through cuts, gaps, project reloads, and export.
+            Snap 9.2.0 adds the Finish studio: reviewable transcript and quiet-audio cleanup, local cached voice polish with A/B preview, independent portrait/square/landscape layouts, non-destructive cursor repairs and loop alignment, and reusable local brand recipes.
 
-            The editor includes a cleaner clip inspector, consistent custom dropdowns, a scissors cursor with a frame-snapped cut guide, clearer keyframes, smoother startup, and transition rendering fixes. This release also adds recording health diagnostics and bounds editor media caching.
+            Fixes include project reopening permissions, caption entrance controls, modal keyboard focus, visible editor scrollbars, audio synchronization when switching polished/original sources, and export cancellation reporting. Heavy finishing work remains editor-only and original recordings remain unchanged.
 
-            Validation: 140 frontend tests, native unit tests, production builds, and browser checks for timeline drag/drop and imported-video export.
+            Validation: 157 frontend tests, 45 native unit tests, five real-FFmpeg integration checks, production build, source checks, and strict Rust linting. Full native end-to-end UI verification remains incomplete; review cleanup candidates and voice settings before export. Room-tail reduction is a gate, not neural dereverberation, and cursor repairs require input metadata. See EDITOR_FINISHING.md in the repository for details.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

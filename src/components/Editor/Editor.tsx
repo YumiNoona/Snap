@@ -10,11 +10,16 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Command, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon, Search } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
+import FinishingStudio from "./FinishingStudio";
+import { useModalFocus } from "./hooks/useModalFocus";
+import { useVoicePolish } from "./hooks/useVoicePolish";
+import { prepareVoiceTracks } from "../../lib/voicePolish";
+import { editSequenceRanges, rippleCleanup } from "../../lib/editorFinishing";
 import DonateButton from "../shared/DonateButton";
 import type { ActionEventEdit, AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, Keyframe, ExportSettings, ImageLayer, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
@@ -90,6 +95,13 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
   const [showProjectHealth, setShowProjectHealth] = useState(false);
+  const [inputHealth,setInputHealth]=useState<{state:"loading"|"loaded"|"missing"|"error";count:number}>({state:"loading",count:0});
+  useEffect(()=>{let cancelled=false;setInputHealth({state:"loading",count:0});void loadInputLog(inputLogPath).then(log=>{if(!cancelled)setInputHealth({state:log.allEvents.length?"loaded":"missing",count:log.allEvents.length});}).catch(()=>{if(!cancelled)setInputHealth({state:"error",count:0});});return()=>{cancelled=true;};},[inputLogPath]);
+  const [showFinishing, setShowFinishing] = useState(false);
+  const [voiceBypass, setVoiceBypass] = useState(false);
+  const paletteRef = useModalFocus(showCommandPalette);
+  const healthRef = useModalFocus(showProjectHealth);
+  const { audio: previewAudioTracks, status: voiceStatus } = useVoicePolish(audioTracks, voiceBypass);
   const [recordingHealth, setRecordingHealth] = useState<{ encoders: string[]; encodedFrames: number; mediaSeconds: number; quietIntervals: number; recoveryAttempts: number; interrupted: boolean } | null>(null);
   useEffect(() => {
     let disposed = false;
@@ -143,7 +155,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   useEffect(()=>{let cancelled=false;setSourceFrameRate(30);void invoke<number>("editor_source_frame_rate",{path:videoPath}).then(rate=>{if(!cancelled&&Number.isFinite(rate))setSourceFrameRate(rate);}).catch(()=>{});return ()=>{cancelled=true;};},[videoPath]);
   const { currentTime, audioDurations, activeClipId, inGap, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
     videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
-    frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: config.videoClips,
+    frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks: previewAudioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: config.videoClips,
   });
   const footageClips = useMemo(() => retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration), [config.videoClips, config.trimStart, config.trimEnd, duration]);
   const activeEffectsClip = footageClips.find(clip=>clip.id===activeClipId);
@@ -434,7 +446,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           shadow: true, align: "center", x: .5, y: .86, maxWidth: .82,
           fontStyle: "normal", letterSpacing: 0, lineHeight: 1.22,
           backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,
-          animation: "none", animationDurationMs: 0,
+          animation: "none", animationDurationMs: 200,
         },
         segments: [{ id: segmentId, startMs, endMs, text: "New caption", language: "en", sourceTrackIds: [], userEdited: true }],
       }]);
@@ -508,6 +520,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   useEffect(() => {
     const onCommandKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "p") {
+        if(document.querySelector('[role="dialog"]:not(.ss-command-palette)'))return;
         event.preventDefault(); setShowCommandPalette((open) => !open); setCommandQuery("");
       } else if (event.key === "Escape") {
         setShowCommandPalette(false); setShowProjectHealth(false);
@@ -591,6 +604,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       const selected = await saveDialog({ title: "Export video", defaultPath: settings.outputPath, filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }] });
       if (!selected) return;
       settings = { ...settings, outputPath: selected };
+      const {format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop}=settings;
+      setConfig(current=>({...current,exportDefaults:{format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop}}));
       if (selected.toLowerCase() === videoPath.toLowerCase()) throw new Error("Choose a different filename to preserve your source recording");
       const abortController = new AbortController();
       exportAbortRef.current = abortController;
@@ -603,7 +618,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         sharedKeyframes,
         config,
         sharedCaptionTracks,
-        audioTracks.map(track=>({...track,linked:false,clips:resolvedAudioClips(track,footageClips,audioDurations[track.id]??duration)})),
+        (await prepareVoiceTracks(audioTracks)).map(track=>({...track,linked:false,clips:resolvedAudioClips(track,footageClips,audioDurations[track.id]??duration)})),
         cameraMedia,
         settings,
         config.trimStart,
@@ -636,7 +651,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       setExportStatus("Done — export saved");
       void result;
     } catch (e) {
-      setExportStatus(e instanceof DOMException && e.name === "AbortError" ? "Export cancelled" : `Export failed: ${userError(e)}`);
+      setExportStatus(exportAbortRef.current?.signal.aborted || (e instanceof DOMException && e.name === "AbortError") ? "Export cancelled" : `Export failed: ${userError(e)}`);
     } finally {
       exportAbortRef.current = null;
     }
@@ -644,6 +659,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   const handleCancelExport = useCallback(() => {
     exportAbortRef.current?.abort();
+    void invoke("cancel_editor_cached_media").catch(()=>{});
     setExportStatus("Cancelling export...");
   }, []);
 
@@ -942,6 +958,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, [previewFocusMode, revealPreviewControls]);
 
   const commandItems = [
+    { label: "Finishing studio", detail: "Transcript cleanup, voice polish, formats, cursor repairs and brand recipes", icon: Layers3, run: () => setShowFinishing(true) },
     { label: "Freeze frame at playhead", detail: "Adds a still image layer for 2.5 seconds", icon: Snowflake, run: () => void extractFrame("freeze") },
     { label: "Save current frame as thumbnail", detail: "Exports a full-resolution PNG", icon: ImageIcon, run: () => void extractFrame("thumbnail") },
     { label: "3D Tilt", detail: "Animate screen perspective and rotation", icon: Box, run: () => setActiveTool("tilt") },
@@ -1007,7 +1024,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
-          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl Shift P)" aria-label="Open command palette"><Command size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => { setShowCommandPalette(true); setCommandQuery(""); }} title="Command palette (Ctrl Shift P)" aria-label="Open command palette"><Search size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Finishing studio">Finish</button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -1444,8 +1462,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         }}
       />
       {showCommandPalette && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowCommandPalette(false)}>
-        <section className="ss-command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
-          <header className="ss-command-header"><span><Command size={16} /></span><div><strong>Quick actions</strong><small>Jump to an editor tool</small></div><kbd>Esc</kbd></header>
+        <section ref={paletteRef} tabIndex={-1} className="ss-command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+          <header className="ss-command-header"><span><Search size={16} /></span><div><strong>Quick actions</strong><small>Ctrl Shift P · Jump to an editor tool</small></div><kbd>Esc</kbd></header>
           <div className="ss-command-search"><Search size={17} /><input autoFocus value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((index) => Math.max(0, Math.min(filteredCommands.length - 1, index + 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((index) => Math.max(0, index - 1)); } else if (event.key === "Enter" && filteredCommands[commandIndex]) { filteredCommands[commandIndex].run(); setShowCommandPalette(false); } }} placeholder="Search actions" aria-label="Search quick actions" /></div>
           <div className="ss-command-list">
             {filteredCommands.map(({ label, detail, icon: Icon, run }, index) => <button key={label} className={index === commandIndex ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => { run(); setShowCommandPalette(false); }}><i><Icon size={17} /></i><span><strong>{label}</strong><small>{detail}</small></span><em>Open</em></button>)}
@@ -1455,12 +1473,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </section>
       </div>}
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
-        <section className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
+        <section ref={healthRef} tabIndex={-1} className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
           <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>
           <div className="ss-health-score"><strong>{duration > 0 && editedDuration > 0 ? "Ready" : "Needs attention"}</strong><span>{editedDuration.toFixed(1)}s edited duration</span></div>
           <ul>
             <li className={duration > 0 ? "ok" : "warn"}><span>Source video</span><strong>{duration > 0 ? "Loaded" : "Metadata missing"}</strong></li>
-            <li className={inputLogPath ? "ok" : "warn"}><span>Input actions</span><strong>{inputLogPath ? "Available" : "Imported video"}</strong></li>
+            <li className={inputHealth.state==="loaded"?"ok":inputHealth.state==="error"?"warn":"neutral"}><span>Input actions</span><strong>{inputHealth.state==="loaded"?`${inputHealth.count.toLocaleString()} events`:inputHealth.state==="error"?"Unreadable sidecar":inputHealth.state==="loading"?"Checking…":"No recorded events"}</strong></li>
             <li className={cameraMedia ? "ok" : "neutral"}><span>Webcam track</span><strong>{cameraMedia ? "Connected" : "Not recorded"}</strong></li>
             <li className="ok"><span>Visual layers</span><strong>{config.layers.length}</strong></li>
             <li className="ok"><span>Audio tracks</span><strong>{audioTracks.length}</strong></li>
@@ -1476,6 +1494,31 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button className="ss-health-export" onClick={() => { setShowProjectHealth(false); setShowExport(true); }}><Upload size={16} /> Continue to export</button>
         </section>
       </div>}
+      {showFinishing && <FinishingStudio config={config} inputLogPath={inputLogPath} captions={sharedCaptionTracks} sequenceCaptions={sequenceCaptions} keyframes={sharedKeyframes} tracks={audioTracks} clips={footageClips} currentTime={currentTime} sequencePosition={sequencePosition} duration={sequenceDuration(footageClips)} sourceDuration={duration} playing={playing} onPlay={togglePlay} voiceStatus={voiceStatus} bypass={voiceBypass} onBypass={setVoiceBypass} onClose={()=>setShowFinishing(false)} onSeek={seekSequence}
+        onChange={(next,keys,captions)=>{
+          if(next.activeLayoutId!==config.activeLayoutId&&config.lockedTracks?.some(id=>["zoom","caption","camera"].includes(id))){window.alert("Unlock zoom, captions and camera before switching format variants.");return;}
+          pausePlayback();
+          setConfig({...next,cameraOverlay:config.lockedTracks?.includes("camera")?config.cameraOverlay:next.cameraOverlay,cursorEdits:config.lockedTracks?.includes("cursor")?config.cursorEdits:next.cursorEdits,
+            cursorStyle:config.lockedTracks?.includes("cursor")?config.cursorStyle:next.cursorStyle,cursorMovement:config.lockedTracks?.includes("cursor")?config.cursorMovement:next.cursorMovement,showCursor:config.lockedTracks?.includes("cursor")?config.showCursor:next.showCursor,
+            videoClips:next.videoClips?.map(clip=>{const previous=config.videoClips?.find(c=>c.id===clip.id)?.effects;if(!previous||!clip.effects)return clip;return {...clip,effects:{...clip.effects,keyframes:config.lockedTracks?.includes("zoom")?previous.keyframes:clip.effects.keyframes,captions:config.lockedTracks?.includes("caption")?previous.captions:clip.effects.captions}};})??null});
+          if(keys&&!config.lockedTracks?.includes("zoom"))setSharedKeyframes(keys);
+          if(captions&&!config.lockedTracks?.includes("caption"))setSharedCaptionTracks(captions);
+        }}
+        onTracks={tracks=>setAudioTracks(current=>tracks.map(t=>config.lockedTracks?.includes(t.id)?current.find(old=>old.id===t.id)??t:t))}
+        onCut={ranges=>{try{
+          if(config.lockedTracks?.includes("video"))return;
+          if(audioTracks.some(t=>config.lockedTracks?.includes(t.id))||config.layers.some(l=>l.timeSpace==="sequence"&&config.lockedTracks?.includes(l.id)))throw new Error("Unlock affected audio and sequence layers before ripple cleanup.");
+          const result=rippleCleanup(config,audioTracks,footageClips,ranges,duration,sourceFrameRate,audioDurations);
+          pausePlayback();setConfig(result.config);setAudioTracks(result.audioTracks);seekSequence(0);
+        }catch(error){setFileActionStatus(userError(error));window.alert(userError(error));}}}
+        onSpeed={range=>{try{
+          if(config.lockedTracks?.includes("video"))return;
+          if(config.layers.some(l=>l.timeSpace==="sequence")||audioTracks.some(t=>config.lockedTracks?.includes(t.id)||t.linked===false||t.clips?.some(c=>c.linked===false)))throw new Error("Unlock audio and reposition or remove independent sequence media before ripple speed-up.");
+          const next=editSequenceRanges(footageClips,[range],2);
+          if(next.length>1000)throw new Error("Maximum 1000 clips.");
+          pausePlayback();setAudioTracks(reconcileAudioClips(audioTracks,footageClips,next));setConfig(c=>({...c,videoClips:next}));
+        }catch(error){window.alert(userError(error));}}}
+      />}
       {showExport && (
         <ExportModal
           videoPath={videoPath}

@@ -438,7 +438,7 @@ export default function Panels({
           id: candidate.id,
           visible: candidate.visible,
           burnedIn: candidate.burnedIn,
-          style: { ...track.style, ...candidate.style, animation: "none", animationDurationMs: 0 },
+          style: { ...track.style, ...candidate.style, animation: "none", animationDurationMs: 200 },
         } : candidate));
         setCaptionStatus(`Re-synced ${track.segments.length} captions to the speech waveform`);
       } else {
@@ -1269,7 +1269,7 @@ export default function Panels({
               <div className="caption-animation-presets expanded" aria-label="Caption entrance animation">
                 {(["none", "fade", "reveal", "pop", "rise", "slide", "blur", "bounce"] as const).map((animation) => <button type="button" key={animation} className={(selectedCaptionTrack.style.animation ?? "none") === animation ? "active" : ""} onClick={() => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animation } }))}><span className={`caption-animation-preview ${animation}`}>Aa</span><span>{animation[0].toUpperCase() + animation.slice(1)}</span></button>)}
               </div>
-              <Slider label="Animation speed" value={selectedCaptionTrack.style.animationDurationMs ?? 420} min={120} max={1200} step={20} unit="ms" onChange={(animationDurationMs) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animationDurationMs } }))} />
+              {(selectedCaptionTrack.style.animation ?? "none") !== "none" && <Slider label="Entrance duration" value={Math.max(120,Math.min(260,selectedCaptionTrack.style.animationDurationMs ?? 200))} min={120} max={260} step={20} unit="ms" onChange={(animationDurationMs) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, style: { ...track.style, animationDurationMs } }))} />}
               <CheckRow label="Show captions" checked={selectedCaptionTrack.visible} onChange={(visible) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, visible }))} />
               <CheckRow label="Include in export" checked={selectedCaptionTrack.burnedIn} onChange={(burnedIn) => updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, burnedIn }))} />
               <button className="ss-drawer-action-btn danger" onClick={() => { updateCaptionTrack(selectedCaptionTrack.id, (track) => ({ ...track, segments: track.segments.filter((segment) => segment.id !== selectedCaptionSegment.id) })); onSelectCaption(null); }}><Trash2 size={14} /> Delete Caption</button>

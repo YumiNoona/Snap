@@ -6,6 +6,7 @@ import { defaultExportPath, pathFileName, recordingExportDirectory } from "../..
 import "./ExportModal.css";
 import { outputDuration } from "../../lib/exportTiming";
 import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
+import { layoutExportSize } from "../../lib/editorFinishing";
 
 interface Props {
   videoPath: string;
@@ -42,9 +43,9 @@ function formatEstimate(seconds: number) {
 export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, exportedPath, onClose, onCancel, onOpenFile, onExport }: Props) {
   const fallbackExportsDir = recordingExportDirectory(videoPath);
   const [exportsDir, setExportsDir] = useState(fallbackExportsDir);
-  const defaultPath = defaultExportPath(videoPath, fallbackExportsDir, "edited", "mp4");
+  const defaultPath = defaultExportPath(videoPath, fallbackExportsDir, "edited", config.exportDefaults?.format??"mp4");
   const [settings, setSettings] = useState<ExportSettings>({
-    format: "mp4", fps: 60, width: 1920, height: 1080, quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true,
+    format: "mp4", fps: 60,...layoutExportSize(config.aspectRatio), quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true,...config.exportDefaults,
   });
   useEffect(() => {
     let cancelled = false;

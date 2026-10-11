@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createProject, CURRENT_PROJECT_VERSION, migrateProject, projectFingerprint, projectPathForVideo } from "./project";
 
 describe("Snap project documents", () => {
+  it("round-trips finishing settings while keeping source paths",()=>{
+    const project=createProject("C:\\demo.mp4","C:\\demo\\events.json");
+    project.editor.cursorEdits=[{id:"repair",mode:"hide",startMs:0,endMs:1000}];
+    project.editor.layoutVariants=[{id:"master",name:"Master",layout:{aspectRatio:null,crop:null,padding:30,cameraOverlay:project.editor.cameraOverlay,safeArea:"off"},keyframes:[],captions:[]}];
+    project.audioTracks=[{id:"mic",path:"C:\\mic.wav",kind:"microphone",label:"Mic",muted:false,volume:1,voicePolish:{enabled:true,strength:.5,hum:"50",roomTail:true,loudness:true}}];
+    expect(migrateProject(JSON.parse(JSON.stringify(project)))).toEqual(project);
+  });
   it("creates a versioned non-destructive project beside the recording data", () => {
     const now = new Date("2026-01-02T03:04:05.000Z");
     const project = createProject("C:\\Videos\\Snap\\demo.mp4", "C:\\Videos\\Snap\\demo\\events.json", now);

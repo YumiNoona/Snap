@@ -52,7 +52,7 @@ pub(crate) fn project_assets(app: &tauri::AppHandle, text: &str) -> Result<(), S
     let Ok(project) = serde_json::from_str::<serde_json::Value>(text) else {
         return Ok(());
     };
-    if project["schemaVersion"].as_u64() != Some(1) {
+    if !matches!(project["schemaVersion"].as_u64(), Some(1..=3)) {
         return Ok(());
     }
     if let Some(video) = project["media"]["videoPath"].as_str() {

@@ -1,0 +1,122 @@
+.finishing-studio {
+  width: min(850px, 94vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  box-shadow: 0 20px 70px #0008;
+}
+.finishing-studio header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 22px;
+}
+.finishing-studio h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.finishing-studio p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.finishing-studio nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 22px 14px;
+  border-bottom: 1px solid var(--border-default);
+}
+.finishing-studio button {
+  padding: 8px 12px;
+  color: inherit;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.finishing-studio button[aria-pressed="true"],
+.finishing-studio button.selected {
+  border-color: var(--accent);
+  background: var(--bg-sunken);
+}
+.finishing-studio button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.finishing-studio :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.finishing-body {
+  overflow: auto;
+  padding: 16px 22px;
+}
+.finishing-studio fieldset {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.finishing-studio label {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+}
+.finishing-studio input:not([type="checkbox"]):not([type="range"]),
+.finishing-studio select {
+  width: 100px;
+  padding: 7px;
+  color: inherit;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+}
+.finishing-studio input[type="range"] {
+  width: 110px;
+}
+.finishing-studio legend {
+  font-size: 12px;
+  padding: 0 6px;
+}
+.finishing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.finishing-proposal {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.finishing-transcript {
+  max-height: 200px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-sunken);
+  border-radius: 8px;
+}
+.finishing-transcript button {
+  border: 0;
+  padding: 4px;
+  margin: 2px;
+}
+.finishing-studio footer {
+  padding: 12px 22px;
+  border-top: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 12px;
+}

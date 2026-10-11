@@ -1900,6 +1900,7 @@ pub fn run() {
             export::finalize_canvas_export,
             export::extract_video_frame,
             editor_cache::editor_cached_media,
+            editor_cache::editor_silence_ranges,
             editor_cache::editor_source_frame_rate,
             editor_cache::editor_media_fingerprint,
             recording_health::recording_health,

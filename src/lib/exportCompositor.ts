@@ -8,6 +8,7 @@ import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer, VideoLayer } from
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
 import { loadInputLog, getCursorAt as getCursorAtRaw, screenToVideo as screenToVideoRaw, hasClickNear } from "./inputLog";
+import { applyCursorEdits, cursorVisible } from "./editorFinishing";
 import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
 import { retainedClips, sequenceTime } from "./videoEditing";
 import { resolveClipEffects } from "./clipEffects";
@@ -149,7 +150,7 @@ export async function createExportCompositor(
 
   let inputLog: Awaited<ReturnType<typeof loadInputLog>>;
   try {
-    inputLog = await loadInputLog(inputLogPath);
+    inputLog = applyCursorEdits(await loadInputLog(inputLogPath),config.cursorEdits);
     if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
     await new Promise<void>((resolve, reject) => {
       if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -190,7 +191,7 @@ export async function createExportCompositor(
     ]);
   }
 
-  const getCursorAt = (ts: number) => getCursorAtRaw(mouseMoveEvents, ts);
+  const getCursorAt = (ts: number) => cursorVisible(config.cursorEdits,ts) ? getCursorAtRaw(mouseMoveEvents, ts) : null;
   const screenToVideo = (sx: number, sy: number, vw: number, vh: number) => screenToVideoRaw(region, sx, sy, vw, vh);
 
   // Per-run state mirroring Preview's component refs.
@@ -384,6 +385,7 @@ export async function createExportCompositor(
       screenCtx.beginPath(); roundRect(screenCtx, offsetX, offsetY, videoW, videoH, clipR); screenCtx.stroke(); screenCtx.restore();
     }
 
+    if(!cursorVisible(config.cursorEdits,ts))clickRipples=[];
     // Cursor overlay — custom pack, default styled cursor, or none, exactly
     // per config.showCursor / config.cursorStyle.pack, same as Preview.
     if (config.showCursor) {

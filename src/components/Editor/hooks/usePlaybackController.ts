@@ -405,7 +405,13 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     setAudioDurations({});
     for (const track of audioTracks) {
       const element = new Audio(); element.crossOrigin="anonymous"; element.src=convertFileSrc(track.path);
-      const metadata=()=>{if(Number.isFinite(element.duration))setAudioDurations(current=>({...current,[track.id]:element.duration}));};
+      const metadata=()=>{
+        if(Number.isFinite(element.duration))setAudioDurations(current=>({...current,[track.id]:element.duration}));
+        const video=videoRef.current;
+        if(video&&audioElementsRef.current===elements&&wantsPlaybackRef.current){
+          void audioContextRef.current?.resume();syncSidecars(video,true);playSidecars(video,generationRef.current);
+        }
+      };
       metadataHandlers.set(track.id,metadata);element.addEventListener("loadedmetadata",metadata);
       element.preload = "auto";
       element.load();
@@ -429,7 +435,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       if (audioElementsRef.current === elements) audioElementsRef.current = new Map();
       analysersRef.current.clear(); gainsRef.current.clear(); void audioContextRef.current?.close(); audioContextRef.current=null;
     };
-  }, [applyAudioMix, audioSources, syncSidecars]);
+  }, [applyAudioMix, audioSources, syncSidecars, playSidecars]);
 
   useEffect(() => {
     const video = mediaElement ?? videoRef.current;

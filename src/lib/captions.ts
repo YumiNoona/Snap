@@ -295,7 +295,7 @@ export async function transcribeTrack(track: AudioTrack, language: Transcription
       backgroundRadius: .18, backgroundPadding: .4, shadowBlur: .18,
       // Show the complete phrase at its speech-aligned timestamp. A reveal
       // animation creates a second artificial delay that looks out of sync.
-      animation: "none", animationDurationMs: 0,
+      animation: "none", animationDurationMs: 200,
     },
     segments,
   };

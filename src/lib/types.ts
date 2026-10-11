@@ -288,6 +288,7 @@ export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 
 export interface AudioClip { id: string; sourceStart: number; sourceEnd: number; start: number; videoClipId?: string; linked?: boolean; speed?: number; volume?: number; fadeIn?: number; fadeOut?: number }
 export interface AudioTrack {
+  voicePolish?: { enabled: boolean; strength: number; hum: "off" | "50" | "60"; roomTail: boolean; loudness: boolean };
   id: string;
   kind: AudioTrackKind;
   path: string;
@@ -368,6 +369,11 @@ export interface CaptionTrack {
 }
 
 export interface EditorConfig {
+  exportDefaults?: Pick<ExportSettings,"format"|"fps"|"quality"|"captions"|"normalizeAudio"|"audioMode"|"deliveryPackage"|"loop">;
+  cursorEdits?: CursorEdit[];
+  layoutVariants?: LayoutVariant[];
+  activeLayoutId?: string;
+  safeArea?: "off" | "vertical" | "square";
   backgroundColor: string;
   bgType: "wallpaper" | "gradient" | "color" | "image";
   wallpaperUrl: string;
@@ -405,6 +411,23 @@ export interface EditorConfig {
   actionOverlay: ActionOverlayConfig;
   cameraOverlay: CameraOverlayConfig;
   audio: AudioMixConfig;
+}
+
+export interface CursorEdit {
+  id: string;
+  startMs: number;
+  endMs: number;
+  mode: "hide" | "path" | "remove-clicks" | "click";
+  /** Normalized source-frame points; raw capture coordinates are never changed. */
+  points?: Array<{ timeMs: number; x: number; y: number }>;
+}
+export interface LayoutVariant {
+  clipEffects?: Record<string, ClipEffects | undefined>;
+  id: string;
+  name: string;
+  layout: Pick<EditorConfig, "aspectRatio" | "crop" | "padding" | "cameraOverlay" | "safeArea">;
+  keyframes: Keyframe[];
+  captions: CaptionTrack[];
 }
 
 export interface ExportSettings {

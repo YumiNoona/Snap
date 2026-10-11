@@ -1,4 +1,5 @@
 import { projectMediaLayers } from "../../../lib/mediaTimeline";
+import { applyCursorEdits, cursorVisible } from "../../../lib/editorFinishing";
 import { sequenceTime } from "../../../lib/videoEditing";
 import { renderTransitionBoundary } from "../../../lib/exportCompositor";
 import { FootageTransitions } from "../../../lib/transitions";
@@ -310,10 +311,12 @@ export default function Preview({
       setEventsReady(true);
       return;
     }
+    let cancelled = false;
     (async () => {
       try {
         const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } =
-          await loadInputLog(inputLogPath);
+          applyCursorEdits(await loadInputLog(inputLogPath), config.cursorEdits);
+        if (cancelled) return;
         allEvents.current = aligned;
         displayActions.current = buildDisplayActions(aligned);
         mouseMoveEvents.current = moves;
@@ -326,10 +329,12 @@ export default function Preview({
         effectTimelineTsRef.current = -1;
         setEventsReady(true);
       } catch (e) {
+        if (cancelled) return;
         setLoadError(`Failed to load log: ${userError(e)}`);
       }
     })();
-  }, [inputLogPath]);
+    return () => { cancelled = true; };
+  }, [inputLogPath, config.cursorEdits]);
 
   // Generate keyframes when ready
   useEffect(() => {
@@ -464,8 +469,8 @@ export default function Preview({
 
   // Cursor interpolation (shared with the export renderer via lib/inputLog)
   const getCursorAt = useCallback((timestampMs: number): { x: number; y: number } | null => {
-    return getCursorAtShared(mouseMoveEvents.current, timestampMs);
-  }, []);
+    return cursorVisible(config.cursorEdits,timestampMs) ? getCursorAtShared(mouseMoveEvents.current, timestampMs) : null;
+  }, [config.cursorEdits]);
 
   // Map an absolute screen coordinate onto the video's source pixel space.
   const screenToVideo = useCallback((sx: number, sy: number, vw: number, vh: number) => {
@@ -823,6 +828,7 @@ export default function Preview({
 
     // Click Ripples
     clickRipples.current = clickRipples.current.filter((r) => {
+      if(!cursorVisible(config.cursorEdits,ts))return false;
       const age = (ts - r.ts) / 1000;
       if (age > clickEffectDuration(config.cursorStyle.clickEffect)) return false;
       const rx = (r.x - coverX) / coverW * videoW + offsetX;
@@ -915,6 +921,12 @@ export default function Preview({
       drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     }
     drawActionOverlay(ctx, displayActions.current, ts, config.actionOverlay, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+    if(config.safeArea && config.safeArea!=="off"){
+      ctx.save();ctx.strokeStyle="rgba(255,200,80,.9)";ctx.lineWidth=1.5;ctx.setLineDash([6,4]);
+      const vertical=config.safeArea==="vertical";
+      ctx.strokeRect(cw*.08,ch*(vertical?.12:.08),cw*(vertical?.78:.84),ch*(vertical?.64:.84));
+      ctx.fillStyle="rgba(255,200,80,.9)";ctx.font="12px sans-serif";ctx.fillText("Safe area · guide only",cw*.08+5,ch*(vertical?.12:.08)-7);ctx.restore();
+    }
 
     // Selection affordance is drawn last so every layer type can be moved and
     // resized even when its effect changes the underlying pixels.
