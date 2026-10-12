@@ -1098,12 +1098,14 @@ fn run_segmented_gpu_capture(
     let mut parts = Vec::new();
     let mut part_index = 0usize;
     let mut recovery_attempts = 0usize;
+    let mut consecutive_failures = 0usize;
     let mut started = false;
     let mut last_diagnostics = String::new();
     let mut excluded_encoders = HashSet::new();
     let mut terminal_failure = None;
     let mut total_frames = 0u64;
     let mut summary = crate::recording_health::RecordingHealth::default();
+    let display_capture = source.starts_with("ddagrab=");
 
     while is_recording.load(Ordering::Relaxed) {
         let part = parent.join(format!("{stem}.capture-part-{part_index}.mp4"));
@@ -1119,9 +1121,17 @@ fn run_segmented_gpu_capture(
         } = match spawn_gpu_capture(source, adapter, &part, options, gpu_vendor, &excluded_encoders) {
             Ok(value) => value,
             Err(error) if started => {
-                terminal_failure = Some(format!(
-                    "Capture could not restart with another encoder: {error}"
-                ));
+                // Exclusive full-screen transitions can temporarily make duplication
+                // unavailable. Keep the selected GPU encoder eligible while the
+                // display settles instead of abandoning a recoverable recording.
+                recovery_attempts += 1;
+                consecutive_failures += 1;
+                if consecutive_failures <= 5 {
+                    last_diagnostics = error;
+                    thread::sleep(Duration::from_millis(350));
+                    continue;
+                }
+                terminal_failure = Some(format!("Capture could not restart after display reset: {error}"));
                 break;
             }
             Err(error) => return Err(error),
@@ -1148,7 +1158,9 @@ fn run_segmented_gpu_capture(
         let mut segment_exit_ok = true;
         let mut segment_exit_status = String::new();
         let mut health_check = Instant::now();
+        let segment_started = Instant::now();
         let mut last_progress_frame = progress.frame.load(Ordering::Relaxed);
+        let mut stalled_checks = 0u32;
         while is_recording.load(Ordering::Relaxed) {
             if let Ok(Some(status)) = child.try_wait() {
                 eprintln!("[Snap] GPU capture segment ended ({status}); attempting recovery");
@@ -1183,7 +1195,15 @@ fn run_segmented_gpu_capture(
                     summary.quiet_intervals += 1;
                     eprintln!("[Snap] No new encoded frame in 5 seconds; the target may be static or temporarily unavailable");
                 }
+                stalled_checks = if frame == last_progress_frame { stalled_checks + 1 } else { 0 };
                 last_progress_frame = frame;
+                // DDA emits duplicate frames even on a static desktop. No encoded
+                // progress for ten seconds therefore means a stalled pipeline,
+                // not an idle screen. WGC static-window behavior is different.
+                if display_capture_stalled(display_capture, stalled_checks) {
+                    eprintln!("[Snap] Restarting stalled display capture on the same GPU");
+                    break;
+                }
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -1236,11 +1256,16 @@ fn run_segmented_gpu_capture(
             }
             continue;
         }
-        if exited {
+        if should_exclude_encoder(display_capture, exited) {
             excluded_encoders.insert(encoder.to_string());
         }
+        // Limit consecutive resets, not Alt-Tab operations across a long recording.
+        if segment_started.elapsed() >= Duration::from_secs(30) {
+            consecutive_failures = 0;
+        }
         recovery_attempts += 1;
-        if recovery_attempts > 5 {
+        consecutive_failures += 1;
+        if consecutive_failures > 5 {
             terminal_failure = Some(format!(
                 "Desktop capture could not recover after 5 display resets: {last_diagnostics}"
             ));
@@ -1262,6 +1287,16 @@ fn run_segmented_gpu_capture(
         return Err(error);
     }
     Ok(())
+}
+
+// Display duplication failures commonly belong to the target (Alt-Tab,
+// resolution/HDR changes), rather than the hardware encoder.
+fn display_capture_stalled(display_capture: bool, stalled_checks: u32) -> bool {
+    display_capture && stalled_checks >= 2
+}
+
+fn should_exclude_encoder(display_capture: bool, exited: bool) -> bool {
+    exited && !display_capture
 }
 
 struct CaptureProgress {
@@ -2079,6 +2114,22 @@ mod tests {
         parse_gpu_progress_line, validate_capture_segment, CropRect, GpuVendor, RecordingOptions,
         EDITOR_READY_MOVFLAGS, RESILIENT_MP4_MOVFLAGS,
     };
+
+    #[test]
+    fn display_stall_recovery_distinguishes_static_windows() {
+        assert!(!super::display_capture_stalled(true, 1));
+        assert!(super::display_capture_stalled(true, 2));
+        assert!(!super::display_capture_stalled(false, 20));
+    }
+
+    #[test]
+    fn display_resets_do_not_exhaust_hardware_encoders() {
+        for _ in 0..5 {
+            assert!(!super::should_exclude_encoder(true, true));
+        }
+        assert!(super::should_exclude_encoder(false, true));
+        assert!(!super::should_exclude_encoder(false, false));
+    }
 
     #[test]
     #[ignore = "Requires Apex Legends running; verifies protection or captures a short test"]

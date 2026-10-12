@@ -1,28 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Scissors, AudioLines, Ratio, MousePointer2, Palette, Play, Pause, X } from "lucide-react";
+import Slider from "../shared/Slider";
+import { SelectRow, CheckRow } from "./Panels/PanelControls";
+import "./Panels/Panels.css";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AudioLines, Ratio, Palette, X, Trash2, RefreshCw, Check } from "lucide-react";
 import { loadInputLog, type LoadedInputLog } from "../../lib/inputLog";
+import { getGradientPreset, gradientToCss } from "../../lib/wallpapers";
 import { userError } from "../../lib/userError";
 import type {
   AudioTrack,
   CaptionTrack,
   EditorConfig,
   Keyframe,
-  VideoClip,
 } from "../../lib/types";
 import {
   applyCursorEdits,
   captureLayout,
-  cleanupProposals,
   createRecipe,
   formatLayout,
+  LAYOUT_FORMATS,
   formatCaptionTracks,
   reaimZoomsAtClicks,
-  loopCursorEdits,
-  sourceRangesInSequence,
-  typingProposals,
   type BrandRecipe,
-  type EditRange,
 } from "../../lib/editorFinishing";
 import { useModalFocus } from "./hooks/useModalFocus";
 import "./FinishingStudio.css";
@@ -31,62 +29,28 @@ interface Props {
   config: EditorConfig;
   inputLogPath: string;
   captions: CaptionTrack[];
-  sequenceCaptions: CaptionTrack[];
   keyframes: Keyframe[];
   tracks: AudioTrack[];
-  clips: VideoClip[];
-  currentTime: number;
-  sequencePosition: number;
-  duration: number;
-  sourceDuration: number;
   voiceStatus: string;
   bypass: boolean;
   onBypass: (value: boolean) => void;
-  playing: boolean;
-  onPlay: () => void;
   onChange: (
     config: EditorConfig,
     keyframes?: Keyframe[],
     captions?: CaptionTrack[],
   ) => void;
   onTracks: (tracks: AudioTrack[]) => void;
-  onCut: (ranges: EditRange[]) => void;
-  onSpeed: (range: EditRange) => void;
-  onSeek: (seconds: number) => void;
   onClose: () => void;
+}
+function presetBackground(appearance: Partial<EditorConfig>) {
+  const gradient = appearance.bgType === "wallpaper" && appearance.wallpaperUrl ? getGradientPreset(appearance.wallpaperUrl) : undefined;
+  return gradient ? gradientToCss(gradient) : appearance.backgroundColor ?? "var(--bg-hover)";
 }
 const RECIPE_KEY = "snap.brandRecipes.v1";
 export default function FinishingStudio(p: Props) {
-  const [tab, setTab] = useState("cleanup"),
-    [message, setMessage] = useState(""),
-    [start, setStart] = useState(p.sequencePosition),
-    [end, setEnd] = useState(Math.min(p.duration, p.sequencePosition + 1));
-  const [selected, setSelected] = useState<number[]>([]),
-    [wordStart, setWordStart] = useState<number | null>(null),
-    [wordEnd, setWordEnd] = useState<number | null>(null);
-  const [log, setLog] = useState<LoadedInputLog | null>(null),
-    [silences, setSilences] = useState<{
-      trackId: string;
-      source: EditRange[];
-    } | null>(null),
-    [analyzing, setAnalyzing] = useState(false);
-  const [silenceTrack, setSilenceTrack] = useState(
-    p.tracks.find((t) => t.kind === "microphone")?.id ?? p.tracks[0]?.id ?? "",
-  );
-  const [transcriptTrack, setTranscriptTrack] = useState(
-    p.sequenceCaptions[0]?.id ?? "",
-  );
-  const transcript = useMemo(
-    () =>
-      p.sequenceCaptions.filter(
-        (t) =>
-          t.id ===
-          (p.sequenceCaptions.some((t) => t.id === transcriptTrack)
-            ? transcriptTrack
-            : p.sequenceCaptions[0]?.id),
-      ),
-    [p.sequenceCaptions, transcriptTrack],
-  );
+  const [tab, setTab] = useState("voice");
+  const [message, setMessage] = useState("");
+  const [log, setLog] = useState<LoadedInputLog | null>(null);
   useEffect(() => {
     let cancelled = false;
     void loadInputLog(p.inputLogPath)
@@ -100,13 +64,7 @@ export default function FinishingStudio(p: Props) {
       cancelled = true;
     };
   }, [p.inputLogPath]);
-  const [x, setX] = useState(0.5),
-    [y, setY] = useState(0.5),
-    [midX, setMidX] = useState(0.5),
-    [midY, setMidY] = useState(0.5),
-    [toX, setToX] = useState(0.5),
-    [toY, setToY] = useState(0.5);
-  const [name, setName] = useState("My brand"),
+  const [name, setName] = useState("My preset"),
     [recipes, setRecipes] = useState<BrandRecipe[]>(() => {
       try {
         const value = JSON.parse(localStorage.getItem(RECIPE_KEY) ?? "[]");
@@ -121,92 +79,44 @@ export default function FinishingStudio(p: Props) {
     });
   const [applyAppearance, setApplyAppearance] = useState(true),
     [applyCaptions, setApplyCaptions] = useState(true),
-    [applyAudio, setApplyAudio] = useState(false);
+    [applyAudio, setApplyAudio] = useState(false),
+    [applyCursor, setApplyCursor] = useState(true),
+    [applyLayout, setApplyLayout] = useState(false);
+  const starterRecipes = useMemo<BrandRecipe[]>(() => [
+    { id: "starter-clean", name: "Clean", appearance: { bgType: "color", backgroundColor: "#edf0f4", padding: 48, borderRadius: 16, shadow: {enabled:true,blur:32,spread:0,color:"rgba(0,0,0,0.18)",offsetX:0,offsetY:8} } },
+    { id: "starter-studio", name: "Studio", appearance: { bgType: "color", backgroundColor: "#202531", padding: 64, borderRadius: 20, shadow: {enabled:true,blur:48,spread:8,color:"rgba(0,0,0,0.5)",offsetX:0,offsetY:16} } },
+    { id: "starter-edge", name: "Edge to edge", appearance: { padding: 0, borderRadius: 0, inset: 0, shadow: {enabled:false,blur:0,spread:0,color:"rgba(0,0,0,0)",offsetX:0,offsetY:0} } },
+  ], []);
   const ref = useModalFocus(true);
-  const proposals = useMemo(() => {
-    const track = p.tracks.find((t) => t.id === silences?.trackId);
-    const measured =
-      track && silences
-        ? sourceRangesInSequence(silences.source, track, p.clips, Infinity).map(
-            (r) => ({
-              ...r,
-              label: "Measured quiet audio (−35 dB)",
-              kind: "silence" as const,
-            }),
-          )
-        : [];
-    return [
-      ...cleanupProposals(transcript),
-      ...measured,
-      ...typingProposals(log?.allEvents ?? [], p.clips),
-    ];
-  }, [transcript, p.clips, p.tracks, silences, log]);
+  const [position, setPosition] = useState({x:0,y:0});
+  const drag = useRef<{x:number;y:number;left:number;top:number;offsetX:number;offsetY:number;width:number;height:number}|null>(null);
   useEffect(() => {
-    setSelected([]);
-    setWordStart(null);
-    setWordEnd(null);
-  }, [proposals]);
-  const words = useMemo(
-    () =>
-      transcript[0]?.segments
-        .flatMap((s) => s.words ?? [])
-        .sort((a, b) => a.startMs - b.startMs) ?? [],
-    [transcript],
-  );
-  const videoLocked = p.config.lockedTracks?.includes("video"),
-    cursorLocked = p.config.lockedTracks?.includes("cursor");
-  const valid =
-    Number.isFinite(start) &&
-    Number.isFinite(end) &&
-    start >= 0 &&
-    end > start &&
-    end <= p.duration;
-  const cursorRangeValid =
-    Number.isFinite(start) &&
-    Number.isFinite(end) &&
-    start >= 0 &&
-    end > start &&
-    end <= p.sourceDuration;
+    const constrain = () => {
+      const rect = ref.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPosition(previous => ({x:previous.x + Math.max(12-rect.left,Math.min(0,window.innerWidth-12-rect.right)),y:previous.y + Math.max(12-rect.top,Math.min(0,window.innerHeight-12-rect.bottom))}));
+    };
+    window.addEventListener("resize",constrain);
+    return () => window.removeEventListener("resize",constrain);
+  }, [ref]);
+  const crop = p.config.crop ?? {x:0,y:0,w:1,h:1};
+  const cropEdge = (edge: "left" | "right" | "top" | "bottom", percent: number) => {
+    const next = {...crop};
+    const value = percent / 100;
+    if(edge === "left") { const right = crop.x+crop.w; next.x = Math.min(value,right-.05); next.w = right-next.x; }
+    if(edge === "right") next.w = Math.max(.05,1-value-crop.x);
+    if(edge === "top") { const bottom = crop.y+crop.h; next.y = Math.min(value,bottom-.05); next.h = bottom-next.y; }
+    if(edge === "bottom") next.h = Math.max(.05,1-value-crop.y);
+    p.onChange({...p.config,crop:next});
+  };
   const store = (next: BrandRecipe[]) => {
     try {
       localStorage.setItem(RECIPE_KEY, JSON.stringify(next));
       setRecipes(next);
-      setMessage("Recipes saved on this computer.");
+      setMessage("Presets saved on this computer.");
     } catch {
       setMessage("Recipe storage is full or unavailable; nothing was saved.");
     }
-  };
-  const addCursor = (mode: "hide" | "path" | "remove-clicks" | "click") => {
-    if (!cursorRangeValid || cursorLocked) return;
-    if ((mode === "path" || mode === "click") && !log?.region) {
-      setMessage(
-        "This recording has no capture-region metadata. Path repair and click insertion are unavailable.",
-      );
-      return;
-    }
-    p.onChange({
-      ...p.config,
-      cursorEdits: [
-        ...(p.config.cursorEdits ?? []),
-        {
-          id: crypto.randomUUID(),
-          startMs: start * 1000,
-          endMs: end * 1000,
-          mode,
-          points:
-            mode === "path"
-              ? [
-                  { timeMs: start * 1000, x, y },
-                  { timeMs: (start + end) * 500, x: midX, y: midY },
-                  { timeMs: end * 1000, x: toX, y: toY },
-                ]
-              : mode === "click"
-                ? [{ timeMs: start * 1000, x, y }]
-                : undefined,
-        },
-      ],
-    });
-    setMessage("Cursor edit added. Original sidecar preserved.");
   };
   const switchLayout = (id: string) => {
     const variants = [...(p.config.layoutVariants ?? [])];
@@ -252,9 +162,10 @@ export default function FinishingStudio(p: Props) {
         ref={ref}
         tabIndex={-1}
         className="finishing-studio"
+        style={{transform:`translate(${position.x}px,${position.y}px)`}}
         role="dialog"
         aria-modal="true"
-        aria-label="Finishing studio"
+        aria-label="Refine video"
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.stopPropagation();
@@ -262,261 +173,59 @@ export default function FinishingStudio(p: Props) {
           }
         }}
       >
-        <header>
+        <header className="refine-drag-handle"
+          onPointerDown={event=>{
+            if(event.button!==0 || (event.target as HTMLElement).closest("button"))return;
+            const rect=ref.current!.getBoundingClientRect();
+            drag.current={x:event.clientX,y:event.clientY,left:rect.left,top:rect.top,offsetX:position.x,offsetY:position.y,width:rect.width,height:rect.height};
+            event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();
+          }}
+          onPointerMove={event=>{const start=drag.current;if(!start)return;
+            const left=Math.max(12,Math.min(window.innerWidth-start.width-12,start.left+event.clientX-start.x));
+            const top=Math.max(12,Math.min(window.innerHeight-start.height-12,start.top+event.clientY-start.y));
+            setPosition({x:start.offsetX+left-start.left,y:start.offsetY+top-start.top});
+          }}
+          onPointerUp={event=>{drag.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);}}
+          onPointerCancel={()=>{drag.current=null;}}
+          onLostPointerCapture={()=>{drag.current=null;}}
+        >
           <div>
-            <h2>Finishing tools</h2>
+            <h2>Refine</h2>
           </div>
-          <button className="finishing-icon-button" onClick={p.onPlay} title={p.playing ? "Pause" : "Play"} aria-label={p.playing ? "Pause" : "Play"}>
-            {p.playing ? <Pause size={16} /> : <Play size={16} />}
-          </button>
-          <button className="finishing-icon-button" aria-label="Close finishing studio" onClick={p.onClose}>
+          <button className="finishing-icon-button" aria-label="Close Refine" onClick={p.onClose}>
             <X size={16} />
           </button>
         </header>
-        <nav aria-label="Finishing tools">
-          {["cleanup", "voice", "formats", "cursor", "recipes"].map((t) => (
+        <nav className="toggle-segmented" role="tablist" aria-label="Refine tools">
+          {["voice", "formats", "recipes"].map((t) => (
             <button
               key={t}
-              aria-pressed={tab === t}
+              className={`seg-btn ${tab === t ? "active" : ""}`}
+              tabIndex={tab === t ? 0 : -1}
+              onKeyDown={event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tabs=Array.from(event.currentTarget.parentElement!.querySelectorAll<HTMLButtonElement>("[role=tab]"));const index=tabs.indexOf(event.currentTarget);const next=event.key==="Home"?0:event.key==="End"?tabs.length-1:(index+(event.key==="ArrowRight"?1:-1)+tabs.length)%tabs.length;tabs[next].click();tabs[next].focus();}}
+              role="tab" id={`refine-tab-${t}`} aria-controls="refine-panel" aria-selected={tab === t}
               onClick={() => {
                 setTab(t);
                 setMessage("");
-                if (t === "cursor") {
-                  setStart(p.currentTime);
-                  setEnd(Math.min(p.sourceDuration, p.currentTime + 1));
-                }
-                if (t === "cleanup") {
-                  setStart(p.sequencePosition);
-                  setEnd(Math.min(p.duration, p.sequencePosition + 1));
-                }
+
               }}
             >
-              {({ cleanup: <Scissors size={16} />, voice: <AudioLines size={16} />, formats: <Ratio size={16} />, cursor: <MousePointer2 size={16} />, recipes: <Palette size={16} /> })[t]}
+              {({ voice: <AudioLines size={16} />, formats: <Ratio size={16} />, recipes: <Palette size={16} /> })[t]}
               {
                 {
-                  cleanup: "Cleanup",
                   voice: "Voice",
-                  formats: "Formats",
-                  cursor: "Cursor",
-                  recipes: "Styles",
+                  formats: "Layouts",
+                  recipes: "Presets",
                 }[t]
               }
             </button>
           ))}
         </nav>
-        <div className="finishing-body">
-          {(tab === "cleanup" || tab === "cursor") && (
-            <fieldset>
-              <legend>
-                {tab === "cursor"
-                  ? "Source recording range (seconds)"
-                  : "Sequence range (seconds)"}
-              </legend>
-              <label>
-                Start
-                <input
-                  type="number"
-                  step=".01"
-                  min="0"
-                  value={start}
-                  onChange={(e) => setStart(Number(e.target.value))}
-                />
-              </label>
-              <label>
-                End
-                <input
-                  type="number"
-                  step=".01"
-                  min="0"
-                  value={end}
-                  onChange={(e) => setEnd(Number(e.target.value))}
-                />
-              </label>
-              {tab === "cursor" && (
-                <button
-                  onClick={() => {
-                    setStart(p.currentTime);
-                    setEnd(Math.min(p.sourceDuration, p.currentTime + 1));
-                  }}
-                >
-                  Use source playhead
-                </button>
-              )}
-            </fieldset>
-          )}
-          {tab === "cleanup" && (
-            <>
-              <label>
-                Transcript track
-                <select
-                  value={transcript[0]?.id ?? ""}
-                  disabled={!p.sequenceCaptions.length}
-                  onChange={(e) => setTranscriptTrack(e.target.value)}
-                >
-                  {!p.sequenceCaptions.length && <option value="">No captions</option>}
-                  {p.sequenceCaptions.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p>
-                Transcript gaps are not verified silence. Listen before cutting.
-              </p>
-              <div className="finishing-transcript">
-                {words.map((w, i) => (
-                  <button
-                    key={i}
-                    className={
-                      wordStart !== null &&
-                      wordEnd !== null &&
-                      i >= Math.min(wordStart, wordEnd) &&
-                      i <= Math.max(wordStart, wordEnd)
-                        ? "selected"
-                        : ""
-                    }
-                    title={`${(w.startMs / 1000).toFixed(2)}s`}
-                    onClick={(e) => {
-                      const a =
-                        e.shiftKey && wordStart !== null ? wordStart : i;
-                      setWordStart(a);
-                      setWordEnd(i);
-                      setStart(words[Math.min(a, i)].startMs / 1000);
-                      setEnd(words[Math.max(a, i)].endMs / 1000);
-                      p.onSeek(w.startMs / 1000);
-                    }}
-                  >
-                    {w.text}
-                  </button>
-                ))}
-                {!words.length && (
-                  <p>
-                    Add captions to select words, or set a range above.
-                  </p>
-                )}
-              </div>
-              <div className="finishing-actions">
-                <button
-                  disabled={!valid || videoLocked}
-                  onClick={() => {
-                    p.onCut([{ start, end }]);
-                    setSelected([]);
-                  }}
-                >
-                  Ripple-cut range
-                </button>
-                <button
-                  disabled={!valid || videoLocked}
-                  onClick={() => p.onSpeed({ start, end })}
-                >
-                  Speed range to 2×
-                </button>
-              </div>
-              <p>
-                2× preserves linked effects and audio; unavailable with independent sequence overlays.
-              </p>
-              <h3>Review suggestions</h3>
-              {proposals.map((r, i) => (
-                <div
-                  className="finishing-proposal"
-                  key={`${r.start}-${r.end}-${i}`}
-                >
-                  <label>
-                    <input
-                      type="checkbox"
-                      disabled={r.kind === "typing"}
-                      checked={selected.includes(i)}
-                      onChange={(e) =>
-                        setSelected((s) =>
-                          e.target.checked
-                            ? [...s, i]
-                            : s.filter((v) => v !== i),
-                        )
-                      }
-                    />
-                    {r.label} · {r.start.toFixed(2)}–{r.end.toFixed(2)}s
-                  </label>
-                  <button onClick={() => { p.onSeek(Math.max(0, r.start - 0.3)); if(!p.playing)p.onPlay(); }}>
-                    Listen
-                  </button>
-                </div>
-              ))}
-              <fieldset>
-                <legend>Measure quiet audio</legend>
-                <select
-                  aria-label="Silence analysis track"
-                  value={silenceTrack}
-                  disabled={!p.tracks.length}
-                  onChange={(e) => setSilenceTrack(e.target.value)}
-                >
-                  {!p.tracks.length && <option value="">No audio</option>}
-                  {p.tracks.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  disabled={
-                    analyzing || !p.tracks.some((t) => t.id === silenceTrack)
-                  }
-                  onClick={() => {
-                    const track = p.tracks.find((t) => t.id === silenceTrack);
-                    if (!track) return;
-                    setAnalyzing(true);
-                    setMessage("Analyzing original audio locally…");
-                    void invoke<EditRange[]>("editor_silence_ranges", {
-                      path: track.path,
-                    })
-                      .then((source) => {
-                        setSilences({ trackId: track.id, source });
-                        setMessage(
-                          `Found ${source.length} quiet intervals. Review them before cutting.`,
-                        );
-                      })
-                      .catch((error) => setMessage(userError(error)))
-                      .finally(() => setAnalyzing(false));
-                  }}
-                >
-                  {analyzing ? "Analyzing…" : "Analyze silence"}
-                </button>
-              </fieldset>
-              <p>
-                Only the selected track is measured. Review other audio before cutting; typing is sped up, not deleted.
-              </p>
-              {proposals
-                .filter((r) => r.kind === "typing")
-                .map((r, i) => (
-                  <button
-                    key={i}
-                    disabled={videoLocked}
-                    onClick={() => p.onSpeed(r)}
-                  >
-                    Speed typing {r.start.toFixed(1)}–{r.end.toFixed(1)}s to 2×
-                  </button>
-                ))}
-              <button
-                disabled={!selected.length || videoLocked}
-                onClick={() => {
-                  p.onCut(
-                    selected.flatMap((i) =>
-                      proposals[i] ? [proposals[i]] : [],
-                    ),
-                  );
-                  setSelected([]);
-                }}
-              >
-                Ripple-cut reviewed suggestions ({selected.length})
-              </button>
-            </>
-          )}
+        <div className="finishing-body" id="refine-panel" role="tabpanel" aria-labelledby={`refine-tab-${tab}`}>
           {tab === "voice" && (
             <>
               <p>
-                Offline noise reduction, de-essing, compression and optional
-                loudness leveling. Room-tail reduction uses a gentle gate, not
-                AI de-reverberation. Source audio stays unchanged.
+                Reduce noise and balance speech locally. Room tails use a gentle gate; leveling targets −16 LUFS.
               </p>
               {p.tracks.map((t) => {
                 const settings = t.voicePolish ?? {
@@ -540,88 +249,34 @@ export default function FinishingStudio(p: Props) {
                     disabled={p.config.lockedTracks?.includes(t.id)}
                   >
                     <legend>{t.label}</legend>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settings.enabled}
-                        onChange={(e) => update({ enabled: e.target.checked })}
-                      />
-                      Enable voice polish
-                    </label>
-                    <label>
-                      Strength {Math.round(settings.strength * 100)}%
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step=".05"
-                        value={settings.strength}
-                        onChange={(e) =>
-                          update({ strength: Number(e.target.value) })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Hum
-                      <select
-                        value={settings.hum}
-                        onChange={(e) =>
-                          update({ hum: e.target.value as typeof settings.hum })
-                        }
-                      >
-                        <option value="off">Off</option>
-                        <option value="50">50 Hz</option>
-                        <option value="60">60 Hz</option>
-                      </select>
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settings.roomTail}
-                        onChange={(e) => update({ roomTail: e.target.checked })}
-                      />
-                      Reduce quiet room tails
-                    </label>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={settings.loudness}
-                        onChange={(e) => update({ loudness: e.target.checked })}
-                      />
-                      Level voice to −16 LUFS
-                    </label>
+                    <CheckRow label="Voice polish" checked={settings.enabled} onChange={enabled=>update({enabled})}/>
+                    <Slider label="Strength" value={settings.strength*100} min={0} max={100} step={5} unit="%" onChange={strength=>update({strength:strength/100})}/>
+                    <SelectRow label="Hum filter" value={settings.hum} options={["off","50","60"]} optionLabels={{off:"Off","50":"50 Hz","60":"60 Hz"}} onChange={hum=>update({hum:hum as typeof settings.hum})}/>
+                    <CheckRow label="Reduce room tails" checked={settings.roomTail} onChange={roomTail=>update({roomTail})}/>
+                    <CheckRow label="Level voice" checked={settings.loudness} onChange={loudness=>update({loudness})}/>
                   </fieldset>
                 );
               })}
               {!p.tracks.length && <p>Add a narration audio track first.</p>}
-              <button
-                aria-pressed={p.bypass}
-                disabled={!p.voiceStatus.startsWith("Voice polish ready")}
-                onClick={() => p.onBypass(!p.bypass)}
-              >
-                {p.bypass
-                  ? "A: original — switch to polished"
-                  : "B: polished — compare original"}
-              </button>
+              <div className="toggle-segmented finishing-comparison" role="group" aria-label="Compare voice">
+                <button className={`seg-btn ${p.bypass?"active":""}`} aria-pressed={p.bypass} disabled={!p.voiceStatus.startsWith("Voice polish ready")} onClick={()=>p.onBypass(true)}>Original</button>
+                <button className={`seg-btn ${!p.bypass?"active":""}`} aria-pressed={!p.bypass} disabled={!p.voiceStatus.startsWith("Voice polish ready")} onClick={()=>p.onBypass(false)}>Polished</button>
+              </div>
               <p role="status">{p.voiceStatus}</p>
               <p>
-                A/B changes preview only. Export always uses enabled polish
-                settings.
+                Comparison affects preview. Export uses enabled voice polish.
               </p>
             </>
           )}
           {tab === "formats" && (
             <>
               <p>
-                Each variant stores its own crop, framing, zooms and captions.
-                The master is saved before the first variant. Safe-area guides
-                are preview-only conservative margins, not a guarantee for every
-                platform UI.
+                Save separate framing, zooms and captions for each layout. Your original layout stays available as Master.
               </p>
-              <div className="finishing-actions">
-                {(["vertical", "square", "wide"] as const).map((format) => (
+              <div className="refine-card-grid">
+                {LAYOUT_FORMATS.map(({id:format,name:label,width,height,description}) => (
                   <button
-                    key={format}
+                    key={format} className="refine-format-card" aria-label={`New ${format}`}
                     onClick={() => {
                       const variants = [...(p.config.layoutVariants ?? [])];
                       const active = variants.findIndex(
@@ -650,7 +305,7 @@ export default function FinishingStudio(p: Props) {
                         config,
                         p.keyframes,
                         captions,
-                        `${format} ${variants.length}`,
+                        `${label} ${variants.length}`,
                       );
                       variants.push(variant);
                       p.onChange(
@@ -664,19 +319,23 @@ export default function FinishingStudio(p: Props) {
                       );
                     }}
                   >
-                    New {format}
+                    <span className="refine-format-art" aria-hidden="true"><span style={{aspectRatio:`${width}/${height}`,width:width>=height?64:Math.round(54*width/height),height:width>=height?Math.round(64*height/width):54}}/></span>
+                    <strong>{label}</strong><span>{width}:{height} · {description}</span>
                   </button>
                 ))}
               </div>
+              <h3>Saved layouts</h3>
+              {!p.config.layoutVariants?.length && <p className="finishing-empty">Choose a format to save your first layout. Master keeps the original framing.</p>}
               {(p.config.layoutVariants ?? []).map((v) => (
                 <div className="finishing-proposal" key={v.id}>
                   <button
                     aria-pressed={v.id === p.config.activeLayoutId}
                     onClick={() => switchLayout(v.id)}
                   >
-                    {v.name}
+                    {v.id === p.config.activeLayoutId && <Check size={14}/>} {v.name}
                   </button>
                   <button
+                    className="finishing-icon-button" aria-label={`Delete ${v.name} layout`}
                     disabled={
                       v.id === p.config.activeLayoutId || v.name === "Master"
                     }
@@ -689,26 +348,20 @@ export default function FinishingStudio(p: Props) {
                       })
                     }
                   >
-                    Remove
+                    <Trash2 size={16}/>
                   </button>
                 </div>
               ))}
-              <label>
-                Safe guides
-                <select
-                  value={p.config.safeArea ?? "off"}
-                  onChange={(e) =>
-                    p.onChange({
-                      ...p.config,
-                      safeArea: e.target.value as EditorConfig["safeArea"],
-                    })
-                  }
-                >
-                  <option value="off">Off</option>
-                  <option value="vertical">Vertical</option>
-                  <option value="square">Square</option>
-                </select>
-              </label>
+              <fieldset className="refine-framing"><legend>Framing</legend>
+                <p>Crop edges without shrinking the screen. The remaining picture fills the current layout.</p>
+                <Slider label="Left" value={crop.x*100} min={0} max={Math.max(0,(crop.x+crop.w-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("left",value)}/>
+                <Slider label="Right" value={(1-crop.x-crop.w)*100} min={0} max={(.95-crop.x)*100} step={1} unit="%" onChange={value=>cropEdge("right",value)}/>
+                <Slider label="Top" value={crop.y*100} min={0} max={Math.max(0,(crop.y+crop.h-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("top",value)}/>
+                <Slider label="Bottom" value={(1-crop.y-crop.h)*100} min={0} max={(.95-crop.y)*100} step={1} unit="%" onChange={value=>cropEdge("bottom",value)}/>
+                <button disabled={!p.config.crop} onClick={()=>p.onChange({...p.config,crop:null})}>Reset crop</button>
+              </fieldset>
+              <fieldset className="refine-guides"><legend>Guides & focus</legend>
+              <SelectRow label="Safe guides" value={p.config.safeArea??"off"} options={["off","vertical","square"]} onChange={safeArea=>p.onChange({...p.config,safeArea:safeArea as EditorConfig["safeArea"]})}/>
               <button
                 disabled={
                   !log?.region ||
@@ -749,154 +402,22 @@ export default function FinishingStudio(p: Props) {
                   );
                 }}
               >
-                Re-aim zooms at recorded clicks
+                Reframe around clicks
               </button>
               <p>
-                Close this dialog to adjust crop, zoom target and caption
-                placement in the editor; switching variants saves those
-                adjustments.
+                Switching layouts saves your framing. Guides appear only in preview.
               </p>
-            </>
-          )}
-          {tab === "cursor" && (
-            <>
-              <p>
-                Repair a recorded cursor using source timestamps and normalized
-                coordinates. Path/click insertion requires Snap capture-region
-                metadata; imported video without that metadata supports
-                hide/remove only.
-              </p>
-              <fieldset>
-                <legend>Path control points (0–1)</legend>
-                {(
-                  [
-                    ["Start X", x, setX],
-                    ["Start Y", y, setY],
-                    ["Middle X", midX, setMidX],
-                    ["Middle Y", midY, setMidY],
-                    ["End X", toX, setToX],
-                    ["End Y", toY, setToY],
-                  ] as const
-                ).map(([label, value, set]) => (
-                  <label key={label}>
-                    {label}
-                    <input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step=".01"
-                      value={value}
-                      onChange={(e) =>
-                        set(Math.max(0, Math.min(1, Number(e.target.value))))
-                      }
-                    />
-                  </label>
-                ))}
               </fieldset>
-              <div className="finishing-actions">
-                {(["hide", "path", "remove-clicks", "click"] as const).map(
-                  (mode) => (
-                    <button
-                      key={mode}
-                      disabled={!cursorRangeValid || cursorLocked}
-                      onClick={() => addCursor(mode)}
-                    >
-                      {
-                        {
-                          hide: "Hide cursor",
-                          path: "Replace path",
-                          "remove-clicks": "Remove clicks",
-                          click: "Insert click at start",
-                        }[mode]
-                      }
-                    </button>
-                  ),
-                )}
-                <button
-                  disabled={!cursorRangeValid || cursorLocked || !log?.region}
-                  onClick={() => {
-                    setToX(x);
-                    setToY(y);
-                    p.onChange({
-                      ...p.config,
-                      cursorEdits: [
-                        ...(p.config.cursorEdits ?? []),
-                        {
-                          id: crypto.randomUUID(),
-                          mode: "path",
-                          startMs: start * 1000,
-                          endMs: end * 1000,
-                          points: [
-                            { timeMs: start * 1000, x, y },
-                            { timeMs: end * 1000, x, y },
-                          ],
-                        },
-                      ],
-                    });
-                  }}
-                >
-                  Hold cursor in range
-                </button>
-              </div>
-              <p>
-                Existing cursor smoothing applies to repaired paths. Later paths
-                override earlier paths. Hide ranges remain hidden until removed.
-              </p>
-              <button
-                disabled={
-                  cursorLocked || !log?.region || !p.clips.some((c) => !c.gap)
-                }
-                onClick={() => {
-                  p.onChange({
-                    ...p.config,
-                    cursorEdits: [
-                      ...(p.config.cursorEdits ?? []),
-                      ...loopCursorEdits(p.clips, x, y),
-                    ],
-                  });
-                  setMessage(
-                    "First and last 400 ms now hold the start point for a matching cursor loop seam.",
-                  );
-                }}
-              >
-                Align first/last cursor for loop
-              </button>
-              <p>
-                Loop repair is source-timed, so reused source ranges share the
-                repair. A cursor baked into imported footage cannot be removed.
-              </p>
-              {(p.config.cursorEdits ?? []).map((edit) => (
-                <div className="finishing-proposal" key={edit.id}>
-                  <span>
-                    {edit.mode} · {(edit.startMs / 1000).toFixed(2)}–
-                    {(edit.endMs / 1000).toFixed(2)}s
-                  </span>
-                  <button
-                    disabled={cursorLocked}
-                    onClick={() =>
-                      p.onChange({
-                        ...p.config,
-                        cursorEdits: p.config.cursorEdits?.filter(
-                          (e) => e.id !== edit.id,
-                        ),
-                      })
-                    }
-                  >
-                    Remove repair
-                  </button>
-                </div>
-              ))}
             </>
           )}
           {tab === "recipes" && (
             <>
               <p>
-                Recipes copy style only: no source files, timeline ranges, layer
-                IDs, camera animation or caption text. Imported
-                backgrounds/cursor packs still need to exist on this computer.
+                Reuse appearance, caption styling and audio settings. Imported backgrounds and cursor packs must remain available.
               </p>
-              <label>
-                Recipe name
+              <h3>Save current style</h3>
+              <div className="refine-save-row"><label>
+                Name
                 <input
                   value={name}
                   maxLength={80}
@@ -912,41 +433,27 @@ export default function FinishingStudio(p: Props) {
                   ])
                 }
               >
-                Save current style
-              </button>
-              <fieldset>
-                <legend>Apply selectively</legend>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={applyAppearance}
-                    onChange={(e) => setApplyAppearance(e.target.checked)}
-                  />
-                  Appearance / framing
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={applyCaptions}
-                    onChange={(e) => setApplyCaptions(e.target.checked)}
-                  />
-                  Caption style
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={applyAudio}
-                    onChange={(e) => setApplyAudio(e.target.checked)}
-                  />
-                  Audio mix / microphone polish
-                </label>
+                Save preset
+              </button></div>
+              <fieldset className="refine-apply-options"><legend>Include when applying</legend>
+                <CheckRow label="Canvas" checked={applyAppearance} onChange={setApplyAppearance}/>
+                <CheckRow label="Cursor & motion" checked={applyCursor} onChange={setApplyCursor}/>
+                <CheckRow label="Layout & camera" checked={applyLayout} onChange={setApplyLayout}/>
+                <CheckRow label="Caption style" checked={applyCaptions} onChange={setApplyCaptions}/>
+                <CheckRow label="Audio mix & voice" checked={applyAudio} onChange={setApplyAudio}/>
               </fieldset>
-              {recipes.map((r) => (
-                <div className="finishing-proposal" key={r.id}>
-                  <span>{r.name}</span>
-                  <button
+              <h3>Style library <span className="refine-count">{recipes.length} saved</span></h3>
+              <div className="refine-card-grid refine-preset-grid">
+              {[...starterRecipes,...recipes].map((r) => (
+                <div className="refine-preset-card" key={r.id}>
+                  <div className="refine-preset-art" style={{background:presetBackground(r.appearance)}} aria-hidden="true"><span style={{borderRadius:Math.min(12,r.appearance.borderRadius??14),width:r.appearance.padding===0?"100%":"72%",height:r.appearance.padding===0?"100%":"64%",boxShadow:r.appearance.shadow?.enabled?"0 6px 14px #0005":"none"}}><i/><i/><i/></span></div>
+                  <strong>{r.name}</strong>
+                  <span className="refine-card-detail">{r.id.startsWith("starter-")?"Starter style":`${r.appearance.padding??0}px padding · ${r.appearance.borderRadius??0}px corners`}</span>
+                  <div className="refine-preset-actions">
+                  <button disabled={!applyAppearance&&!applyCursor&&!applyLayout&&!applyCaptions&&!applyAudio}
                     onClick={() => {
-                      const { audio, ...appearance } = r.appearance;
+                      const { audio, cursorStyle, cursorMovement, zoomMovement, motionBlur, aspectRatio, cameraOverlay, exportDefaults, ...appearance } = r.appearance;
+                      const defined = (values: Partial<EditorConfig>) => Object.fromEntries(Object.entries(values).filter(([,v])=>v!==undefined));
                       p.onChange(
                         {
                           ...p.config,
@@ -974,6 +481,8 @@ export default function FinishingStudio(p: Props) {
                           ...(applyAppearance
                             ? structuredClone(appearance)
                             : {}),
+                          ...(applyCursor ? structuredClone(defined({cursorStyle,cursorMovement,zoomMovement,motionBlur})) : {}),
+                          ...(applyLayout ? structuredClone(defined({aspectRatio,cameraOverlay,exportDefaults})) : {}),
                           ...(applyAudio && audio
                             ? { audio: structuredClone(audio) }
                             : {}),
@@ -1004,13 +513,15 @@ export default function FinishingStudio(p: Props) {
                   >
                     Apply
                   </button>
+                  {!r.id.startsWith("starter-") && <><button className="finishing-icon-button" aria-label={`Update ${r.name} from current edit`} title="Update from current edit" onClick={()=>store(recipes.map(v=>v.id===r.id?{...createRecipe(r.name,p.config,p.captions,p.tracks),id:r.id}:v))}><RefreshCw size={16}/></button>
                   <button
-                    onClick={() => store(recipes.filter((v) => v.id !== r.id))}
+                    aria-label={`Delete ${r.name} preset`} title="Delete preset" className="finishing-icon-button" onClick={() => store(recipes.filter((v) => v.id !== r.id))}
                   >
-                    Delete recipe
-                  </button>
+                    <Trash2 size={16}/>
+                  </button></>}
+                  </div>
                 </div>
-              ))}
+              ))}</div>
             </>
           )}
         </div>

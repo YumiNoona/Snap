@@ -4,7 +4,7 @@ export function Section({ title, children }: { title: string; children: React.Re
   return <section className="ss-section"><h4 className="ss-section-heading">{title}</h4><div className="ss-section-body">{children}</div></section>;
 }
 
-export function SelectRow({ label, value, options, optionLabels, onChange }: { label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
+export function SelectRow({ label, value, options, optionLabels, onChange, disabled = false }: { disabled?: boolean; label: string; value: string; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -18,7 +18,7 @@ export function SelectRow({ label, value, options, optionLabels, onChange }: { l
     const place = () => {
       const trigger = triggerRef.current?.getBoundingClientRect();
       if (!trigger) return;
-      const boundary = rootRef.current?.closest?.(".ss-panels-drawer, .timeline-clip-inspector")?.getBoundingClientRect();
+      const boundary = rootRef.current?.closest?.(".ss-panels-drawer, .timeline-clip-inspector, .finishing-body, .finishing-studio")?.getBoundingClientRect();
       const below = Math.max(40, Math.min(boundary?.bottom ?? window.innerHeight, window.innerHeight) - trigger.bottom - 12);
       const above = Math.max(40, trigger.top - Math.max(boundary?.top ?? 0, 0) - 12);
       const upwards = below < Math.min(238, options.length * 37 + 10) && above > below;
@@ -29,6 +29,8 @@ export function SelectRow({ label, value, options, optionLabels, onChange }: { l
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [open, options.length]);
+
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
   const close = () => { setOpen(false); triggerRef.current?.focus?.(); };
   const navigate = (event: React.KeyboardEvent) => {
@@ -63,7 +65,7 @@ export function SelectRow({ label, value, options, optionLabels, onChange }: { l
     <div className="field-row select-row custom-select-row" ref={rootRef}>
       <span className="field-label">{label}</span>
       <div className="custom-select">
-        <button ref={triggerRef} type="button" className={`custom-select-trigger ${open ? "open" : ""}`} aria-label={label} aria-haspopup="listbox" aria-controls={menuId} aria-expanded={open} onKeyDown={navigate} onClick={() => setOpen((current) => !current)}>
+        <button ref={triggerRef} type="button" className={`custom-select-trigger ${open ? "open" : ""}`} disabled={disabled} aria-label={label} aria-haspopup="listbox" aria-controls={menuId} aria-expanded={open} onKeyDown={navigate} onClick={() => setOpen((current) => !current)}>
           <span>{optionLabel(value)}</span><ChevronDown size={14} />
         </button>
         {open && <div ref={menuRef} id={menuId} style={menuLayout} className="custom-select-menu" role="listbox" aria-label={label} onKeyDown={navigate}>

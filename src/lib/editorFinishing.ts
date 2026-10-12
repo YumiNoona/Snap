@@ -418,19 +418,23 @@ export function captureLayout(
     ),
   });
 }
+export type LayoutFormat = "vertical" | "square" | "wide" | "portrait" | "classic" | "ultrawide";
+export const LAYOUT_FORMATS: { id: LayoutFormat; name: string; width: number; height: number; description: string }[] = [
+  { id: "wide", name: "Landscape", width: 16, height: 9, description: "Videos & tutorials" },
+  { id: "vertical", name: "Vertical", width: 9, height: 16, description: "Shorts & stories" },
+  { id: "square", name: "Square", width: 1, height: 1, description: "Social posts" },
+  { id: "portrait", name: "Portrait", width: 4, height: 5, description: "Portrait posts" },
+  { id: "classic", name: "Classic", width: 4, height: 3, description: "Slides & demos" },
+  { id: "ultrawide", name: "Ultrawide", width: 21, height: 9, description: "Wide screen captures" },
+];
 export function formatLayout(
   config: EditorConfig,
-  format: "vertical" | "square" | "wide",
+  format: LayoutFormat,
 ) {
   return {
     ...config,
-    aspectRatio:
-      format === "vertical"
-        ? { width: 9, height: 16 }
-        : format === "square"
-          ? { width: 1, height: 1 }
-          : { width: 16, height: 9 },
-    safeArea: format === "wide" ? ("off" as const) : format,
+    aspectRatio: { width: LAYOUT_FORMATS.find(f => f.id === format)!.width, height: LAYOUT_FORMATS.find(f => f.id === format)!.height },
+    safeArea: format === "vertical" || format === "square" ? format : ("off" as const),
     cameraOverlay: {
       ...config.cameraOverlay,
       x: 0.2,
@@ -454,7 +458,7 @@ export function formatLayout(
 }
 export function formatCaptionTracks(
   tracks: CaptionTrack[],
-  format: "vertical" | "square" | "wide",
+  format: LayoutFormat,
 ): CaptionTrack[] {
   return tracks.map((t) => ({
     ...t,

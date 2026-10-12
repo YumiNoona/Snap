@@ -932,7 +932,7 @@
   box-shadow: 0 14px 36px rgba(0,0,0,.38);
   animation: caption-menu-in .16s ease-out;
 }
-.ss-panels-drawer .custom-select-menu button {
+.custom-select-menu button {
   display: flex;
   width: 100%;
   min-height: 34px;
@@ -947,10 +947,10 @@
   border-radius: 7px;
   cursor: pointer;
 }
-.ss-panels-drawer .custom-select-menu button + button { margin-top: 3px; }
-.ss-panels-drawer .custom-select-menu button:hover,
-.ss-panels-drawer .custom-select-menu button[aria-selected="true"] { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.ss-panels-drawer .custom-select-menu button > svg { flex: 0 0 auto; color: var(--accent); }
+.custom-select-menu button + button { margin-top: 3px; }
+.custom-select-menu button:hover,
+.custom-select-menu button[aria-selected="true"] { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.custom-select-menu button > svg { flex: 0 0 auto; color: var(--accent); }
 
 .custom-select-menu {
   scrollbar-width: none;
@@ -1339,3 +1339,35 @@
 
 .timeline-context-menu,.aspect-dropdown-portal { scrollbar-width:none; }
 .timeline-context-menu::-webkit-scrollbar,.aspect-dropdown-portal::-webkit-scrollbar { display:none; }
+
+/* Shared Refine glass treatment for editor tool surfaces and their menus.
+   Portal menus live outside the editor and carry their own theme class. */
+:root .screenstudio-editor-layout[data-theme] :is(
+  .ss-panels-drawer, .ss-file-menu, .custom-select-menu,
+  .caption-language-menu, .dd-panel, .dd-sub-panel,
+  .timeline-clip-inspector, .timeline-live-trim-preview
+) {
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+:root :is(.aspect-dropdown-menu.aspect-dropdown-portal, .timeline-context-menu, .media-context-menu) {
+  background: rgba(17,17,17,.72);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+:root :is(.aspect-dropdown-menu.aspect-dropdown-portal.theme-light, .timeline-context-menu.theme-light, .media-context-menu.theme-light) {
+  background: rgba(255,255,255,.72);
+}
+
+/* Keep sticky control rows from hiding the glass underneath them. */
+:root .screenstudio-editor-layout[data-theme] :is(
+  .timeline-clip-inspector header,
+  .timeline-clip-inspector .timeline-inspector-actions,
+  .ss-panels-drawer .layer-inspector-header,
+  .ss-panels-drawer .ss-inspector-header
+) {
+  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}

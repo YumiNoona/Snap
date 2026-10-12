@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyCursorEdits,
   captureLayout,
+  formatLayout,
+  LAYOUT_FORMATS,
   cleanupProposals,
   createRecipe,
   cursorVisible,
@@ -33,6 +35,20 @@ const track: AudioTrack = {
   sourceEnd: 20,
 };
 describe("finishing edits", () => {
+  it("creates all six layouts with valid export sizes without mutating the master", () => {
+    const original = structuredClone(DEFAULT_EDITOR_CONFIG);
+    for (const format of LAYOUT_FORMATS) {
+      const next = formatLayout(original, format.id);
+      expect(next.aspectRatio).toEqual({width:format.width,height:format.height});
+      const size = layoutExportSize(next.aspectRatio);
+      expect(size.width % 2).toBe(0);
+      expect(size.height % 2).toBe(0);
+      expect(Math.max(size.width,size.height)).toBeLessThanOrEqual(3840);
+      expect(next.safeArea).toBe(format.id === "vertical" || format.id === "square" ? format.id : "off");
+    }
+    expect(original).toEqual(DEFAULT_EDITOR_CONFIG);
+  });
+
   it("sizes landscape, portrait and square exports with even bounded dimensions", () => {
     expect(layoutExportSize({ width: 16, height: 9 })).toEqual({
       width: 1920,

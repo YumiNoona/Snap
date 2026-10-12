@@ -42,13 +42,15 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.2.1 simplifies the editor and window picker: one-shot window preview cards, direct selection, balanced drawer widths and padding, cleaner zoom controls, icon-based finishing tools, and source-aware timeline filmstrips without repeated clip/audio labels. The top-bar command search and its shortcut have been removed.
+            Snap 9.2.2 refines the editor with a translucent, draggable Refine panel, consistent glass menus and inspectors in both themes, and only Voice, Layouts and Presets tabs.
 
-            Full-screen display recording now uses adapter-bound GPU Desktop Duplication. Window and region recording retain Windows Graphics Capture. Capture startup preserves diagnostics, distinguishes GPU resizing failures, and detects Windows capture-excluded windows before attempting encoding. Hardware encoding remains the default; CPU fallback is explicit opt-in.
+            Layouts now include six visual format cards, saved framing snapshots, edge crop controls and better guide spacing. Presets include preview cards, three starter styles, updating saved styles and selective application for canvas, motion, layout, captions and audio.
 
-            Validation: 163 frontend tests, 47 native unit tests, production build, source checks and strict Rust linting. Real GPU recording startup and one-shot window preview capture were also tested locally.
+            Full-screen GPU capture now retries temporary display failures, retains hardware encoders after display resets, and recovers stalled duplication pipelines. Recovery limits apply to consecutive failures rather than a whole recording.
 
-            Known limitation: the tested Apex Legends window reports Windows capture exclusion (WDA_EXCLUDEFROMCAPTURE, 0x11), including in Borderless Windowed mode. Snap reports this restriction and does not bypass it or silently record the desktop instead. The app or utility applying that exclusion must remove it before game-window capture can work. Some GPU drivers also reject D3D11 downscaling; use Manual / Native resolution in that case. See FULLSCREEN_CAPTURE.md for diagnosis and remaining game-specific validation.
+            Validation: 164 frontend tests, 49 native unit tests, two live GPU capture tests, production build and source checks. Editor interaction checks cover dragging, crop/reset, format cards, presets, responsive layouts and both themes.
+
+            Game-specific capture remains dependent on Windows capture restrictions and GPU drivers. See FULLSCREEN_CAPTURE.md for diagnosis. Hardware encoding remains the default; software fallback requires explicit opt-in.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

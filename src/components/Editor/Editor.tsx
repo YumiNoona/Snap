@@ -10,7 +10,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -19,7 +19,6 @@ import FinishingStudio from "./FinishingStudio";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useVoicePolish } from "./hooks/useVoicePolish";
 import { prepareVoiceTracks } from "../../lib/voicePolish";
-import { editSequenceRanges, rippleCleanup } from "../../lib/editorFinishing";
 import DonateButton from "../shared/DonateButton";
 import type { ActionEventEdit, AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, Keyframe, ExportSettings, ImageLayer, Layer, ZoomRegionSelection, ZoomRegionSettings } from "../../lib/types";
 import { DEFAULT_EDITOR_CONFIG, getMovementDuration } from "../../lib/types";
@@ -1010,7 +1009,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
-          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Finishing tools" aria-label="Finishing tools"><AudioLines size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Refine" aria-label="Refine video"><WandSparkles size={16} /></button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -1468,7 +1467,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           <button className="ss-health-export" onClick={() => { setShowProjectHealth(false); setShowExport(true); }}><Upload size={16} /> Continue to export</button>
         </section>
       </div>}
-      {showFinishing && <FinishingStudio config={config} inputLogPath={inputLogPath} captions={sharedCaptionTracks} sequenceCaptions={sequenceCaptions} keyframes={sharedKeyframes} tracks={audioTracks} clips={footageClips} currentTime={currentTime} sequencePosition={sequencePosition} duration={sequenceDuration(footageClips)} sourceDuration={duration} playing={playing} onPlay={togglePlay} voiceStatus={voiceStatus} bypass={voiceBypass} onBypass={setVoiceBypass} onClose={()=>setShowFinishing(false)} onSeek={seekSequence}
+      {showFinishing && <FinishingStudio config={config} inputLogPath={inputLogPath} captions={sharedCaptionTracks} keyframes={sharedKeyframes} tracks={audioTracks} voiceStatus={voiceStatus} bypass={voiceBypass} onBypass={setVoiceBypass} onClose={()=>setShowFinishing(false)}
         onChange={(next,keys,captions)=>{
           if(next.activeLayoutId!==config.activeLayoutId&&config.lockedTracks?.some(id=>["zoom","caption","camera"].includes(id))){window.alert("Unlock zoom, captions and camera before switching format variants.");return;}
           pausePlayback();
@@ -1479,19 +1478,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if(captions&&!config.lockedTracks?.includes("caption"))setSharedCaptionTracks(captions);
         }}
         onTracks={tracks=>setAudioTracks(current=>tracks.map(t=>config.lockedTracks?.includes(t.id)?current.find(old=>old.id===t.id)??t:t))}
-        onCut={ranges=>{try{
-          if(config.lockedTracks?.includes("video"))return;
-          if(audioTracks.some(t=>config.lockedTracks?.includes(t.id))||config.layers.some(l=>l.timeSpace==="sequence"&&config.lockedTracks?.includes(l.id)))throw new Error("Unlock affected audio and sequence layers before ripple cleanup.");
-          const result=rippleCleanup(config,audioTracks,footageClips,ranges,duration,sourceFrameRate,audioDurations);
-          pausePlayback();setConfig(result.config);setAudioTracks(result.audioTracks);seekSequence(0);
-        }catch(error){setFileActionStatus(userError(error));window.alert(userError(error));}}}
-        onSpeed={range=>{try{
-          if(config.lockedTracks?.includes("video"))return;
-          if(config.layers.some(l=>l.timeSpace==="sequence")||audioTracks.some(t=>config.lockedTracks?.includes(t.id)||t.linked===false||t.clips?.some(c=>c.linked===false)))throw new Error("Unlock audio and reposition or remove independent sequence media before ripple speed-up.");
-          const next=editSequenceRanges(footageClips,[range],2);
-          if(next.length>1000)throw new Error("Maximum 1000 clips.");
-          pausePlayback();setAudioTracks(reconcileAudioClips(audioTracks,footageClips,next));setConfig(c=>({...c,videoClips:next}));
-        }catch(error){window.alert(userError(error));}}}
       />}
       {showExport && (
         <ExportModal
