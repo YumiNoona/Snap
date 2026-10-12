@@ -1,4 +1,7 @@
-# Editor improvements in the working tree
+# Editor enhancements — historical implementation notes
+
+Archived development notes. See [the current editor guide](../editor.md) for
+the released interface; these notes describe earlier iterations.
 
 These changes extend the existing editor. They are not included in the published 9.0.1 release.
 

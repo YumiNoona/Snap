@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Copy, Trash2, ChevronUp, ChevronDown } from "lucide-react";
+import { Copy, Trash2, ChevronUp, ChevronDown, Plus, SlidersHorizontal } from "lucide-react";
 import ColorTools from "./ColorTools";
 import Slider from "../../shared/Slider";
 import { CheckRow, SelectRow } from "./PanelControls";
@@ -9,6 +9,7 @@ import {
   type ColorGrade,
 } from "../../../lib/colorGrade";
 import type { EditorConfig } from "../../../lib/types";
+import ColorSection from "./ColorSection";
 export default function ColorStudio({
   config,
   onChange,
@@ -71,10 +72,10 @@ export default function ColorStudio({
         a.id === id ? { ...a, ...change } : a,
       ),
     });
-  return (
-    <div className="color-studio ss-drawer-content">
+  const gradeControls = (
+    <div className="color-grade-controls">
       <SelectRow
-        label="Grade"
+        label="Apply to"
         value={scope}
         options={["project", "clip", "adjustment"]}
         optionLabels={{
@@ -86,11 +87,7 @@ export default function ColorStudio({
       />
       {scope === "clip" && (
         <>
-          <small>
-            {clip
-              ? "Overrides the project grade for this clip."
-              : "Select a footage clip in the timeline."}
-          </small>
+          {!clip && <p className="color-empty">Select a clip in the timeline.</p>}
           <button
             className="ss-drawer-action-btn"
             disabled={!clip?.colorGrade || disabled}
@@ -109,7 +106,7 @@ export default function ColorStudio({
         </>
       )}
       <CheckRow
-        label="Compare original / graded"
+        label="Compare original"
         checked={comparison.enabled}
         onChange={(enabled) => onComparison({ ...comparison, enabled })}
       />
@@ -129,19 +126,11 @@ export default function ColorStudio({
             checked={comparison.reverse}
             onChange={(reverse) => onComparison({ ...comparison, reverse })}
           />
-          <small>
-            Drag the divider in preview. Comparison is preview only.
-          </small>
         </>
       )}
-      <details
-        className="color-section"
-        open={scope === "adjustment" ? true : undefined}
+      <ColorSection
+        title="Adjustment layers"
       >
-        <summary>Adjustment layers</summary>
-        <small>
-          Stack color grades across footage clips. Higher rows apply last.
-        </small>
         <button
           className="ss-drawer-action-btn"
           disabled={config.lockedTracks?.includes("adjustments")}
@@ -166,10 +155,11 @@ export default function ColorStudio({
             setScope("adjustment");
           }}
         >
+          <Plus size={15} aria-hidden="true" />
           Add adjustment layer
         </button>
         {adjustments.map((a, i) => (
-          <div className="adjustment-item" key={a.id}>
+          <div className={`adjustment-item${scope === "adjustment" && a.id === adjustmentId ? " selected" : ""}`} key={a.id}>
             <header>
               <input
                 aria-label="Adjustment layer name"
@@ -178,13 +168,15 @@ export default function ColorStudio({
                 onChange={(e) => patch(a.id, { name: e.target.value })}
               />
               <button
+                type="button"
                 aria-label="Edit adjustment grade"
+                className="color-icon-button"
                 onClick={() => {
                   setAdjustmentId(a.id);
                   setScope("adjustment");
                 }}
               >
-                Edit
+                <SlidersHorizontal size={15} aria-hidden="true" />
               </button>
             </header>
             <fieldset
@@ -271,8 +263,7 @@ export default function ColorStudio({
                 />
               </div>
               {a.mask && (
-                <details className="color-section">
-                  <summary>Mask bounds & feather</summary>
+                <ColorSection title="Mask bounds & feather">
                   {(["x", "y", "w", "h", "feather"] as const).map((field) => (
                     <Slider
                       key={field}
@@ -304,7 +295,7 @@ export default function ColorStudio({
                       patch(a.id, { mask: { ...a.mask!, inverted } })
                     }
                   />
-                </details>
+                </ColorSection>
               )}
               <div className="color-inline-actions">
                 <button
@@ -365,8 +356,13 @@ export default function ColorStudio({
             </fieldset>
           </div>
         ))}
-      </details>
+      </ColorSection>
+    </div>
+  );
+  return (
+    <div className="color-studio ss-drawer-content">
       <ColorTools
+        gradeControls={gradeControls}
         value={grade}
         disabled={disabled}
         onChange={updateGrade}

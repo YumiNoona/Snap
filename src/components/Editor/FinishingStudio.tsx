@@ -190,9 +190,6 @@ export default function FinishingStudio(p: Props) {
         <div className="finishing-body" id="refine-panel" role="tabpanel" aria-labelledby={`refine-tab-${tab}`}>
           {tab === "voice" && (
             <>
-              <p>
-                Reduce noise and balance speech locally. Room tails use a gentle gate; leveling targets −16 LUFS.
-              </p>
               {p.tracks.map((t) => {
                 const settings = t.voicePolish ?? {
                   enabled: false,
@@ -216,7 +213,7 @@ export default function FinishingStudio(p: Props) {
                   >
                     <legend>{t.label}</legend>
                     <CheckRow label="Voice polish" checked={settings.enabled} onChange={enabled=>update({enabled})}/>
-                    <Slider label="Strength" value={settings.strength*100} min={0} max={100} step={5} unit="%" onChange={strength=>update({strength:strength/100})}/>
+                    <Slider showValueTooltip={false} label="Strength" value={settings.strength*100} min={0} max={100} step={5} unit="%" onChange={strength=>update({strength:strength/100})}/>
                     <SelectRow label="Hum filter" value={settings.hum} options={["off","50","60"]} optionLabels={{off:"Off","50":"50 Hz","60":"60 Hz"}} onChange={hum=>update({hum:hum as typeof settings.hum})}/>
                     <CheckRow label="Reduce room tails" checked={settings.roomTail} onChange={roomTail=>update({roomTail})}/>
                     <CheckRow label="Level voice" checked={settings.loudness} onChange={loudness=>update({loudness})}/>
@@ -228,10 +225,7 @@ export default function FinishingStudio(p: Props) {
                 <button className={`seg-btn ${p.bypass?"active":""}`} aria-pressed={p.bypass} disabled={!p.voiceStatus.startsWith("Voice polish ready")} onClick={()=>p.onBypass(true)}>Original</button>
                 <button className={`seg-btn ${!p.bypass?"active":""}`} aria-pressed={!p.bypass} disabled={!p.voiceStatus.startsWith("Voice polish ready")} onClick={()=>p.onBypass(false)}>Polished</button>
               </div>
-              <p role="status">{p.voiceStatus}</p>
-              <p>
-                Comparison affects preview. Export uses enabled voice polish.
-              </p>
+              {p.voiceStatus && <p role="status">{p.voiceStatus}</p>}
             </>
           )}
           {tab === "formats" && (
@@ -251,11 +245,10 @@ export default function FinishingStudio(p: Props) {
                 ))}
               </div>
               <fieldset className="refine-framing"><legend>Framing</legend>
-                <p>Crop edges without shrinking the screen. The remaining picture fills the current layout.</p>
-                <Slider label="Left" value={crop.x*100} min={0} max={Math.max(0,(crop.x+crop.w-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("left",value)}/>
-                <Slider label="Right" value={(1-crop.x-crop.w)*100} min={0} max={(.95-crop.x)*100} step={1} unit="%" onChange={value=>cropEdge("right",value)}/>
-                <Slider label="Top" value={crop.y*100} min={0} max={Math.max(0,(crop.y+crop.h-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("top",value)}/>
-                <Slider label="Bottom" value={(1-crop.y-crop.h)*100} min={0} max={(.95-crop.y)*100} step={1} unit="%" onChange={value=>cropEdge("bottom",value)}/>
+                <Slider showValueTooltip={false} label="Left" value={crop.x*100} min={0} max={Math.max(0,(crop.x+crop.w-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("left",value)}/>
+                <Slider showValueTooltip={false} label="Right" value={(1-crop.x-crop.w)*100} min={0} max={(.95-crop.x)*100} step={1} unit="%" onChange={value=>cropEdge("right",value)}/>
+                <Slider showValueTooltip={false} label="Top" value={crop.y*100} min={0} max={Math.max(0,(crop.y+crop.h-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("top",value)}/>
+                <Slider showValueTooltip={false} label="Bottom" value={(1-crop.y-crop.h)*100} min={0} max={(.95-crop.y)*100} step={1} unit="%" onChange={value=>cropEdge("bottom",value)}/>
                 <button disabled={!p.config.crop} onClick={()=>p.onChange({...p.config,crop:null})}>Reset crop</button>
               </fieldset>
               <fieldset className="refine-guides"><legend>Guides & focus</legend>
@@ -307,9 +300,6 @@ export default function FinishingStudio(p: Props) {
           )}
           {tab === "recipes" && (
             <>
-              <p>
-                Reuse appearance, caption styling and audio settings. Imported backgrounds and cursor packs must remain available.
-              </p>
               <h3>Save current style</h3>
               <div className="refine-save-row"><label>
                 Name
@@ -408,9 +398,9 @@ export default function FinishingStudio(p: Props) {
                   >
                     Apply
                   </button>
-                  {!r.id.startsWith("starter-") && <><button className="finishing-icon-button" aria-label={`Update ${r.name} from current edit`} title="Update from current edit" onClick={()=>store(recipes.map(v=>v.id===r.id?{...createRecipe(r.name,p.config,p.captions,p.tracks),id:r.id}:v))}><RefreshCw size={16}/></button>
+                  {!r.id.startsWith("starter-") && <><button className="finishing-icon-button" aria-label={`Update ${r.name} from current edit`} onClick={()=>store(recipes.map(v=>v.id===r.id?{...createRecipe(r.name,p.config,p.captions,p.tracks),id:r.id}:v))}><RefreshCw size={16}/></button>
                   <button
-                    aria-label={`Delete ${r.name} preset`} title="Delete preset" className="finishing-icon-button" onClick={() => store(recipes.filter((v) => v.id !== r.id))}
+                    aria-label={`Delete ${r.name} preset`} className="finishing-icon-button" onClick={() => store(recipes.filter((v) => v.id !== r.id))}
                   >
                     <Trash2 size={16}/>
                   </button></>}

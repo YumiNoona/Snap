@@ -1,4 +1,4 @@
-import { Check, RotateCcw } from "lucide-react";
+import { Check, RotateCcw, Upload, Trash2 } from "lucide-react";
 import Slider from "../../shared/Slider";
 import { CheckRow } from "./PanelControls";
 import {
@@ -9,13 +9,14 @@ import {
   type ColorGrade,
 } from "../../../lib/colorGrade";
 import "./ColorTools.css";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { parseCube } from "../../../lib/colorLut";
 import type { CubeLut } from "../../../lib/colorGrade";
 import CurveEditor from "./CurveEditor";
 import { SelectRow } from "./PanelControls";
+import ColorSection from "./ColorSection";
 
 export default function ColorTools({
   value,
@@ -23,25 +24,24 @@ export default function ColorTools({
   disabled = false,
   luts = [],
   onLutsChange,
+  gradeControls,
 }: {
   value?: ColorGrade;
   onChange: (grade: ColorGrade) => void;
   disabled?: boolean;
   luts?: CubeLut[];
   onLutsChange?: (luts: CubeLut[], grade?: ColorGrade) => void;
+  gradeControls?: ReactNode;
 }) {
   const [error, setError] = useState("");
   const grade = normalizeColorGrade(value);
   const update = (patch: Partial<ColorGrade>) =>
     onChange({ ...grade, ...patch });
   return (
+    <div className="color-tools-stack">
     <fieldset className="color-tools" disabled={disabled}>
       <legend hidden>Color look</legend>
-      <CheckRow
-        label="Enable look"
-        checked={grade.enabled}
-        onChange={(enabled) => update({ enabled })}
-      />
+      <ColorSection title="Film looks">
       <div className="color-look-grid" aria-label="Film looks">
         {COLOR_LOOKS.map((look) => (
           <button
@@ -53,6 +53,7 @@ export default function ColorTools({
           >
             <span
               className="color-look-art"
+              aria-hidden="true"
               style={{
                 filter: colorGradeFilter({
                   ...DEFAULT_COLOR_GRADE,
@@ -60,12 +61,9 @@ export default function ColorTools({
                 }),
               }}
             >
-              <i />
-              <b />
-              <em />
+              <span />
             </span>
             <strong>{look.name}</strong>
-            <small>{look.description}</small>
             {grade.look === look.id && (
               <Check size={13} className="color-look-check" />
             )}
@@ -81,7 +79,8 @@ export default function ColorTools({
         unit="%"
         onChange={(intensity) => update({ intensity })}
       />
-      <div className="color-tone-controls">
+      </ColorSection>
+      <ColorSection title="Adjustments">
         <Slider
           label="Exposure"
           value={grade.exposure}
@@ -127,10 +126,18 @@ export default function ColorTools({
           unit="%"
           onChange={(vignette) => update({ vignette })}
         />
-      </div>
+      </ColorSection>
+    </fieldset>
+    {gradeControls}
+    <fieldset className="color-tools" disabled={disabled}>
+      <legend hidden>Color processing</legend>
+      <CheckRow
+        label="Enable look"
+        checked={grade.enabled}
+        onChange={(enabled) => update({ enabled })}
+      />
       {onLutsChange && (
-        <details className="color-section" open>
-          <summary>Custom LUT</summary>
+        <ColorSection title="Custom LUT">
           <SelectRow
             label="Table"
             value={grade.lutId ?? "none"}
@@ -170,6 +177,7 @@ export default function ColorTools({
                 }
               }}
             >
+              <Upload size={14} aria-hidden="true" />
               Import .cube
             </button>
             <button
@@ -182,6 +190,7 @@ export default function ColorTools({
                 );
               }}
             >
+              <Trash2 size={14} aria-hidden="true" />
               Remove LUT
             </button>
           </div>
@@ -206,16 +215,14 @@ export default function ColorTools({
               {error}
             </p>
           )}
-          <small>1D and 3D LUTs are embedded in your project.</small>
-        </details>
+        </ColorSection>
       )}
-      <details className="color-section">
-        <summary>RGB curves</summary>
+      <ColorSection title="RGB curves">
         <CurveEditor
           value={grade.curves}
           onChange={(curves) => update({ curves, enabled: true })}
         />
-      </details>
+      </ColorSection>
       <button
         type="button"
         className="ss-drawer-action-btn"
@@ -225,5 +232,6 @@ export default function ColorTools({
         Reset color
       </button>
     </fieldset>
+    </div>
   );
 }

@@ -372,7 +372,8 @@ fn recommend_recording_options_blocking(
     if !ffmpeg_available {
         return Err("FFmpeg is unavailable for the automatic performance check".to_string());
     }
-    static CACHE: OnceLock<Mutex<Vec<(GpuVendor, u64, u64, RecordingRecommendation)>>> = OnceLock::new();
+    type RecommendationCache = Mutex<Vec<(GpuVendor, u64, u64, RecordingRecommendation)>>;
+    static CACHE: OnceLock<RecommendationCache> = OnceLock::new();
 
     let capability = target_gpu_capability(target_id);
     let memory_bucket = capability.dedicated_video_memory / (512 * 1024 * 1024);

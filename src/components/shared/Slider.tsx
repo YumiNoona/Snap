@@ -14,9 +14,10 @@ interface SliderProps {
   defaultValue?: number;
   disabled?: boolean;
   compact?: boolean;
+  showValueTooltip?: boolean;
 }
 
-export default function Slider({ label, value, min, max, step = 1, unit = "", onChange, onReset, defaultValue, disabled, compact }: SliderProps) {
+export default function Slider({ label, value, min, max, step = 1, unit = "", onChange, onReset, defaultValue, disabled, compact, showValueTooltip = true }: SliderProps) {
   const percent = max > min ? Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100)) : 0;
   const isDifferent = defaultValue !== undefined && value !== defaultValue;
   const decimals = step >= 1 ? 0 : Math.min(4, Math.max(0, (step.toString().split(".")[1] ?? "").length));
@@ -42,7 +43,7 @@ export default function Slider({ label, value, min, max, step = 1, unit = "", on
         <div className="slider-fill" style={{ width: `${percent}%`, opacity: disabled ? 0.3 : 1 }} />
         <div className="slider-thumb" style={{ left: `${percent}%` }} />
       </div>
-      <span className="slider-value" title={`${displayValue}${unit}`}>{displayValue}{unit}</span>
+      <span className="slider-value" title={showValueTooltip ? `${displayValue}${unit}` : undefined}>{displayValue}{unit}</span>
       {onReset && isDifferent && (
         <button className="slider-reset-btn" onClick={onReset} type="button">Reset</button>
       )}

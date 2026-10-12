@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.2.1-10b981?style=flat-square" alt="Version 9.2.1" />
+    <img src="https://img.shields.io/badge/version-9.4.0-10b981?style=flat-square" alt="Version 9.4.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -40,7 +40,10 @@ exports without uploading recordings to a cloud service.
   subject reframe, mirror, opacity, border, and shadow controls
 - Canvas backgrounds, crop, aspect ratio, padding, corners, inset, and shadow
 - Freeze frames, PNG thumbnails, cursor-following masks, snap-to-click layers,
-  copied layer styles, original/edited comparison, and a command palette
+  copied layer styles and original/edited comparison
+- Color & Film recipes, embedded custom LUTs, RGB curves and adjustment layers
+- Animation graph editing and reusable nested sequences
+- Optional export-only optical-flow frame interpolation
 - MP4, WebM, and looping GIF export plus optional transcript, chapter, and
   thumbnail delivery packages and pre-export project health checks
 - Editing for ordinary videos not recorded with Snap, including manual zoom and CC
@@ -48,10 +51,9 @@ exports without uploading recordings to a cloud service.
 - Disconnect-safe mobile recording recovery and automatic mobile zoom analysis
 - Signed in-app updates delivered through GitHub Releases
 
-The editor's **Finish** studio adds reviewable transcript and quiet-audio cleanup,
-local voice polish with A/B playback, independent format layouts, non-destructive
-cursor repairs, and reusable brand recipes. See [Editor finishing workflows](EDITOR_FINISHING.md)
-for controls, validation, and current limitations.
+The editor's **Refine** tools offer local voice polish with A/B playback,
+format layouts, cropping, click-aware reframing and reusable style presets.
+See [the editor guide](docs/editor.md) for controls and limitations.
 
 ## System requirements
 
@@ -61,16 +63,16 @@ for controls, validation, and current limitations.
 - Microsoft WebView2 Runtime
 - Internet access on first use if FFmpeg or offline caption dependencies need installation
 - A current Windows display driver is recommended. Snap tries NVENC, AMD AMF,
-  Intel Quick Sync, and Windows Media Foundation, then can use a low-priority
-  CPU compatibility encoder when no GPU encoder is available.
+  Intel Quick Sync, and Windows Media Foundation. CPU compatibility encoding
+  requires explicit opt-in in manual recording settings; it is never automatic.
 
 Snap can install FFmpeg and the offline whisper.cpp caption engine when they
 are missing. Verified caption binaries and the multilingual speech model are
 stored per user and reused instead of being downloaded for every project.
 
 Automatic performance mode is the default. It verifies a working hardware
-encoder and records at up to 1080p/30 and 10 Mbps, without upscaling smaller
-targets. Manual mode provides
+encoder and records native pixels at 60 FPS, with resolution-dependent bitrate
+within 12–50 Mbps. Manual mode provides
 24/30/60 FPS, 2–50 Mbps bitrate, native/1080p/720p limits, and an explicit CPU
 compatibility option. Camera capture is opt-in and defaults off.
 
@@ -86,6 +88,10 @@ For older laptops, manual 720p/30 lowers the capture workload; selecting a
 smaller recording region can retain readable text without capturing a large
 desktop. Actual impact while gaming depends on available GPU headroom and
 drivers and should be measured on the recording PC.
+
+Windows capture exclusions still apply. The tested Apex Legends window reports
+`WDA_EXCLUDEFROMCAPTURE`; this release does not bypass that restriction or
+guarantee game capture. See [capture compatibility](docs/capture.md).
 
 ### To develop Snap
 
@@ -112,7 +118,7 @@ Snap/
 ├── web/                    Isolated Next.js product and download website
 │   └── vercel.json         Website deployment configuration
 ├── .github/workflows/      Signed release automation
-├── RELEASING.md            Maintainer release instructions
+├── docs/                   Guides, release instructions, and archived reviews
 └── package.json
 ```
 
@@ -170,7 +176,7 @@ src-tauri/target/release/bundle/nsis/
 ```
 
 Updater signatures require `TAURI_SIGNING_PRIVATE_KEY`. Never place the private
-key in this repository. See [RELEASING.md](RELEASING.md) for the signed GitHub
+key in this repository. See [release instructions](docs/releasing.md) for the signed GitHub
 release workflow.
 
 Official installers, checksums, updater signatures, and release notes are
@@ -223,7 +229,8 @@ capture, where timeline editing and rich visual rendering are appropriate.
 
 Run `npm run check:source` to check the desktop import graph for orphaned source files and missing relative imports. Tests, native commands and dynamically loaded editor modules remain separate from the website.
 
-The latest cleanup, validation and suggested improvements are documented in [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md).
+Browse [the documentation index](docs/README.md) for current guides, the editor
+roadmap and archived development reviews.
 
 ## Updates and releases
 
@@ -234,7 +241,7 @@ opening a web browser. Release versions must match in:
 - `src-tauri/Cargo.toml`
 - `src-tauri/tauri.conf.json`
 
-See [RELEASING.md](RELEASING.md) for signing, tagging, and publishing details.
+See [release instructions](docs/releasing.md) for signing, tagging, and publishing details.
 
 ## License
 

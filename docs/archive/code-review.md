@@ -1,5 +1,8 @@
 # Code cleanup and editor review — 8 October 2026
 
+Historical review and follow-up notes. See [the documentation index](../README.md)
+for current guides and validation commands.
+
 This review covers the desktop import graph, native capture/audio/export lifecycle, shared renderers, project persistence, panel integration and the independent website. Automated checks establish build and test behaviour; they do not establish gaming performance on specific hardware.
 
 ## Completed cleanup

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { normalizeCurve, sampleCurve } from "../../../lib/colorLut";
 import type { ColorGrade, CurvePoint } from "../../../lib/colorGrade";
+import { RotateCcw, Minus } from "lucide-react";
 export default function CurveEditor({
   value,
   onChange,
@@ -34,12 +35,20 @@ export default function CurveEditor({
       );
     return p;
   };
+  // Inset the plot so endpoint handles are inside the border, not clipped.
+  const pointAt = (x: number, y: number, rect: DOMRect) => ({
+    x: Math.max(0.001, Math.min(0.999, ((x - rect.left) / rect.width * 316 - 8) / 300)),
+    y: Math.max(0, Math.min(1, 1 - ((y - rect.top) / rect.height * 206 - 8) / 190)),
+  });
   return (
     <div className="curve-editor">
-      <div className="color-channel-tabs">
+      <div className="color-channel-tabs toggle-segmented" role="group" aria-label="Curve channel">
         {(["master", "red", "green", "blue"] as const).map((c) => (
           <button
+            type="button"
             key={c}
+            className={`seg-btn${channel === c ? " active" : ""}`}
+            data-channel={c}
             aria-pressed={channel === c}
             onClick={() => {
               setChannel(c);
@@ -52,16 +61,11 @@ export default function CurveEditor({
         ))}
       </div>
       <svg
-        viewBox="0 0 300 190"
+        viewBox="-8 -8 316 206"
         role="img"
         aria-label={`${channel} tone curve. Double click to add a point.`}
         onDoubleClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect(),
-            x = Math.max(
-              0.001,
-              Math.min(0.999, (e.clientX - r.left) / r.width),
-            ),
-            y = Math.max(0, Math.min(1, 1 - (e.clientY - r.top) / r.height));
+          const { x, y } = pointAt(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
           if (
             points.some((p) => Math.abs(p.x - x) < 0.01) ||
             points.length >= 32
@@ -99,6 +103,7 @@ export default function CurveEditor({
             role="button"
             tabIndex={0}
             aria-label={`Curve point ${i + 1}`}
+            aria-pressed={selected === i}
             onFocus={() => setSelected(i)}
             onKeyDown={(e) => {
               if (
@@ -145,11 +150,7 @@ export default function CurveEditor({
               let next = points;
               const move = (ev: PointerEvent) => {
                 next = update(i, {
-                  x: (ev.clientX - r.left) / r.width,
-                  y: Math.max(
-                    0,
-                    Math.min(1, 1 - (ev.clientY - r.top) / r.height),
-                  ),
+                  ...pointAt(ev.clientX, ev.clientY, r),
                 });
                 setDraft(next);
               };
@@ -200,6 +201,7 @@ export default function CurveEditor({
       </div>
       <div className="color-inline-actions">
         <button
+          type="button"
           onClick={() => {
             commit([
               { x: 0, y: 0 },
@@ -208,19 +210,19 @@ export default function CurveEditor({
             setSelected(0);
           }}
         >
-          Reset {channel}
+          <RotateCcw size={14} aria-hidden="true" /> Reset channel
         </button>
         <button
+          type="button"
           disabled={!selected || selected === points.length - 1}
           onClick={() => {
             commit(points.filter((_, i) => i !== selected));
             setSelected(0);
           }}
         >
-          Remove point
+          <Minus size={14} aria-hidden="true" /> Remove point
         </button>
       </div>
-      <small>Double click to add. Drag points; arrow keys fine tune.</small>
     </div>
   );
 }

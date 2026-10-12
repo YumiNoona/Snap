@@ -106,3 +106,17 @@ playwright-report/
 *.dmp
 *.stackdump
 *.crash
+
+# Local caches, screenshots and scratch build/test artifacts (not documentation)
+.cache/
+.turbo/
+/artifacts/
+/screenshots/
+/test-output/
+/tmp/
+/temp/
+/scratch/
+*.capture-part-*.mp4
+*.snapexport.*
+*.snapproj.bak
+*.snapproj.tmp

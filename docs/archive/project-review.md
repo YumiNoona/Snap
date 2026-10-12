@@ -1,5 +1,8 @@
 # Snap project review — 7 October 2026
 
+Historical review and follow-up notes, not a current list of unresolved bugs.
+See [the documentation index](../README.md) for current guides.
+
 ## Implementation follow-up
 
 The findings below describe the original review, before fixes. The desktop source has now been updated:

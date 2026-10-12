@@ -1,4 +1,4 @@
-# Full-screen capture and editor polish
+# Windows capture and game compatibility
 
 Full Screen now uses GPU-resident DXGI Desktop Duplication, resolving both the
 adapter and the output index from the selected monitor handle. Windows and
@@ -30,18 +30,25 @@ Window capture received no frames even with working GPU encoders. Snap now
 checks capture protection before launching the recording process, reports the
 actual restriction, and does not clear another application's affinity, inject
 into the game, or silently switch a window recording to desktop capture.
-The owner/utility applying that exclusion must remove it before retesting.
+This query does not identify the program that applied the flag or prove that
+it offers a user-facing switch. Snap cannot clear another process's window
+affinity through the supported Windows API. A GPU upgrade or encoder change
+does not remove this exclusion.
 See [Microsoft's capture affinity reference](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
+
+## Window picker and editor
 
 The picker uses one-shot window snapshots with bounded time/memory, no live
 preview polling, and immediate card selection. Protected/unavailable previews
 have neutral placeholders. Search, counts and confirmation footer are removed.
-Editor drawers are now 320–352px with uniform padding; zoom inspection headers
+Editor drawers use consistent 16px outer padding; zoom inspection headers
 show only the name. Top-bar command search and its shortcut are removed. Frame
 actions and project health remain accessible in the project menu, while finishing
-tools use an icon entry point and concise icon-labelled tabs.
+tools use an icon entry point and concise icon-labelled tabs. The Color & Film
+panel starts with Film looks and tone adjustments, then grade scope, comparison,
+adjustment layers and enable controls, followed by LUTs and RGB curves.
 
-Editor changes: wider drawers and motion labels, hidden scrollbars with scrolling
+Editor changes: balanced drawers and motion labels, hidden scrollbars with scrolling
 retained, removed camera-source badges and redundant video/audio bar labels,
 and a source-aware filmstrip using the existing cached thumbnail atlas. Track
 headers and accessible clip labels remain intact. Atlas sampling follows trims

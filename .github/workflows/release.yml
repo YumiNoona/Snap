@@ -50,15 +50,18 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.3.0 brings consistent Refine-style glass surfaces across editor tools, cards, menus and dialogs in dark and light themes.
+            Snap 9.4.0 adds advanced editor tools and a cleaner, consistent editing interface.
 
-            - Select keyframes with a rectangle, then move, copy, paste, duplicate, delete or ease them together. Track menus and locks protect edits, and timeline markers are easier to see.
-            - Imported backgrounds appear in the Images grid. Wallpaper previews fill their cards without repeating edge strips.
-            - Fixes opening exported files and uploaded media. Export completion stays visible if Windows cannot open a player, with a Show in folder action.
-            - Window previews work for static windows; the picker excludes Snap and hidden helper windows and uses matching native and UI corner shapes.
-            - Dropdown submenus support pointer and keyboard selection and stay within the window. Layout cards use centered illustrations and names, with less redundant text.
+            - Color & Film includes film recipes, per-project/clip grades, timed masked adjustment layers, embedded .cube LUTs and RGB curves. Sections stay expanded without collapse arrows; Film looks and tone controls appear first, followed by scope, comparison, layers and enable controls.
+            - All tool drawers use consistent 16px outer spacing. Refine has less helper text and no redundant hover tooltips, while voice, layout and reusable style controls remain available.
+            - The animation graph editor supports custom easing and grouped key editing. Media cards drag onto the timeline, linked imported-video sound follows edits, and reusable nested sequences retain their internal edits.
+            - Export renders exact timestamps, with optional export-only optical-flow interpolation for slow motion and low-FPS footage. It takes longer and may distort fast-moving text; original frames remain the default.
+            - Automatic recording retains native pixels at 60 FPS with resolution-dependent bitrate and hardware encoding. Manual lower-load settings remain available. Display capture recovers transient resets without unnecessarily exhausting hardware encoders.
+            - Repository documentation is organized under docs/, with historical reviews preserved in docs/archive/. Local generated artifacts remain ignored.
 
-            Validation includes frontend and native regression tests, source checks, production builds, and browser interaction checks in both themes. Recording remains native and lightweight; hardware encoding is still the default.
+            Validation includes frontend/native regression tests, source checks, production builds and strict Rust linting. Recording remains native and lightweight; software recording fallback is explicit opt-in.
+
+            Known capture limitation: the tested Apex Legends window reports WDA_EXCLUDEFROMCAPTURE (0x11). Snap respects Windows capture exclusion; this release does not bypass protection or guarantee Apex capture. The flag does not identify which program applied it or imply a user-facing toggle. See docs/capture.md.
 
             Install the Windows setup file below, or update directly inside Snap.
           releaseDraft: false

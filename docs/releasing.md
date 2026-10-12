@@ -13,10 +13,14 @@ Keep that file private and backed up. Never commit it. Losing it means existing 
 
 ## Publish an update
 
-1. Increase the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
-2. Commit and push the changes.
-3. Run the validation commands from `README.md`.
-4. Create and push a matching tag, for example `v7.0.5`.
+Run all commands from the repository root.
+
+1. Increase the version in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`,
+   `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json`. Update the README badge
+   and workflow release notes too.
+2. Run the validation commands from [the project README](../README.md#validation).
+3. Commit and push the changes.
+4. Create and push a matching tag, for example `v9.4.0`.
 
 The `Publish Snap update` GitHub workflow builds the Windows installers, signs the updater artifacts, publishes the release, and uploads `latest.json`. Existing Snap installations will then show the in-app update prompt and can download and install the release without opening a browser.
 

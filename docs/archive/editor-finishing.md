@@ -1,4 +1,7 @@
-# Editor finishing workflows
+# Editor finishing — historical implementation notes
+
+Archived v9.2-era design and validation notes. Some tools described below are
+no longer exposed in Refine. See [the current editor guide](../editor.md).
 
 Open a recording, then choose **Finish** in the editor toolbar. These tools run
 only in editor mode. The original recording and input sidecar remain unchanged.

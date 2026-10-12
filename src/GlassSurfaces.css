@@ -75,8 +75,30 @@ body[data-editor-theme="light"], .theme-light {
 }
 :root :is(.timeline-clip-inspector, .ss-panels-drawer) :is(input[type="number"], .custom-select-trigger, .slider-value),
 :root :is(.dd-trigger, .aspect-item, .dd-item, .custom-select-menu button) { border-radius: 8px; }
-:root .ss-panels-drawer { padding-top: 4px; }
-:root .ss-panels-drawer .ss-drawer-content { padding: 4px 18px 20px; }
+/* One outer inset for every inspector. Component CSS is lazy-loaded, so keep
+   this more specific than its historical drawer/section spacing overrides. */
+:root .screenstudio-editor-layout .ss-panels-drawer {
+  --inspector-inset: 16px;
+  padding: 0;
+}
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-drawer-content {
+  padding: var(--inspector-inset);
+}
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-section {
+  flex-shrink: 0;
+  padding: var(--inspector-inset) 0;
+}
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-drawer-content > .ss-section:first-child,
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-drawer-content > .tilt-tools-fieldset:first-child > .ss-section:first-child {
+  padding-top: 0;
+}
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-drawer-content > .ss-section:last-child,
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-drawer-content > .tilt-tools-fieldset:last-child > .ss-section:last-child {
+  padding-bottom: 0;
+}
+:root .screenstudio-editor-layout .ss-panels-drawer .ss-section-heading {
+  margin: 0 0 12px;
+}
 :root .ss-panels-drawer .ss-inspector-header { padding: 10px 18px; }
 
 /* Sticky rows must not put an opaque second sheet over their glass parent. */
