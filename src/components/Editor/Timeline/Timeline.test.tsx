@@ -206,3 +206,46 @@ it("adds transitions at cuts and adjusts their duration without moving footage",
  function Harness(){const [clips,setClips]=useState<VideoClip[]>([{id:"a",start:0,end:1},{id:"b",start:1,end:2}]);current=clips;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[],duration:2,currentTime:1.2,activeClipId:"b",frameRate:60,keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:2,videoClips:clips},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onVideoClipsChange:setClips} as unknown as ComponentProps<typeof Timeline>);}
  let renderer!:ReturnType<typeof create>;try{await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000,top:500}),style:{}})});});await act(async()=>renderer.root.findByProps({"aria-label":"Add transition at this cut"}).props.onClick({stopPropagation:vi.fn()}));expect(current[1].transition).toEqual({effect:"dissolve",duration:.3});await act(async()=>renderer.root.findByProps({"aria-label":"Transition length"}).props.onKeyDown({key:"ArrowRight",shiftKey:true,preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(current[1].transition!.duration).toBeCloseTo(.3+10/60);expect(current.map(clip=>[clip.start,clip.end])).toEqual([[0,1],[1,2]]);await act(async()=>renderer.root.findByProps({"aria-label":"none transition"}).props.onClick());expect(current[1].transition).toBeUndefined();}finally{if(renderer)await act(async()=>renderer.unmount());warn.mockRestore();vi.unstubAllGlobals();}
 });
+
+it("box-selects shared keys and edits them without changing independent clip keys", async () => {
+  const { DEFAULT_SCREEN_TILT } = await import("../../../lib/screenTilt");
+  const { replaceAnimationKeyGroups, snapshotClipEffects } = await import("../../../lib/clipEffects");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
+  vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("HTMLElement",class {});
+  vi.stubGlobal("ResizeObserver",class {observe(){}disconnect(){}});
+  vi.stubGlobal("requestAnimationFrame",()=>0);
+  vi.stubGlobal("cancelAnimationFrame",vi.fn());
+  const warn=vi.spyOn(console,"error").mockImplementation(()=>{});
+  const key=(time:number)=>({...DEFAULT_SCREEN_TILT,time,easing:"linear" as const});
+  const initial={...DEFAULT_EDITOR_CONFIG,trimEnd:10,screenTilt:{...DEFAULT_SCREEN_TILT,enabled:true,keys:[key(1),key(2),key(3)]},videoClips:[{id:"a",start:0,end:5},{id:"b",start:5,end:10,effects:{config:{...snapshotClipEffects(DEFAULT_EDITOR_CONFIG,[],[]).config,screenTilt:{...DEFAULT_SCREEN_TILT,enabled:true,keys:[key(6)]}},keyframes:[],captions:[]}}]};
+  let state=initial;
+  const nodes=[1,2,6].map(time=>({dataset:{keyKind:"tilt",keyId:"tilt",keyClip:time<5?"a":"b",keyTime:String(time)},getBoundingClientRect:()=>({left:time*100-10,top:90,width:20,height:20})}));
+  function Harness(){const [config,setConfig]=useState(initial);state=config;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[],duration:10,currentTime:0,keyframes:[],config,playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onAnimationKeyGroupsChange:(updates:Parameters<typeof replaceAnimationKeyGroups>[1])=>setConfig(c=>replaceAnimationKeyGroups(c,updates) as typeof initial),onTrackLocksChange:(lockedTracks:string[])=>setConfig(c=>({...c,lockedTracks}))} as unknown as ComponentProps<typeof Timeline>);}
+  let renderer!:ReturnType<typeof create>;
+  try {
+    await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,focus:vi.fn(),querySelectorAll:()=>nodes,getBoundingClientRect:()=>({left:0,top:0,width:1000})})});});
+    const area=renderer.root.findByProps({className:"ss-timeline-col"});
+    await act(async()=>area.props.onPointerDownCapture({button:0,clientX:50,clientY:80,target:{closest:(selector:string)=>selector===".ss-track-row"?{}:null}}));
+    const move=vi.mocked(window.addEventListener).mock.calls.filter(call=>call[0]==="pointermove").pop()![1] as unknown as (event:{clientX:number;clientY:number})=>void;
+    const up=vi.mocked(window.addEventListener).mock.calls.filter(call=>call[0]==="pointerup").pop()![1] as unknown as ()=>void;
+    await act(async()=>{move({clientX:250,clientY:120});up();});
+    expect(renderer.root.findAll(node=>node.type==="button"&&String(node.props.className).includes("timeline-animation-key")&&String(node.props.className).includes("selected"))).toHaveLength(2);
+    const timeline=renderer.root.findByProps({className:"ss-timeline-container "});
+    await act(async()=>timeline.props.onKeyDown({key:"Delete",target:{},preventDefault:vi.fn(),stopPropagation:vi.fn()}));
+    expect(state.screenTilt.keys.map(key=>key.time)).toEqual([3]);
+    expect(state.videoClips[1].effects!.config.screenTilt.keys.map(key=>key.time)).toEqual([6]);
+    await act(async()=>renderer.root.findByProps({"aria-label":"3D tilt track menu"}).props.onClick({clientX:40,clientY:90,stopPropagation:vi.fn()}));
+    const menuItem=(text:string)=>renderer.root.findAllByProps({role:"menuitem"}).find(node=>node.children.some(child=>typeof child==="string"&&child.includes(text)))!;
+    await act(async()=>menuItem("Ease out").props.onClick());
+    expect(state.screenTilt.keys[0].easing).toBe("ease-out");
+    expect(state.videoClips[1].effects!.config.screenTilt.keys[0].easing).toBe("ease-out");
+    await act(async()=>renderer.root.findByProps({"aria-label":"Lock 3D tilt track"}).props.onClick());
+    await act(async()=>renderer.root.findByProps({"aria-label":"3D tilt track menu"}).props.onClick({clientX:40,clientY:90,stopPropagation:vi.fn()}));
+    expect(menuItem("Delete all keyframes").props.disabled).toBe(true);
+  } finally {
+    if(renderer)await act(async()=>renderer.unmount());
+    vi.restoreAllMocks();vi.unstubAllGlobals();warn.mockRestore();
+  }
+});

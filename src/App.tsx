@@ -15,6 +15,7 @@ import LibraryWindow from "./components/LibraryWindow";
 import DonateWindow from "./components/DonateWindow";
 import WindowPickerWindow from "./components/RecorderLauncher/WindowPickerWindow";
 import "./App.css";
+import "./GlassSurfaces.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
 
 interface ErrorBoundaryState {

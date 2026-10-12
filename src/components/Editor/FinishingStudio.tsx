@@ -2,7 +2,7 @@ import Slider from "../shared/Slider";
 import { SelectRow, CheckRow } from "./Panels/PanelControls";
 import "./Panels/Panels.css";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Ratio, Palette, X, Trash2, RefreshCw, Check } from "lucide-react";
+import { AudioLines, Ratio, Palette, X, Trash2, RefreshCw } from "lucide-react";
 import { loadInputLog, type LoadedInputLog } from "../../lib/inputLog";
 import { getGradientPreset, gradientToCss } from "../../lib/wallpapers";
 import { userError } from "../../lib/userError";
@@ -14,7 +14,6 @@ import type {
 } from "../../lib/types";
 import {
   applyCursorEdits,
-  captureLayout,
   createRecipe,
   formatLayout,
   LAYOUT_FORMATS,
@@ -118,39 +117,6 @@ export default function FinishingStudio(p: Props) {
       setMessage("Recipe storage is full or unavailable; nothing was saved.");
     }
   };
-  const switchLayout = (id: string) => {
-    const variants = [...(p.config.layoutVariants ?? [])];
-    const active = variants.findIndex((v) => v.id === p.config.activeLayoutId);
-    if (active >= 0)
-      variants[active] = captureLayout(
-        p.config,
-        p.keyframes,
-        p.captions,
-        variants[active].name,
-        variants[active].id,
-      );
-    const target = variants.find((v) => v.id === id);
-    if (!target) return;
-    p.onChange(
-      {
-        ...p.config,
-        ...target.layout,
-        videoClips:
-          p.config.videoClips?.map((c) => ({
-            ...c,
-            effects:
-              target.clipEffects?.[c.id] ??
-              (c.sourceClipId
-                ? target.clipEffects?.[c.sourceClipId]
-                : undefined),
-          })) ?? null,
-        layoutVariants: variants,
-        activeLayoutId: id,
-      },
-      structuredClone(target.keyframes),
-      structuredClone(target.captions),
-    );
-  };
   return (
     <div
       className="ss-command-backdrop finishing-backdrop"
@@ -161,7 +127,7 @@ export default function FinishingStudio(p: Props) {
       <section
         ref={ref}
         tabIndex={-1}
-        className="finishing-studio"
+        className="finishing-studio editor-glass-surface"
         style={{transform:`translate(${position.x}px,${position.y}px)`}}
         role="dialog"
         aria-modal="true"
@@ -270,88 +236,20 @@ export default function FinishingStudio(p: Props) {
           )}
           {tab === "formats" && (
             <>
-              <p>
-                Save separate framing, zooms and captions for each layout. Your original layout stays available as Master.
-              </p>
               <div className="refine-card-grid">
                 {LAYOUT_FORMATS.map(({id:format,name:label,width,height,description}) => (
                   <button
-                    key={format} className="refine-format-card" aria-label={`New ${format}`}
+                    key={format} className="refine-format-card" aria-label={`Set ${label} layout`} aria-pressed={!!p.config.aspectRatio && Math.abs(p.config.aspectRatio.width/p.config.aspectRatio.height-width/height)<.001}
                     onClick={() => {
-                      const variants = [...(p.config.layoutVariants ?? [])];
-                      const active = variants.findIndex(
-                        (v) => v.id === p.config.activeLayoutId,
-                      );
-                      if (active >= 0)
-                        variants[active] = captureLayout(
-                          p.config,
-                          p.keyframes,
-                          p.captions,
-                          variants[active].name,
-                          variants[active].id,
-                        );
-                      else if (!variants.length)
-                        variants.push(
-                          captureLayout(
-                            p.config,
-                            p.keyframes,
-                            p.captions,
-                            "Master",
-                          ),
-                        );
-                      const config = formatLayout(p.config, format),
-                        captions = formatCaptionTracks(p.captions, format);
-                      const variant = captureLayout(
-                        config,
-                        p.keyframes,
-                        captions,
-                        `${label} ${variants.length}`,
-                      );
-                      variants.push(variant);
-                      p.onChange(
-                        {
-                          ...config,
-                          layoutVariants: variants,
-                          activeLayoutId: variant.id,
-                        },
-                        p.keyframes,
-                        captions,
-                      );
+                      const config = formatLayout(p.config, format);
+                      p.onChange(config, p.keyframes, formatCaptionTracks(p.captions, format));
                     }}
                   >
-                    <span className="refine-format-art" aria-hidden="true"><span style={{aspectRatio:`${width}/${height}`,width:width>=height?64:Math.round(54*width/height),height:width>=height?Math.round(64*height/width):54}}/></span>
+                    <span className="refine-format-art" aria-hidden="true"><span style={{aspectRatio:`${width}/${height}`,width:width>=height?64:Math.round(54*width/height),height:width>=height?Math.round(64*height/width):54}}><i/><i/><i/></span></span>
                     <strong>{label}</strong><span>{width}:{height} · {description}</span>
                   </button>
                 ))}
               </div>
-              <h3>Saved layouts</h3>
-              {!p.config.layoutVariants?.length && <p className="finishing-empty">Choose a format to save your first layout. Master keeps the original framing.</p>}
-              {(p.config.layoutVariants ?? []).map((v) => (
-                <div className="finishing-proposal" key={v.id}>
-                  <button
-                    aria-pressed={v.id === p.config.activeLayoutId}
-                    onClick={() => switchLayout(v.id)}
-                  >
-                    {v.id === p.config.activeLayoutId && <Check size={14}/>} {v.name}
-                  </button>
-                  <button
-                    className="finishing-icon-button" aria-label={`Delete ${v.name} layout`}
-                    disabled={
-                      v.id === p.config.activeLayoutId || v.name === "Master"
-                    }
-                    onClick={() =>
-                      p.onChange({
-                        ...p.config,
-                        layoutVariants: p.config.layoutVariants?.filter(
-                          (x) => x.id !== v.id,
-                        ),
-                      })
-                    }
-                  >
-                    <Trash2 size={16}/>
-                  </button>
-                </div>
-              ))}
               <fieldset className="refine-framing"><legend>Framing</legend>
                 <p>Crop edges without shrinking the screen. The remaining picture fills the current layout.</p>
                 <Slider label="Left" value={crop.x*100} min={0} max={Math.max(0,(crop.x+crop.w-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("left",value)}/>
@@ -404,9 +302,6 @@ export default function FinishingStudio(p: Props) {
               >
                 Reframe around clicks
               </button>
-              <p>
-                Switching layouts saves your framing. Guides appear only in preview.
-              </p>
               </fieldset>
             </>
           )}

@@ -69,3 +69,12 @@
 .finishing-studio .refine-guides,.finishing-studio .refine-framing { margin-top:24px;padding:18px;gap:18px; }
 .finishing-studio .refine-guides>p,.finishing-studio .refine-framing>p { margin:0; }
 .refine-guides>button,.refine-framing>button { justify-self:start; }
+
+.finishing-studio .refine-format-card { align-items:center!important;text-align:center;gap:8px!important;min-height:148px;padding:18px 12px!important; }
+.refine-format-art { height:66px;margin-bottom:4px; }
+.refine-format-art>span { display:flex;flex-direction:column;justify-content:center;align-items:center;gap:4px;padding:7px;box-sizing:border-box;background:linear-gradient(145deg,var(--bg-hover),var(--bg-surface-raised)); }
+.refine-format-art i { display:block;width:74%;height:3px;border-radius:2px;background:color-mix(in srgb,var(--text-secondary) 38%,transparent); }.refine-format-art i:first-child { width:46%;background:color-mix(in srgb,var(--text-primary) 55%,transparent); }
+.finishing-studio .refine-format-card[aria-pressed=true] { border-color:var(--accent);color:var(--text-primary);box-shadow:inset 0 0 0 1px var(--border-default); }
+.finishing-studio .refine-format-card:hover { border-color:var(--text-secondary); }
+
+.finishing-studio .refine-format-card { border-radius:12px!important; }

@@ -1,5 +1,5 @@
 import { reconcileAudioClips, resolvedAudioClips } from "../../lib/audioEditing";
-import { resolveClipEffects, editClipEffects, replaceAnimationKeys } from "../../lib/clipEffects";
+import { resolveClipEffects, editClipEffects, replaceAnimationKeys, replaceAnimationKeyGroups } from "../../lib/clipEffects";
 import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
 import { userError } from "../../lib/userError";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
@@ -7,7 +7,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
 import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
@@ -1269,6 +1268,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         activeClipId={activeClipId}
         videoPath={videoPath}
         onTrackLocksChange={lockedTracks => setConfig(c => ({ ...c, lockedTracks }))}
+        onAnimationKeyGroupsChange={updates => setConfig(c => replaceAnimationKeyGroups(c, updates))}
         onAnimationKeysChange={(kind, id, keys, clipId) => setConfig(c => replaceAnimationKeys(c, kind, id, keys, clipId))}
         onAnimationKeyChange={(kind, id, time, nextTime, clipId) => {
           setConfig(c => {
@@ -1490,11 +1490,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           exportedPath={lastExportPath}
           onClose={() => setShowExport(false)}
           onCancel={handleCancelExport}
-          onOpenFile={() => {
+          onOpenFile={async () => {
             if (!lastExportPath) return;
-            void openPath(lastExportPath).catch((error) => {
-              setExportStatus(`Done — export saved. Could not open the file: ${userError(error)}`);
-            });
+            await invoke("open_media_file", { path: lastExportPath });
           }}
           onExport={handleExport}
         />

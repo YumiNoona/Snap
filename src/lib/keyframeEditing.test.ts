@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { copyKeys, retimeKeys, pasteKeys } from "./keyframeEditing";
+import { copyKeys, retimeKeys, pasteKeys, duplicateKeys } from "./keyframeEditing";
 const keys = [{ time: 1, value: "first" }, { time: 2, value: "second" }, { time: 4, value: "third" }];
 describe("keyframe editing", () => {
   it("moves a selection as a group with frame snapping and boundary clamping", () => {
@@ -20,4 +20,12 @@ describe("keyframe editing", () => {
     const full=Array.from({length:1000},(_,time)=>({time}));
     expect(pasteKeys(full,[{time:0}],1001,2000,30)).toBe(full);
   });
+});
+
+it("duplicates without replacing nearby keys or changing the original selection", () => {
+  const result = duplicateKeys(keys,[1,2],10,30);
+  expect(result).toHaveLength(5);
+  for(const key of keys) expect(result).toContainEqual(key);
+  expect(result.filter(key=>!keys.includes(key)).map(key=>key.time)).toEqual([61/30,91/30]);
+  expect(duplicateKeys([{time:0},{time:1}],[0,1],1,30)).toEqual([{time:0},{time:1}]);
 });

@@ -2,6 +2,7 @@ import { TRANSITION_EFFECTS } from "../../../lib/transitions";
 import { Section, SelectRow, CheckRow } from "./PanelControls";
 import ScreenTiltTools from "./ScreenTiltTools";
 import CameraAnimation from "./CameraAnimation";
+import BackgroundImages from "./BackgroundImages";
 import "./Animation.css";
 import { userError } from "../../../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -10,7 +11,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, Plus, X, Palette, WandSparkles, Captions, Images, Video, ExternalLink, FolderSearch, AlertTriangle, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
@@ -148,7 +149,7 @@ export default function Panels({
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [recordedActions, setRecordedActions] = useState<DisplayAction[]>([]);
-  const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">("gradient");
+  const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">(config.bgType === "wallpaper" ? "gradient" : config.bgType);
   const [customGradient, setCustomGradient] = useState({ start: "#7c3aed", middle: "#ec4899", end: "#f59e0b", angle: 135 });
   const annotationDrawerRef = useRef<HTMLDivElement>(null);
   const copiedLayerStyleRef = useRef<Partial<Layer> | null>(null);
@@ -180,6 +181,7 @@ export default function Panels({
     } catch { return { assets: [] }; }
   });
   const [mediaSearch, setMediaSearch] = useState("");
+  const [mediaActionStatus, setMediaActionStatus] = useState("");
   const [activeMediaKind, setActiveMediaKind] = useState<MediaKind>("image");
   const [mediaDragOver, setMediaDragOver] = useState(false);
   const [mediaContextMenu, setMediaContextMenu] = useState<{ asset: MediaAsset; x: number; y: number } | null>(null);
@@ -642,6 +644,7 @@ export default function Panels({
           }}
         >
           <label className="media-search"><Search size={15} /><input value={mediaSearch} onChange={(event) => setMediaSearch(event.target.value)} placeholder="Search media" /></label>
+          {mediaActionStatus && <p className="caption-status-message" role="status">{mediaActionStatus}</p>}
           <div className="media-kind-tabs" aria-label="Media type">
             {([ ["image", Images, "Images"], ["video", Video, "Video"], ["audio", Music2, "Audio"] ] as const).map(([kind, Icon, label]) => <button type="button" key={kind} className={activeMediaKind === kind ? "active" : ""} onClick={() => setActiveMediaKind(kind)}><Icon size={14} />{label}</button>)}
           </div>
@@ -696,8 +699,8 @@ export default function Panels({
           >
             <div className="media-context-heading"><span>{mediaContextMenu.asset.kind === "image" ? <Images size={15} /> : mediaContextMenu.asset.kind === "video" ? <Video size={15} /> : <Music2 size={15} />}</span><strong title={mediaContextMenu.asset.name}>{mediaContextMenu.asset.name}</strong></div>
             <button role="menuitem" onClick={() => addAssetToTimeline(mediaContextMenu.asset)}><Plus size={15} /> Add to timeline</button>
-            <button role="menuitem" onClick={() => { void openPath(mediaContextMenu.asset.path); setMediaContextMenu(null); }}><ExternalLink size={15} /> Open file</button>
-            <button role="menuitem" onClick={() => { void revealItemInDir(mediaContextMenu.asset.path); setMediaContextMenu(null); }}><FolderSearch size={15} /> Show in folder</button>
+            <button role="menuitem" onClick={() => { setMediaActionStatus(""); void invoke("open_media_file", { path: mediaContextMenu.asset.path }).catch(error => { console.error("[Snap] Open media failed:", error); setMediaActionStatus("Windows could not open this file. Use Show in folder to choose an app."); }); setMediaContextMenu(null); }}><ExternalLink size={15} /> Open file</button>
+            <button role="menuitem" onClick={() => { setMediaActionStatus(""); void revealItemInDir(mediaContextMenu.asset.path).catch(error => { console.error("[Snap] Reveal media failed:", error); setMediaActionStatus("Windows could not show this file. Check that it is still available."); }); setMediaContextMenu(null); }}><FolderSearch size={15} /> Show in folder</button>
             <div className="media-context-separator" />
             <button className="danger" role="menuitem" onClick={() => requestMediaRemoval(mediaContextMenu.asset)}><Trash2 size={15} /> Remove from library</button>
           </div>, document.body)}
@@ -771,20 +774,7 @@ export default function Panels({
             )}
             {bgCategory === "image" && (
               <>
-                <div className="ss-wallpaper-grid image-grid">
-                  <button type="button" className="ss-wallpaper-card custom-image-card" onClick={() => void importBackgroundImage()} title="Add your own image"><ImagePlus size={22} /><span>Add image</span></button>
-                  {WALLPAPER_PRESETS.map((preset) => (
-                    <button
-                      type="button"
-                      key={preset.id}
-                      className={`ss-wallpaper-card ${config.bgType === "image" && config.wallpaperUrl === preset.id ? "active" : ""}`}
-                      style={{ backgroundImage: `url(${preset.thumbnailUrl})` }}
-                      onPointerEnter={() => preloadImageAsset(preset.previewUrl)}
-                      onClick={() => update({ bgType: "image", wallpaperUrl: preset.id })}
-                      title={preset.name}
-                    />
-                  ))}
-                </div>
+                <BackgroundImages value={config.wallpaperUrl} active={config.bgType === "image"} onImport={importBackgroundImage} onSelect={wallpaperUrl=>update({bgType:"image",wallpaperUrl})}/>
                 <Slider label="Blur Radius" value={config.bgBlur} min={0} max={100} step={2} unit="px" onChange={(v) => update({ bgBlur: v })} />
               </>
             )}

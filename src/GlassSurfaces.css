@@ -1,0 +1,91 @@
+/* One material for every floating surface: Refine's 90% tint and 18px blur.
+   Keep this policy above component paint rules, including lazy-loaded CSS. */
+:root {
+  --glass-opacity: 90%;
+  --glass-blur: 18px;
+  --glass-radius: 12px;
+}
+
+/* Portals inherit from body rather than the editor. Carry the same palette
+   there so dropdowns, nested menus and confirmation dialogs follow its theme. */
+body[data-editor-theme="dark"], .theme-dark {
+  --bg-surface: #131313;
+  --bg-surface-raised: #1c1c1c;
+  --bg-surface-sunken: #090909;
+  --bg-hover: #242424;
+  --accent: #e8e8e4;
+  --accent-hover: #ffffff;
+  --border-subtle: rgba(255,255,255,.075);
+  --border-default: rgba(255,255,255,.14);
+  --text-primary: #f1f1ef;
+  --text-secondary: #b6b6b1;
+  --text-tertiary: #80807a;
+}
+body[data-editor-theme="light"], .theme-light {
+  --bg-surface: #fbfaf8;
+  --bg-surface-raised: #efede9;
+  --bg-surface-sunken: #e8e6e1;
+  --bg-hover: #e9e6e1;
+  --accent: #242422;
+  --accent-hover: #000000;
+  --border-subtle: rgba(0,0,0,.075);
+  --border-default: rgba(0,0,0,.15);
+  --text-primary: #20201e;
+  --text-secondary: #5f5f5a;
+  --text-tertiary: #7b7a74;
+}
+
+:root :is(
+  .editor-glass-surface, .finishing-studio, .export-modal,
+  .ss-panels-drawer, .ss-file-menu, .ss-command-palette, .ss-health-panel,
+  .custom-select-menu, .caption-language-menu, .dd-panel, .dd-sub-panel,
+  .aspect-dropdown-menu, .timeline-context-menu, .media-context-menu,
+  .timeline-clip-inspector, .timeline-live-trim-preview, .timeline-key-selection-toolbar,
+  .media-decision-dialog, .donate-modal, .focusee-modal-card,
+  .recording-processing-card, .update-available-popup, .dropdown-menu,
+  .focusee-sidebar, .focusee-card, .settings-section, .settings-option-card, .teleprompter-controls,
+  .import-card, .library-media-card, .window-picker-window, .window-picker-option,
+  .mobile-picker-hero, .mobile-platform-card, .mobile-section-card, .mobile-guide-card, .mobile-resilience-card
+) {
+  background: color-mix(in srgb, var(--bg-surface) var(--glass-opacity), transparent) !important;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) !important;
+  backdrop-filter: blur(var(--glass-blur)) !important;
+  border-radius: var(--glass-radius) !important;
+}
+
+/* Inset cards use the same alpha with their existing sunken color. Images,
+   waveform canvases, swatches and preset artwork retain their actual content. */
+:root :is(.refine-preset-card, .refine-format-card, .audio-track-card,
+  .caption-source-card, .media-asset-card, .conditional-control-group) {
+  background: color-mix(in srgb, var(--bg-surface-sunken) var(--glass-opacity), transparent) !important;
+  border-radius: var(--glass-radius) !important;
+}
+
+/* Sticky rows must not put an opaque second sheet over their glass parent. */
+:root :is(.timeline-clip-inspector, .ss-panels-drawer) :is(
+  .timeline-inspector-actions, .layer-inspector-header, .ss-inspector-header
+), :root .timeline-clip-inspector > header {
+  background: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+:root :is(.export-modal-backdrop, .ss-command-backdrop, .media-decision-backdrop,
+  .donate-modal-backdrop, .modal-overlay) {
+  background: rgba(0,0,0,.22);
+  backdrop-filter: blur(3px);
+}
+:root :is(.media-decision-dialog, .dd-panel, .dd-sub-panel) { color: var(--text-primary); }
+
+/* Tool surfaces scroll without scrollbar chrome; the timeline keeps its bars. */
+:root :is(.ss-panels-drawer, .finishing-body, .export-modal, .custom-select-menu,
+  .caption-language-menu, .dd-panel, .dd-sub-panel, .ss-command-list,
+  .timeline-context-menu, .media-context-menu, .modal-window-list,
+  .settings-scroll-area, .media-list, .mobile-platform-picker, .update-release-notes) {
+  scrollbar-width: none;
+}
+:root :is(.ss-panels-drawer, .finishing-body, .export-modal, .custom-select-menu,
+  .caption-language-menu, .dd-panel, .dd-sub-panel, .ss-command-list,
+  .timeline-context-menu, .media-context-menu, .modal-window-list,
+  .settings-scroll-area, .media-list, .mobile-platform-picker, .update-release-notes)::-webkit-scrollbar {
+  display: none;
+}

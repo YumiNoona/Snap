@@ -385,6 +385,25 @@ fn window_ready(window: tauri::Window) -> Result<(), String> {
     Ok(())
 }
 
+// Clip the native surface too: WebView2 can paint an opaque rectangle behind
+// CSS-rounded corners even when the webview background is transparent.
+fn round_window_picker(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, DeleteObject, SetWindowRgn};
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let diameter = (24.0 * window.scale_factor().map_err(|error| error.to_string())?).round() as i32;
+    unsafe {
+        let region = CreateRoundRectRgn(0, 0, size.width as i32 + 1, size.height as i32 + 1, diameter, diameter);
+        if region.is_invalid() { return Err("Unable to round window picker".into()); }
+        // On success Windows owns the region; delete only on failure.
+        if SetWindowRgn(hwnd, Some(region), true) == 0 {
+            let _ = DeleteObject(region.into());
+            return Err("Unable to clip window picker corners".into());
+        }
+    }
+    Ok(())
+}
+
 async fn open_module_window(
     app: tauri::AppHandle,
     label: &'static str,
@@ -394,6 +413,11 @@ async fn open_module_window(
     height: f64,
 ) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(label) {
+        if label == "window-picker" {
+            let _ = win.set_shadow(false);
+            let _ = win.set_background_color(Some(Color(0, 0, 0, 0)));
+            round_window_picker(&win)?;
+        }
         let _ = win.show();
         let _ = win.set_focus();
         return Ok(());
@@ -413,11 +437,31 @@ async fn open_module_window(
         .resizable(false)
         .maximizable(false)
         .visible(false)
-        .background_color(Color(11, 13, 18, 255))
+        .shadow(label != "window-picker")
+        .transparent(label == "window-picker")
+        .background_color(if label == "window-picker" { Color(0, 0, 0, 0) } else { Color(11, 13, 18, 255) })
         .devtools(true)
         .build()
-        .map(|_| ())
-        .map_err(|error| format!("Failed to create {title}: {error}"));
+        .map_err(|error| format!("Failed to create {title}: {error}"))
+        .and_then(|window| {
+            if label == "window-picker" {
+                round_window_picker(&window)?;
+                let picker = window.clone();
+                let last_geometry = Mutex::new((window.inner_size().ok(), window.scale_factor().ok()));
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                        let geometry = (picker.inner_size().ok(), picker.scale_factor().ok());
+                        let changed = if let Ok(mut previous) = last_geometry.lock() {
+                            let changed = *previous != geometry;
+                            *previous = geometry;
+                            changed
+                        } else { false };
+                        if changed { let _ = round_window_picker(&picker); }
+                    }
+                });
+            }
+            Ok(())
+        });
         let _ = tx.send(result);
     });
     rx.recv()
@@ -1895,6 +1939,7 @@ pub fn run() {
             recording_session::stop_recording_session,
             recording_session::get_recording_session_state,
             export::open_export_sink,
+            export::open_media_file,
             export::write_export_chunk,
             export::close_export_sink,
             export::discard_canvas_export,

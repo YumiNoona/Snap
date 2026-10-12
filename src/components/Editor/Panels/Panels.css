@@ -1660,3 +1660,9 @@
 .action-event-inspector-actions button { display: inline-flex; min-height: 31px; align-items: center; justify-content: center; gap: 5px; color: var(--text-secondary); background: var(--bg-surface-raised); border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; }
 .action-event-inspector-actions button:hover { color: var(--text-primary); border-color: var(--border-default); }
 .action-event-inspector-actions button.danger:hover { color: #fca5a5; border-color: rgba(248,113,113,.38); }
+
+/* Photo previews fill one card; image elements cannot tile along the borders. */
+.ss-wallpaper-grid.image-grid .wallpaper-image-card { position:relative;overflow:hidden;background:var(--bg-surface-sunken);background-repeat:no-repeat;background-origin:border-box; }
+.wallpaper-image-card > img { position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:cover;object-position:center;pointer-events:none; }
+.wallpaper-image-card .wallpaper-image-selected { position:absolute;right:5px;bottom:5px;display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:var(--bg-surface);color:var(--text-primary);box-shadow:0 1px 5px #0005;pointer-events:none; }
+.wallpaper-image-card .wallpaper-image-unavailable { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--text-tertiary); }

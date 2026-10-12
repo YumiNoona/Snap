@@ -25,3 +25,15 @@ export function replaceAnimationKeys(config: EditorConfig, kind: "tilt" | "camer
   if (kind === "camera") return { ...config, cameraOverlay: { ...config.cameraOverlay, animation: keys as LayerAnimationKey[] } };
   return { ...config, layers: config.layers.map(layer => layer.id === id ? { ...layer, animation: keys as LayerAnimationKey[] } : layer) };
 }
+
+export interface AnimationKeyUpdate {
+  kind: "tilt" | "camera" | "layer";
+  id: string;
+  clipId?: string;
+  keys: (LayerAnimationKey | ScreenTiltKey)[];
+}
+
+/** Apply a multi-track edit as one config/history change. */
+export function replaceAnimationKeyGroups(config: EditorConfig, updates: AnimationKeyUpdate[]): EditorConfig {
+  return updates.reduce((next, update) => replaceAnimationKeys(next, update.kind, update.id, update.keys, update.clipId), config);
+}

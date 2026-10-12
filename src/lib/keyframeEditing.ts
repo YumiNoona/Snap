@@ -22,3 +22,18 @@ export function pasteKeys<T extends TimedKey>(keys: T[], copied: T[], anchor: nu
   if (keys.length + unique.size > 1000) return keys;
   return [...keys.filter(key=>![...unique.keys()].some(time=>Math.abs(key.time-time)<1/rate/2)),...unique.values()].sort((a,b)=>a.time-b.time);
 }
+
+/** Duplicate into free frame slots, keeping every existing key intact. */
+export function duplicateKeys<T extends TimedKey>(keys: T[], times: number[], maximum: number, fps: number): T[] {
+  const copied = copyKeys(keys, times);
+  if (!copied.length || keys.length + copied.length > 1000 || !Number.isFinite(maximum)) return keys;
+  const rate = Number.isFinite(fps) && fps >= 1 ? Math.min(240, fps) : 30;
+  const span = copied[copied.length - 1].time - copied[0].time;
+  const candidates = [copied[copied.length - 1].time + 1 / rate, copied[0].time - span - 1 / rate];
+  for (const anchor of candidates) {
+    const added = copied.map(key => ({ ...key, time: Math.round((anchor + key.time - copied[0].time) * rate) / rate }));
+    if (added.some(key => key.time < 0 || key.time > maximum || keys.some(other => Math.abs(other.time - key.time) < .5 / rate))) continue;
+    return [...keys, ...structuredClone(added)].sort((a, b) => a.time - b.time);
+  }
+  return keys;
+}

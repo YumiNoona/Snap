@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -557,16 +558,24 @@ pub async fn window_preview(target_id: String) -> std::result::Result<Option<Vec
             || window_capture_protected(window) {
             return Ok(None);
         }
+        // Static windows may emit only one WGC frame. Do not discard initial
+        // frames waiting for a repaint; the picker validates image content.
         let source = format!("gfxcapture=hwnd={}:capture_cursor=0:capture_border=0:display_border=0:max_framerate=10:width=384:height=216:resize_mode=scale_aspect:output_fmt=8bit,hwdownload,format=bgra", window.0 as usize);
         let mut command = background_command("ffmpeg");
         command.args(["-hide_banner", "-v", "error", "-filter_complex", &source, "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "5", "-f", "image2pipe", "pipe:1"])
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let Ok(mut child) = spawn_recording_child(&mut command) else { return Ok(None) };
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = spawn_recording_child(&mut command).map_err(|error| format!("Window preview could not start: {error}"))?;
         let Some(stdout) = child.stdout.take() else { let _ = child.kill(); let _ = child.wait(); return Ok(None) };
         let reader = thread::spawn(move || {
             let mut bytes = Vec::new();
             let _ = stdout.take(256 * 1024).read_to_end(&mut bytes);
             bytes
+        });
+        let stderr = child.stderr.take();
+        let error_reader = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(stderr) = stderr { let _ = stderr.take(8192).read_to_end(&mut bytes); }
+            String::from_utf8_lossy(&bytes).into_owned()
         });
         let started = Instant::now();
         let success = loop {
@@ -575,13 +584,17 @@ pub async fn window_preview(target_id: String) -> std::result::Result<Option<Vec
                 Err(_) => break false,
                 _ => {}
             }
-            if started.elapsed() > Duration::from_secs(2)
+            if started.elapsed() > Duration::from_secs(4)
                 || STATE.lock().map(|state| state.is_some()).unwrap_or(true) { break false; }
             thread::sleep(Duration::from_millis(20));
         };
         if !success { let _ = child.kill(); }
         let _ = child.wait();
         let bytes = reader.join().unwrap_or_default();
+        let diagnostic = error_reader.join().unwrap_or_default();
+        if !success && !diagnostic.trim().is_empty() {
+            return Err(format!("Window preview failed: {}", diagnostic.trim()));
+        }
         Ok((success && bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9])).then_some(bytes))
     }).await.map_err(|e| e.to_string())?
 }
@@ -842,12 +855,17 @@ fn enumerate_windows(targets: &mut Vec<DisplayTarget>) {
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let ctx = &mut *(lparam.0 as *mut Ctx);
 
-        if !IsWindowVisible(hwnd).as_bool() {
+        let mut process_id = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, (&raw mut cloaked).cast(), std::mem::size_of_val(&cloaked) as u32);
+        if process_id == std::process::id() || cloaked != 0 || !IsWindowVisible(hwnd).as_bool() {
             return BOOL::from(true);
         }
 
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        if (style & WS_EX_TOOLWINDOW.0) != 0 {
+        if (style & WS_EX_TOOLWINDOW.0) != 0
+            || ((style & WS_EX_APPWINDOW.0) == 0 && GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid())) {
             return BOOL::from(true);
         }
 
@@ -2173,14 +2191,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires a visible Snap window and FFmpeg WGC capture"]
+    #[ignore = "Requires visible external windows and FFmpeg WGC capture"]
     fn picker_preview_returns_a_real_jpeg() {
         let mut targets = Vec::new();
         super::enumerate_windows(&mut targets);
-        let target = targets.iter().find(|target| super::hwnd_from_id(&target.id).is_some_and(|window| unsafe { super::IsWindowVisible(window).as_bool() && !super::IsIconic(window).as_bool() } && !super::window_capture_protected(window))).expect("No visible capturable window available");
+        let target = targets.iter().filter(|target| target.name != "Snap" && target.name != "Settings").find(|target| super::hwnd_from_id(&target.id).is_some_and(|window| unsafe { super::IsWindowVisible(window).as_bool() && !super::IsIconic(window).as_bool() } && !super::window_capture_protected(window))).expect("No visible capturable window available");
         let bytes = tauri::async_runtime::block_on(super::window_preview(target.id.clone())).unwrap().expect("No window preview received");
         assert!(bytes.starts_with(&[0xff, 0xd8]));
         assert!(bytes.len() < 256 * 1024);
+        std::fs::write(std::env::temp_dir().join("snap-picker-native-proof.jpg"), &bytes).unwrap();
     }
 
     #[test]

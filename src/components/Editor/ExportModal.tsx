@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, Clock3, Download, ExternalLink, HardDrive, MonitorPlay, RefreshCw, X } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { CheckCircle2, Clock3, Download, ExternalLink, FolderSearch, HardDrive, MonitorPlay, RefreshCw, X } from "lucide-react";
 import type { EditorConfig, ExportSettings } from "../../lib/types";
 import { defaultExportPath, pathFileName, recordingExportDirectory } from "../../lib/exportPaths";
 import "./ExportModal.css";
 import { outputDuration } from "../../lib/exportTiming";
 import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
 import { layoutExportSize } from "../../lib/editorFinishing";
+import Dropdown from "../shared/Dropdown";
 
 interface Props {
   videoPath: string;
@@ -18,7 +20,7 @@ interface Props {
   exportedPath: string;
   onClose: () => void;
   onCancel: () => void;
-  onOpenFile: () => void;
+  onOpenFile: () => Promise<void>;
   onExport: (settings: ExportSettings) => Promise<void>;
 }
 
@@ -38,6 +40,10 @@ function formatDuration(seconds: number) {
 function formatEstimate(seconds: number) {
   if (seconds < 60) return `about ${Math.max(1, Math.round(seconds))} sec`;
   return `about ${Math.ceil(seconds / 60)} min`;
+}
+
+function ExportChoice({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (value: string) => void }) {
+  return <label>{label}<Dropdown ariaLabel={label} value={value} options={options.map(([value, label]) => ({ value, label }))} onChange={onChange}/></label>;
 }
 
 export default function ExportModal({ videoPath, duration, config, captionTrackCount, status, progress, exportedPath, onClose, onCancel, onOpenFile, onExport }: Props) {
@@ -73,6 +79,38 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   const exporting = status.startsWith("Exporting") || status === "Finalizing..." || status.startsWith("Cancelling");
   const cancellable = status.startsWith("Exporting");
   const done = status.startsWith("Done");
+  const [fileActionError, setFileActionError] = useState("");
+  const [fileActionBusy, setFileActionBusy] = useState(false);
+  const fileActionRef = useRef({ busy: false, generation: 0 });
+  useEffect(() => {
+    fileActionRef.current = { busy: false, generation: fileActionRef.current.generation + 1 };
+    setFileActionError("");
+    setFileActionBusy(false);
+    return () => { fileActionRef.current.generation++; };
+  }, [exportedPath, status]);
+  const runFileAction = async (action: "open" | "folder") => {
+    if (!done || !exportedPath || fileActionRef.current.busy) return;
+    const generation = fileActionRef.current.generation;
+    fileActionRef.current.busy = true;
+    setFileActionBusy(true);
+    setFileActionError("");
+    try {
+      if (action === "open") await onOpenFile();
+      else await revealItemInDir(exportedPath);
+    } catch (error) {
+      console.error(`[Snap] Export ${action} action failed:`, error);
+      if (fileActionRef.current.generation === generation) {
+        setFileActionError(action === "open"
+          ? "Windows could not open the file. Use Show in folder to choose a compatible app."
+          : "Windows could not show the file. You can find it in your chosen export folder.");
+      }
+    } finally {
+      if (fileActionRef.current.generation === generation) {
+        fileActionRef.current.busy = false;
+        setFileActionBusy(false);
+      }
+    }
+  };
   const modalRef = useRef<HTMLElement>(null);
   const actionsRef = useRef({ onClose, exporting });
   actionsRef.current = { onClose, exporting };
@@ -129,25 +167,21 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
             </div>
 
             <div className="export-options-row">
-              <label>Format<select value={settings.format} onChange={(e) => {
-                const format = e.target.value as ExportSettings["format"];
+              <ExportChoice label="Format" value={settings.format} options={[["mp4", "MP4 · H.264"], ["webm", "WebM · VP9"], ["gif", "Animated GIF"]]} onChange={value => {
+                const format = value as ExportSettings["format"];
                 setSettings({ ...settings, format, captions: format === "gif" && settings.captions === "embedded" ? "burned" : settings.captions, outputPath: settings.outputPath.replace(/\.(mp4|webm|gif)$/i, `.${format}`) });
-              }}><option value="mp4">MP4 · H.264</option><option value="webm">WebM · VP9</option><option value="gif">Animated GIF</option></select></label>
-              <label>Quality<select value={settings.quality} onChange={(e) => setSettings({ ...settings, quality: e.target.value as ExportSettings["quality"] })}><option value="high">High</option><option value="medium">Balanced</option><option value="low">Small file</option></select></label>
+              }}/>
+              <ExportChoice label="Quality" value={settings.quality} options={[["high", "High"], ["medium", "Balanced"], ["low", "Small file"]]} onChange={quality => setSettings({ ...settings, quality: quality as ExportSettings["quality"] })}/>
             </div>
             {captionTrackCount > 0 && <div className="export-options-row">
-              <label>Captions<select value={settings.captions} onChange={(event) => setSettings({ ...settings, captions: event.target.value as ExportSettings["captions"] })}>
-                <option value="burned">Burn into video</option>{settings.format !== "gif" && <option value="embedded">Embedded subtitle track</option>}<option value="srt">SRT sidecar only</option><option value="vtt">WebVTT sidecar only</option><option value="burned-srt">Burned + SRT</option><option value="none">No captions</option>
-              </select></label>
+              <ExportChoice label="Captions" value={settings.captions ?? "none"} options={[["burned", "Burn into video"], ...(settings.format !== "gif" ? [["embedded", "Embedded subtitle track"]] as [string, string][] : []), ["srt", "SRT sidecar only"], ["vtt", "WebVTT sidecar only"], ["burned-srt", "Burned + SRT"], ["none", "No captions"]]} onChange={captions => setSettings({ ...settings, captions: captions as ExportSettings["captions"] })}/>
             </div>}
             {settings.format === "mp4" && <div className="export-options-row">
-              <label>Audio Tracks<select value={settings.audioMode} onChange={(event) => setSettings({ ...settings, audioMode: event.target.value as ExportSettings["audioMode"] })}>
-                <option value="mixed">Mixed · most compatible</option><option value="separate">Separate editable tracks</option>
-              </select></label>
-              <label>Normalization<select value={settings.normalizeAudio ? "on" : "off"} onChange={(event) => setSettings({ ...settings, normalizeAudio: event.target.value === "on" })}><option value="off">Preserve levels</option><option value="on">Normalize loudness</option></select></label>
+              <ExportChoice label="Audio tracks" value={settings.audioMode ?? "mixed"} options={[["mixed", "Mixed · most compatible"], ["separate", "Separate editable tracks"]]} onChange={audioMode => setSettings({ ...settings, audioMode: audioMode as ExportSettings["audioMode"] })}/>
+              <ExportChoice label="Normalization" value={settings.normalizeAudio ? "on" : "off"} options={[["off", "Preserve levels"], ["on", "Normalize loudness"]]} onChange={value => setSettings({ ...settings, normalizeAudio: value === "on" })}/>
             </div>}
-            {settings.format === "gif" && <div className="export-options-row"><label>Loop<select value={settings.loop ? "forever" : "once"} onChange={(event) => setSettings({ ...settings, loop: event.target.value === "forever" })}><option value="forever">Loop forever</option><option value="once">Play once</option></select></label></div>}
-            <label className="export-path-label">Delivery package<select value={settings.deliveryPackage ? "on" : "off"} onChange={(event) => setSettings({ ...settings, deliveryPackage: event.target.value === "on" })}><option value="off">Video only</option><option value="on">Video + thumbnail + transcript + chapters</option></select></label>
+            {settings.format === "gif" && <div className="export-options-row"><ExportChoice label="Loop" value={settings.loop ? "forever" : "once"} options={[["forever", "Loop forever"], ["once", "Play once"]]} onChange={value => setSettings({ ...settings, loop: value === "forever" })}/></div>}
+            <div className="export-delivery-choice"><ExportChoice label="Delivery package" value={settings.deliveryPackage ? "on" : "off"} options={[["off", "Video only"], ["on", "Video + thumbnail + transcript + chapters"]]} onChange={value => setSettings({ ...settings, deliveryPackage: value === "on" })}/></div>
 
             <label className="export-path-label">Save as<input value={settings.outputPath} onChange={(e) => setSettings({ ...settings, outputPath: e.target.value })} /></label>
           </fieldset>
@@ -166,11 +200,15 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
           <div className="export-progress-track"><i style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>
         </div>}
 
+        {fileActionError && <p className="export-file-action-error" role="alert">{fileActionError}</p>}
         <footer className="export-modal-footer">
           <span>{settings.width} × {settings.height} · {settings.fps} FPS · {settings.quality}</span>
           <div className="export-footer-actions">
             {cancellable && <button type="button" className="export-secondary-button" onClick={onCancel}>Cancel export</button>}
-            {done && exportedPath && <button type="button" className="export-open-button" onClick={onOpenFile}><ExternalLink size={17} /> Open file</button>}
+            {done && exportedPath && <>
+              <button type="button" className="export-secondary-button" disabled={fileActionBusy} onClick={() => void runFileAction("folder")}><FolderSearch size={17} /> Show in folder</button>
+              <button type="button" className="export-open-button" disabled={fileActionBusy} onClick={() => void runFileAction("open")}><ExternalLink size={17} /> Open file</button>
+            </>}
             {done
               ? <button type="button" className="export-secondary-button export-again-button" disabled={!settings.outputPath.trim()} onClick={() => onExport(settings)}><RefreshCw size={16} /> Export again</button>
               : <button className="export-start-button" disabled={exporting || !settings.outputPath.trim()} onClick={() => onExport(settings)}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>}

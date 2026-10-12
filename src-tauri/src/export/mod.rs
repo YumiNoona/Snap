@@ -7,6 +7,46 @@ use tauri::Manager;
 
 use crate::process::{background_command, spawn_recording_child};
 
+fn validate_media_open_path(path: &std::path::Path) -> Result<(), String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        || !matches!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("mp4" | "mov" | "mkv" | "webm" | "avi" | "gif" | "png" | "jpg" | "jpeg" | "webp" | "bmp"
+                | "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus" | "wma")
+        )
+    {
+        return Err("Select a supported media file".into());
+    }
+    let metadata = path
+        .metadata()
+        .map_err(|error| format!("Exported file is unavailable: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("Exported file is unavailable or empty".into());
+    }
+    Ok(())
+}
+
+/// Save dialogs grant the asset scope, not the opener plugin's independent
+/// scope. Validate that exact grant before opening supported media files.
+#[tauri::command]
+pub async fn open_media_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let file = std::path::PathBuf::from(path);
+    crate::access::require(&app, &file)?;
+    validate_media_open_path(&file)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri_plugin_opener::open_path(file, None::<&str>)
+            .map_err(|error| format!("Windows could not open the exported file: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Could not finish opening the exported file: {error}"))?
+}
+
 fn run_ffmpeg(args: &[String]) -> std::result::Result<std::process::Output, String> {
     // Large edited sequences can exceed Windows' command-line limit. Keep
     // filter graphs in unique temporary files and remove them on every exit.
@@ -1673,5 +1713,31 @@ mod tests {
         assert_eq!(request.audio_tracks.len(), 1);
         assert_eq!(request.audio_tracks[0].kind, "imported");
         assert_eq!(request.audio_tracks[0].volume, 0.65);
+    }
+
+    #[test]
+    fn media_open_accepts_only_existing_nonempty_media() {
+        let base = std::env::temp_dir().join(format!(
+            "snap_open_export_test_{}",
+            std::process::id()
+        ));
+        for extension in ["mp4", "WEBM", "gif", "png", "mp3", "wav"] {
+            let file = base.with_extension(extension);
+            std::fs::write(&file, [1]).expect("create export fixture");
+            let result = validate_media_open_path(&file);
+            std::fs::remove_file(&file).expect("remove fixture");
+            result.expect("supported export");
+        }
+        let empty = base.with_extension("mp4");
+        std::fs::write(&empty, []).expect("create empty export");
+        assert!(validate_media_open_path(&empty).is_err());
+        std::fs::remove_file(&empty).expect("remove empty export");
+        assert!(validate_media_open_path(&empty).is_err());
+        for extension in ["exe", "bat", "cmd", "ps1", "lnk", "url", "html"] {
+            assert!(validate_media_open_path(&base.with_extension(extension)).is_err());
+        }
+        assert!(validate_media_open_path(std::path::Path::new("relative.mp4")).is_err());
+        assert!(validate_media_open_path(&base.join("..\\video.mp4")).is_err());
+        assert!(validate_media_open_path(&std::env::temp_dir()).is_err());
     }
 }

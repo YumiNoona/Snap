@@ -130,8 +130,8 @@
 .ss-file-menu {
   position: absolute;
   z-index: 80;
-  top: calc(100% + 8px);
-  left: 0;
+  top: calc(100% + 14px);
+  left: 8px;
   width: 300px;
   padding: 7px;
   color: var(--text-primary);
@@ -1340,34 +1340,7 @@
 .timeline-context-menu,.aspect-dropdown-portal { scrollbar-width:none; }
 .timeline-context-menu::-webkit-scrollbar,.aspect-dropdown-portal::-webkit-scrollbar { display:none; }
 
-/* Shared Refine glass treatment for editor tool surfaces and their menus.
-   Portal menus live outside the editor and carry their own theme class. */
-:root .screenstudio-editor-layout[data-theme] :is(
-  .ss-panels-drawer, .ss-file-menu, .custom-select-menu,
-  .caption-language-menu, .dd-panel, .dd-sub-panel,
-  .timeline-clip-inspector, .timeline-live-trim-preview
-) {
-  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-}
-:root :is(.aspect-dropdown-menu.aspect-dropdown-portal, .timeline-context-menu, .media-context-menu) {
-  background: rgba(17,17,17,.72);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-}
-:root :is(.aspect-dropdown-menu.aspect-dropdown-portal.theme-light, .timeline-context-menu.theme-light, .media-context-menu.theme-light) {
-  background: rgba(255,255,255,.72);
-}
-
-/* Keep sticky control rows from hiding the glass underneath them. */
-:root .screenstudio-editor-layout[data-theme] :is(
-  .timeline-clip-inspector header,
-  .timeline-clip-inspector .timeline-inspector-actions,
-  .ss-panels-drawer .layer-inspector-header,
-  .ss-panels-drawer .ss-inspector-header
-) {
-  background: color-mix(in srgb, var(--bg-surface) 72%, transparent);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-}
+/* Consistent inset controls; the shared glass policy lives in GlassSurfaces.css. */
+:root .screenstudio-editor-layout[data-theme] :is(.custom-select-trigger,.ss-file-menu>button,.custom-select-menu>button,.caption-language-menu>button,.timeline-clip-inspector button,.timeline-clip-inspector input),
+:root :is(.aspect-dropdown-menu,.timeline-context-menu,.media-context-menu)>button { border-radius:8px; }
+:root .screenstudio-editor-layout[data-theme] .timeline-clip-inspector { right:8px;bottom:calc(100% + 18px); }

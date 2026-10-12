@@ -1,3 +1,4 @@
+import { hasWindowPreviewContent } from "../../lib/windowPreview";
 import { userError } from "../../lib/userError";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,6 +21,8 @@ export default function WindowPickerWindow() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selecting, setSelecting] = useState("");
+  const [finishedPreviews, setFinishedPreviews] = useState<Record<string, boolean>>({});
+  const [previewError, setPreviewError] = useState("");
   const [previews, setPreviews] = useState<Record<string, string>>({});
 
   const refresh = async () => {
@@ -40,7 +43,9 @@ export default function WindowPickerWindow() {
   useEffect(() => {
     let cancelled = false;
     const urls: string[] = [];
+    setPreviewError("");
     setPreviews({});
+    setFinishedPreviews({});
     // Serial, one-shot previews. Never poll or keep a capture alive in the picker.
     void (async () => {
       for (const target of targets) {
@@ -48,10 +53,29 @@ export default function WindowPickerWindow() {
         try {
           const bytes = await invoke<number[] | null>("window_preview", { targetId: target.id });
           if (cancelled || !bytes?.length) continue;
-          const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "image/jpeg" }));
+          const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
+          const url = URL.createObjectURL(blob);
           urls.push(url);
+          const image = new Image();
+          image.src = url;
+          await image.decode();
+          if (cancelled) { URL.revokeObjectURL(url); break; }
+          const canvas = document.createElement("canvas");
+          canvas.width = 32;
+          canvas.height = 18;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          let useful = true;
+          if (context) {
+            context.drawImage(image, 0, 0, 32, 18);
+            useful = hasWindowPreviewContent(context.getImageData(0, 0, 32, 18).data);
+          }
+          if (!useful) { URL.revokeObjectURL(url); continue; }
           setPreviews((current) => ({ ...current, [target.id]: url }));
-        } catch { /* Unavailable/protected windows keep a neutral preview. */ }
+        } catch (reason) {
+          console.warn("[Snap] Window preview", target.id, reason);
+          if(!cancelled) setPreviewError("Some previews could not load. Refresh to try again.");
+        }
+        finally { if(!cancelled)setFinishedPreviews(current=>({...current,[target.id]:true})); }
       }
     })();
     return () => { cancelled = true; urls.forEach((url) => URL.revokeObjectURL(url)); };
@@ -82,13 +106,14 @@ export default function WindowPickerWindow() {
       </header>
 
       <section className="window-picker-body">
+        {previewError && !error && <p className="window-picker-error" role="status">{previewError}</p>}
         {error && <p className="window-picker-error" role="alert">{error}</p>}
         <div className="window-picker-list" aria-label="Open windows" aria-busy={loading}>
           {loading && <div className="window-picker-empty"><RefreshCw size={21} className="spin" /><strong>Finding open windows…</strong></div>}
           {!loading && targets.map((target) => (
             <button key={target.id} className="window-picker-option" title={target.name} disabled={!!selecting} onClick={() => void choose(target)}>
               <span className="window-picker-video">
-                {previews[target.id] ? <img src={previews[target.id]} alt="" /> : <AppWindow size={32} aria-label="Preview unavailable" />}
+                {previews[target.id] ? <img src={previews[target.id]} alt="" onError={()=>setPreviews(current=>{const next={...current};delete next[target.id];return next;})}/> : <span className="window-picker-placeholder"><AppWindow size={28}/><small>{finishedPreviews[target.id] || previewMode ? "Preview unavailable" : "Loading preview…"}</small></span>}
                 {selecting === target.id && <RefreshCw size={20} className="spin" />}
               </span>
               <strong>{target.name}</strong>

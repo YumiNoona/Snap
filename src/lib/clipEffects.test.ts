@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DEFAULT_EDITOR_CONFIG, type CaptionTrack, type Keyframe } from "./types";
 import { DEFAULT_SCREEN_TILT } from "./screenTilt";
-import { snapshotClipEffects, resolveClipEffects, replaceAnimationKeys } from "./clipEffects";
+import { snapshotClipEffects, resolveClipEffects, replaceAnimationKeys, replaceAnimationKeyGroups } from "./clipEffects";
 import { duplicateClips, combineClips } from "./clipOperations";
 import { mapCaptionTracks, splitClip } from "./videoEditing";
 import { createProject, migrateProject, projectFingerprint } from "./project";
@@ -48,4 +48,14 @@ describe("independent clip effects", () => {
     expect(clips[0].end).toBe(1 / 120);
     expect(splitClip([{ id: "one", start: 0, end: 1 }], 1 / 240, "one", 120)).toHaveLength(1);
   });
+});
+
+it("applies selected shared and independent key edits together while respecting locks", () => {
+  const state = { ...config, videoClips:[{id:"independent",start:0,end:5,effects:snapshotClipEffects(config,[],[])}] };
+  const result = replaceAnimationKeyGroups(state,[{kind:"tilt",id:"tilt",keys:[]},{kind:"tilt",id:"tilt",clipId:"independent",keys:[{...DEFAULT_SCREEN_TILT,time:2,easing:"ease-out"}]}]);
+  expect(result.screenTilt!.keys).toEqual([]);
+  expect(result.videoClips![0].effects!.config.screenTilt!.keys[0].time).toBe(2);
+  expect(state.screenTilt!.keys[0].time).toBe(1);
+  const locked = {...state,lockedTracks:["tilt"]};
+  expect(replaceAnimationKeyGroups(locked,[{kind:"tilt",id:"tilt",keys:[]}])).toBe(locked);
 });
