@@ -50,16 +50,16 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.4.0 adds advanced editor tools and a cleaner, consistent editing interface.
+            Snap 9.4.1 improves masks, media handling, custom cursors and preview playback.
 
-            - Color & Film includes film recipes, per-project/clip grades, timed masked adjustment layers, embedded .cube LUTs and RGB curves. Sections stay expanded without collapse arrows; Film looks and tone controls appear first, followed by scope, comparison, layers and enable controls.
-            - All tool drawers use consistent 16px outer spacing. Refine has less helper text and no redundant hover tooltips, while voice, layout and reusable style controls remain available.
-            - The animation graph editor supports custom easing and grouped key editing. Media cards drag onto the timeline, linked imported-video sound follows edits, and reusable nested sequences retain their internal edits.
-            - Export renders exact timestamps, with optional export-only optical-flow interpolation for slow motion and low-FPS footage. It takes longer and may distort fast-moving text; original frames remain the default.
-            - Automatic recording retains native pixels at 60 FPS with resolution-dependent bitrate and hardware encoding. Manual lower-load settings remain available. Display capture recovers transient resets without unnecessarily exhausting hardware encoders.
-            - Repository documentation is organized under docs/, with historical reviews preserved in docs/archive/. Local generated artifacts remain ignored.
+            - Six masks: Spotlight, Blur, Magnifier, Mosaic, Redaction and Color focus. Shared source-space positions align effects and handles through crop/zoom and cursor following. Feathered alpha mattes, expansion and applicable inversion controls improve area selection; the lens no longer blurs the whole picture. Redaction stays opaque without fades.
+            - Masks have individual timeline rows. Split masks no longer fade at the internal cut, and animated poses survive start trimming. Stacked effects sample the previous result. Sequence-timed masks also work over media in gaps.
+            - Uploads & Media uses cached video posters rather than blank video tags, with graceful loading/error states and retry. Unsupported imported-video codecs get on-demand full-resolution H.264 compatibility media shared by preview/export, without replacing originals. Pointer dragging has a preview ghost, Escape/cancel cleanup, matching timeline snapping and preview drop-at-playhead support.
+            - The transparent maximized-preview player has icon-only skip controls, a preview-only CC toggle and a movable, bounded dock. Preview expansion/restoration uses smooth view transitions where supported and respects reduced motion.
+            - Add named custom PNG cursors to a local library, with image/name validation and adjustable tips. Every editor-open flow maximizes the window; Color & Film sits above Audio.
+            - Recorder setup shows a microphone-level-driven liquid animation. Its lightweight native meter saves no audio and stops while recording, hidden/unfocused or idle.
 
-            Validation includes frontend/native regression tests, source checks, production builds and strict Rust linting. Recording remains native and lightweight; software recording fallback is explicit opt-in.
+            Validation includes frontend/native regression tests, real Chromium mask pixels and dock dragging, source checks, production builds and strict Rust linting. Recording remains native and lightweight; software recording fallback is explicit opt-in. These are rectangle/ellipse effects with cursor following and manual pose animation, not After Effects/Premiere object tracking or arbitrary path masks.
 
             Known capture limitation: the tested Apex Legends window reports WDA_EXCLUDEFROMCAPTURE (0x11). Snap respects Windows capture exclusion; this release does not bypass protection or guarantee Apex capture. The flag does not identify which program applied it or imply a user-facing toggle. See docs/capture.md.
 

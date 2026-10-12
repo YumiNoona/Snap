@@ -1,6 +1,13 @@
 import { expect, it } from "vitest";
 import { userError } from "./userError";
 
+it("reports actionable custom cursor validation errors without file paths", () => {
+  expect(userError("[cursor-exists] C:\\Private\\image.png")).toContain("Choose another name");
+  expect(userError("[cursor-name]")).toContain("48 characters");
+  expect(userError("[cursor-size]")).toContain("512");
+  expect(userError("[cursor-format]")).toContain("valid, undamaged PNG");
+});
+
 it("never shows diagnostic paths or arbitrary backend text in product errors", () => {
   const error = new Error("Access denied: C:\\Users\\private\\video.mp4; secret backend details");
   expect(userError(error)).toMatch(/Select the file again/);

@@ -2,18 +2,21 @@ import { TRANSITION_EFFECTS } from "../../../lib/transitions";
 import { Section, SelectRow, CheckRow } from "./PanelControls";
 import ScreenTiltTools from "./ScreenTiltTools";
 import CameraAnimation from "./CameraAnimation";
+import CustomCursorImport from "./CustomCursorImport";
 import BackgroundImages from "./BackgroundImages";
 
 import ColorStudio from "./ColorStudio";
 import SequenceLibrary from "./SequenceLibrary";
 import { beginMediaDrag } from "../../../lib/mediaDrag";
+import { MASK_EFFECTS, maskDefaults, maskSupportsCameraFocus } from "../../../lib/maskEffects";
+import MediaPreview from "./MediaPreview";
 import type { ColorComparison } from "../../../lib/colorGrade";
 import type { ColorGrade } from "../../../lib/colorGrade";
 import "./Animation.css";
 import { userError } from "../../../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -22,7 +25,7 @@ import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, M
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
-import { preloadImageAsset } from "../../../lib/canvasDraw";
+import { assetSrc, preloadImageAsset } from "../../../lib/canvasDraw";
 import { getTranscriptionEnvironment, transcribeTrack, updateCaptionTiming, type TranscriptionEnvironment, type TranscriptionLanguage, type TranscriptionModel } from "../../../lib/captions";
 import type { SidebarToolTab } from "../Editor";
 import Slider, { ColorInput } from "../../shared/Slider";
@@ -612,10 +615,7 @@ export default function Panels({
     const timing = layerTiming();
     return {
       id: genId(), type: "mask", ...timing, x: 0.32, y: 0.28, w: 0.36, h: 0.34,
-      mask, intensity: mask === "blur" ? 12 : mask === "magnifier" ? 2.4 : 1,
-      feather: mask === "magnifier" ? 12 : 8, shape: mask === "magnifier" ? "rectangle" : "ellipse",
-      opacity: 1, focusCamera: mask === "spotlight", focusStrength: .82,
-      transitionDuration: .55, exitTransitionDuration: .65, transitionCurve: "smoother",
+      mask, intensity: 1, ...maskDefaults(mask),
     };
   };
 
@@ -706,9 +706,7 @@ export default function Panels({
                 }}
               >
                 <div className={`media-asset-preview ${asset.kind}`}>
-                  {asset.kind === "image" && <img src={convertFileSrc(asset.path)} alt="" draggable={false} />}
-                  {asset.kind === "video" && <video src={convertFileSrc(asset.path)} muted playsInline preload="metadata" draggable={false} onLoadedMetadata={(event) => { event.currentTarget.currentTime = Math.min(1, event.currentTarget.duration * .08); }} onPointerEnter={(event) => { void event.currentTarget.play().catch(() => undefined); }} onPointerLeave={(event) => event.currentTarget.pause()} />}
-                  {asset.kind === "audio" && <div className="media-audio-art"><Music2 size={23} /> <span>{Array.from({ length: 13 }, (_, bar) => <i key={bar} />)}</span></div>}
+                  <MediaPreview path={asset.path} kind={asset.kind} name={asset.name} />
                   <div className="media-card-actions">
                     {asset.kind === "audio" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
                     {asset.kind === "image" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><ImagePlus size={14} /></button>}
@@ -839,10 +837,16 @@ export default function Panels({
                   aria-label={`${pack.label} cursor`}
                   data-tooltip={pack.label}
                 >
-                  <div className="cursor-pack-thumb"><img src={pack.pointer_url} alt={pack.label} draggable={false} /></div>
+                  <div className="cursor-pack-thumb"><img src={assetSrc(pack.pointer_url)} alt={pack.label} draggable={false} /></div>
+                  {pack.name.startsWith("custom-") && <span className="custom-cursor-label">{pack.label}</span>}
                 </button>
               ))}
             </div>
+            <CustomCursorImport onImported={pack => {
+              setCursorPacks(current => [...current.filter(p => p.name !== pack.name), pack].sort((a, b) => a.label.localeCompare(b.label)));
+              setCursorPacksError("");
+              selectPack(pack);
+            }} />
             {cursorPacksError && <p className="cursor-pack-error">{cursorPacksError}</p>}
 
             {!config.cursorStyle.pack && (
@@ -872,6 +876,12 @@ export default function Panels({
             <CheckRow label="Click Sound" checked={config.cursorStyle.clickSound} onChange={(v) => updateCursor({ clickSound: v })} />
             <CheckRow label="Hide When Idle" checked={config.cursorStyle.hideWhenIdle} onChange={(v) => updateCursor({ hideWhenIdle: v })} />
           </Section>
+          {config.cursorStyle.pack?.id.startsWith("custom-") && <Section title="Cursor alignment">
+            {([ ["x", "Tip horizontal"], ["y", "Tip vertical"] ] as const).map(([axis, label]) => <Slider key={axis} label={label} value={packHotspotOrDefault(config.cursorStyle.pack!.id)[axis]} min={0} max={100} step={1} unit="%" onChange={value => {
+              const id = config.cursorStyle.pack!.id;
+              onConfigChange({ ...config, cursorHotspots: { ...config.cursorHotspots, [id]: { ...packHotspotOrDefault(id), [axis]: value } } });
+            }} />)}
+          </Section>}
         </div>
       )}
 
@@ -1007,6 +1017,9 @@ export default function Panels({
                 { mask: "spotlight" as const, label: "Spotlight", icon: <ScanSearch size={18} /> },
                 { mask: "blur" as const, label: "Blur", icon: <Blend size={18} /> },
                 { mask: "magnifier" as const, label: "Magnifier", icon: <Search size={18} /> },
+                { mask: "pixelate" as const, label: "Mosaic", icon: <Images size={18} /> },
+                { mask: "redact" as const, label: "Redaction", icon: <Square size={18} /> },
+                { mask: "colorFocus" as const, label: "Color focus", icon: <Palette size={18} /> },
               ]).map(({ mask, label, icon }) => (
                 <button type="button" key={mask} className="annotation-card icon-choice" onClick={() => addLayer(makeMaskLayer(mask))} aria-label={`Add ${label}`} data-tooltip={label}>
                   <div className={`annotation-preview mask-preview ${mask}`}>
@@ -1054,17 +1067,24 @@ export default function Panels({
                 )}
                 {selectedLayer.type === "mask" && (
                   <>
-                    <SelectRow label="Effect" value={selectedLayer.mask} options={["spotlight", "blur", "magnifier"]} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"] })} />
-                    <Slider label="Intensity" value={selectedLayer.intensity} min={0.5} max={selectedLayer.mask === "blur" ? 40 : 4} step={0.1} onChange={(intensity) => updateSelectedLayer({ intensity })} />
-                    <SelectRow label="Mask Shape" value={selectedLayer.shape ?? "ellipse"} options={["ellipse", "rectangle"]} onChange={(shape) => updateSelectedLayer({ shape: shape as MaskLayer["shape"] })} />
+                    <SelectRow label="Effect" value={selectedLayer.mask} options={MASK_EFFECTS.map(m => m.value)} optionLabels={Object.fromEntries(MASK_EFFECTS.map(m => [m.value, m.label]))} onChange={(mask) => updateSelectedLayer({ mask: mask as MaskLayer["mask"], ...maskDefaults(mask as MaskLayer["mask"]) })} />
+                    {selectedLayer.mask === "redact" ? <ColorInput label="Cover color" value={selectedLayer.coverColor ?? "#151515"} onChange={coverColor => updateSelectedLayer({ coverColor })} /> :
+                      selectedLayer.mask === "colorFocus" ? <Slider label="Desaturation" value={selectedLayer.intensity * 100} min={0} max={100} step={1} unit="%" onChange={v => updateSelectedLayer({ intensity: v / 100 })} /> :
+                      <Slider label={selectedLayer.mask === "pixelate" ? "Block size" : "Intensity"} value={selectedLayer.intensity} min={selectedLayer.mask === "pixelate" ? 4 : .5} max={selectedLayer.mask === "pixelate" ? 64 : selectedLayer.mask === "blur" ? 40 : 4} step={selectedLayer.mask === "pixelate" ? 1 : .1} unit={selectedLayer.mask === "pixelate" ? "px" : ""} onChange={(intensity) => updateSelectedLayer({ intensity })} />}
+                    {selectedLayer.mask !== "redact" && <SelectRow label="Mask Shape" value={selectedLayer.shape ?? "ellipse"} options={["ellipse", "rectangle"]} onChange={(shape) => updateSelectedLayer({ shape: shape as MaskLayer["shape"] })} />}
                     <CheckRow label="Follow cursor" checked={selectedLayer.followCursor === true} onChange={(followCursor) => updateSelectedLayer({ followCursor })} />
-                    {selectedLayer.mask !== "blur" && <CheckRow label="Camera focus" checked={selectedLayer.focusCamera !== false} onChange={(focusCamera) => updateSelectedLayer({ focusCamera })} />}
-                    {selectedLayer.mask !== "blur" && selectedLayer.focusCamera !== false && <Slider label="Focus strength" value={Math.round((selectedLayer.focusStrength ?? .82) * 100)} min={20} max={100} step={5} unit="%" onChange={(focusStrength) => updateSelectedLayer({ focusStrength: focusStrength / 100 })} />}
+                    {maskSupportsCameraFocus(selectedLayer.mask) && <CheckRow label="Camera focus" checked={selectedLayer.focusCamera !== false} onChange={(focusCamera) => updateSelectedLayer({ focusCamera })} />}
+                    {maskSupportsCameraFocus(selectedLayer.mask) && selectedLayer.focusCamera !== false && <Slider label="Focus strength" value={Math.round((selectedLayer.focusStrength ?? .82) * 100)} min={20} max={100} step={5} unit="%" onChange={(focusStrength) => updateSelectedLayer({ focusStrength: focusStrength / 100 })} />}
+                    {selectedLayer.mask !== "redact" && <>
                     <SelectRow label="Motion curve" value={selectedLayer.transitionCurve ?? "smoother"} options={["linear", "ease-in", "ease-out", "ease-in-out", "smoother", "sine"]} optionLabels={{ linear: "Linear", "ease-in": "Ease In", "ease-out": "Ease Out", "ease-in-out": "Smooth", smoother: "Cinematic", sine: "Gentle Sine" }} onChange={(transitionCurve) => updateSelectedLayer({ transitionCurve: transitionCurve as MaskLayer["transitionCurve"] })} />
                     <Slider label="Smooth in" value={selectedLayer.transitionDuration ?? .55} min={.12} max={2.5} step={.05} unit="s" onChange={(transitionDuration) => updateSelectedLayer({ transitionDuration })} />
                     <Slider label="Smooth out" value={selectedLayer.exitTransitionDuration ?? selectedLayer.transitionDuration ?? .65} min={.12} max={2.5} step={.05} unit="s" onChange={(exitTransitionDuration) => updateSelectedLayer({ exitTransitionDuration })} />
+                    </>}
                     {selectedLayer.mask === "magnifier" && <><Slider label="Lens Border" value={selectedLayer.borderWidth ?? 3} min={0} max={12} step={1} unit="px" onChange={(borderWidth) => updateSelectedLayer({ borderWidth })} /><ColorInput label="Border Color" value={selectedLayer.borderColor ?? "#ffffff"} onChange={(borderColor) => updateSelectedLayer({ borderColor })} /></>}
-                    {selectedLayer.mask !== "blur" && <Slider label={selectedLayer.mask === "magnifier" ? "Lens Shadow" : "Edge Feather"} value={selectedLayer.feather ?? 8} min={0} max={30} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
+                    {selectedLayer.mask !== "redact" && <Slider label="Edge feather" value={selectedLayer.feather ?? 8} min={0} max={60} step={1} unit="px" onChange={(feather) => updateSelectedLayer({ feather })} />}
+                    <Slider label="Expansion" value={selectedLayer.expansion ?? 0} min={selectedLayer.mask === "redact" ? 0 : -40} max={80} step={1} unit="px" onChange={expansion => updateSelectedLayer({ expansion })} />
+                    {!["redact", "magnifier"].includes(selectedLayer.mask) && <CheckRow label="Invert area" checked={selectedLayer.inverted === true} onChange={inverted => updateSelectedLayer({ inverted })} />}
+                    <CheckRow label="Pin to footage" checked={selectedLayer.screenAnchored === true} onChange={screenAnchored => updateSelectedLayer({ screenAnchored })} />
                   </>
                 )}
                 {(selectedLayer.type === "image" || selectedLayer.type === "video") && (
@@ -1096,7 +1116,7 @@ export default function Panels({
                   <NumberField label="H" value={selectedLayer.h * 100} onChange={(value) => updateSelectedLayer({ h: Math.max(.04, Math.min(1 - selectedLayer.y, value / 100)) })} />
                 </div>
                 {selectedLayer.type !== "mask" && <Slider label="Rotation" value={selectedLayer.rotation ?? 0} min={0} max={360} step={1} unit="°" onChange={(rotation) => updateSelectedLayer({ rotation })} />}
-                <Slider label="Opacity" value={Math.round((selectedLayer.opacity ?? 1) * 100)} min={5} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ opacity: value / 100 })} />
+                {!(selectedLayer.type === "mask" && selectedLayer.mask === "redact") && <Slider label="Opacity" value={Math.round((selectedLayer.opacity ?? 1) * 100)} min={5} max={100} step={1} unit="%" onChange={(value) => updateSelectedLayer({ opacity: value / 100 })} />}
                 {selectedLayer.type !== "mask" && <div className="layer-icon-pills"><button className={selectedLayer.flipX ? "active" : ""} onClick={() => updateSelectedLayer({ flipX: !selectedLayer.flipX })} title="Flip horizontally"><FlipHorizontal2 size={17} /><span>Flip X</span></button><button className={selectedLayer.flipY ? "active" : ""} onClick={() => updateSelectedLayer({ flipY: !selectedLayer.flipY })} title="Flip vertically"><FlipVertical2 size={17} /><span>Flip Y</span></button></div>}
               </Section>
               {selectedLayer.type!=="mask"&&<Section title="Transitions">

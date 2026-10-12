@@ -2,7 +2,7 @@ import { applyLayerTransition, transitionProgress } from "./transitions";
 import { motionEase } from "./easing";
 export { motionEase } from "./easing";
 import { animatedLayer } from "./layerAnimation";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { CameraOverlayConfig, CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
@@ -196,7 +196,11 @@ export function drawImageLayer(
   }
 }
 
+const videoSources = new WeakMap<HTMLVideoElement, { source: string; disposed: boolean; attempted: boolean; repair?: Promise<void> }>();
+export const pendingVideoRepair = (video: HTMLVideoElement) => videoSources.get(video)?.repair;
 export function releaseVideo(video: HTMLVideoElement): void {
+  const state = videoSources.get(video); if (state) state.disposed = true;
+  video.onerror = null;
   video.pause();
   video.removeAttribute("src");
   video.load();
@@ -207,7 +211,7 @@ export function reconcileVideoLayers(layers: Layer[], time: number, playing: boo
   for (const [id, media] of cache) {
     const layer = videos.get(id);
     const active = layer && time >= layer.start - .02 && time <= layer.end + .02;
-    if (!layer || media.getAttribute("src") !== assetSrc(layer.path) || (!active && cache.size > 8)) {
+    if (!layer || (videoSources.get(media)?.source ?? media.getAttribute("src")) !== assetSrc(layer.path) || (!active && cache.size > 8)) {
       releaseVideo(media);
       cache.delete(id);
     } else if (!active || !playing) media.pause();
@@ -219,6 +223,18 @@ export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElemen
   const cached = cache.get(key);
   if (cached) return cached;
   const video = document.createElement("video");
+  const state = { source: src, disposed: false, attempted: false, repair: undefined as Promise<void> | undefined };
+  videoSources.set(video, state);
+  video.onerror = () => {
+    if (state.attempted || state.disposed || !("__TAURI_INTERNALS__" in window)) return;
+    state.attempted = true;
+    state.repair = invoke<string>("editor_cached_media", { path, kind: "compatible" }).then(file => {
+      if (state.disposed) return;
+      video.src = assetSrc(file); video.load();
+    }).finally(() => { state.repair = undefined; });
+    // Preview reports failure visually; export also awaits/rejects this promise.
+    void state.repair.catch(() => {});
+  };
   video.crossOrigin = "anonymous";
   video.src = src;
   video.muted = true;
@@ -241,7 +257,11 @@ export function drawVideoLayer(
   playbackRate = 1,
 ): void {
   const video = loadCachedVideo(layer.path, cache, layer.id);
-  if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+  if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) {
+    ctx.save(); ctx.fillStyle = "#1e1e24"; ctx.beginPath(); roundRect(ctx, x, y, w, h, 8); ctx.fill();
+    ctx.fillStyle = "#b7b7c0"; ctx.textAlign = "center"; ctx.font = `${Math.max(11, Math.min(16, w / 24))}px sans-serif`;
+    ctx.fillText(video.error && !pendingVideoRepair(video) ? "Media unavailable" : "Preparing media…", x + w / 2, y + h / 2); ctx.restore(); return;
+  }
   const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), (timeSeconds - layer.start) * (layer.sourceSpeed ?? 1) + (layer.sourceOffset ?? 0)));
   if (Math.abs(video.currentTime - localTime) > (playing ? .18 : .035) && !video.seeking) video.currentTime = localTime;
   video.playbackRate = Math.max(.0625,Math.min(16,playbackRate * (layer.sourceSpeed ?? 1)));
@@ -385,7 +405,9 @@ export function drawCursorImage(
   alpha = 1
 ) {
   if (!img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) return;
-  const scale = Math.max(0.1, size / 32);
+  // Imported PNGs can be any resolution: Cursor Size is the displayed size,
+  // not a multiplier of the source bitmap's arbitrary dimensions.
+  const scale = Math.max(1, Number.isFinite(size) ? size : 16) / Math.max(img.naturalWidth, img.naturalHeight);
   const drawW = img.naturalWidth * scale;
   const drawH = img.naturalHeight * scale;
   const hx = Math.min(100, Math.max(0, hotspot.x)) / 100;
@@ -626,6 +648,8 @@ export function drawShapeLayer(
 }
 
 const maskBuffers = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
+const pixelMaskBuffers = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
+const maskMattes = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
 
 export interface MaskCameraFocus {
   x: number;
@@ -634,27 +658,31 @@ export interface MaskCameraFocus {
   mix: number;
 }
 
-export function resolveLayerFade(layer: Pick<MaskLayer, "start" | "end" | "transitionDuration" | "exitTransitionDuration" | "transitionCurve">, timeSeconds: number): number {
-  const entrance = Math.max(.12, Math.min(2.5, layer.transitionDuration ?? .45));
-  const exit = Math.max(.12, Math.min(2.5, layer.exitTransitionDuration ?? entrance));
+export function resolveLayerFade(layer: Pick<MaskLayer, "start" | "end" | "transitionDuration" | "exitTransitionDuration" | "transitionCurve"> & { mask?: MaskLayer["mask"] }, timeSeconds: number): number {
+  if (layer.mask === "redact") return timeSeconds >= layer.start && timeSeconds <= layer.end ? 1 : 0;
+  if (timeSeconds < layer.start || timeSeconds > layer.end) return 0;
+  const length = Math.max(0, layer.end - layer.start);
+  const entrance = Math.max(0, Math.min(length / 2, layer.transitionDuration ?? .45));
+  const exit = Math.max(0, Math.min(length / 2, layer.exitTransitionDuration ?? entrance));
   const curve = layer.transitionCurve ?? "smoother";
-  const fadeIn = motionEase((timeSeconds - layer.start) / entrance, curve);
-  const fadeOut = motionEase((layer.end - timeSeconds) / exit, curve);
+  const fadeIn = entrance ? motionEase((timeSeconds - layer.start) / entrance, curve) : 1;
+  const fadeOut = exit ? motionEase((layer.end - timeSeconds) / exit, curve) : 1;
   return Math.max(0, Math.min(1, fadeIn, fadeOut));
 }
 
 /** Resolve the camera move and fade shared by preview and export masks. */
-export function resolveMaskCameraFocus(layers: MaskLayer[], timeSeconds: number): MaskCameraFocus | null {
-  const layer = layers.find((candidate) => timeSeconds >= candidate.start && timeSeconds <= candidate.end
-    && candidate.mask !== "blur" && candidate.focusCamera !== false);
-  if (!layer) return null;
+export function resolveMaskCameraFocus(layers: MaskLayer[], timeSeconds: number, crop = { x: 0, y: 0, w: 1, h: 1 }, cursor?: { x: number; y: number } | null): MaskCameraFocus | null {
+  const original = [...layers].reverse().find((candidate) => timeSeconds >= candidate.start && timeSeconds <= candidate.end
+    && ["spotlight", "magnifier", "colorFocus"].includes(candidate.mask) && candidate.focusCamera !== false);
+  if (!original) return null;
+  const layer = animatedLayer(original, timeSeconds) as MaskLayer;
   const mix = resolveLayerFade(layer, timeSeconds) * Math.max(0, Math.min(1, layer.focusStrength ?? 1));
   const targetScale = layer.mask === "magnifier"
     ? Math.max(1.18, Math.min(2.2, 1 + (layer.intensity - 1) * .42))
     : Math.max(1.18, Math.min(1.65, 1.18 + layer.intensity * .18));
   return {
-    x: Math.max(.05, Math.min(.95, layer.x + layer.w / 2)),
-    y: Math.max(.05, Math.min(.95, layer.y + layer.h / 2)),
+    x: Math.max(.05, Math.min(.95, ((layer.followCursor && cursor ? cursor.x : layer.x + layer.w / 2) - crop.x) / Math.max(.001, crop.w))),
+    y: Math.max(.05, Math.min(.95, ((layer.followCursor && cursor ? cursor.y : layer.y + layer.h / 2) - crop.y) / Math.max(.001, crop.h))),
     scale: targetScale,
     mix,
   };
@@ -685,49 +713,77 @@ export function drawMaskLayer(
   dest: { x: number; y: number; w: number; h: number },
   rect: { x: number; y: number; w: number; h: number }
 ) {
-  const { x, y, w, h } = rect;
-  if (w <= 0 || h <= 0 || dest.w <= 0 || dest.h <= 0) return;
+  if (![rect.x, rect.y, rect.w, rect.h, layer.intensity, dest.w, dest.h].every(Number.isFinite) || rect.w <= 0 || rect.h <= 0 || dest.w <= 0 || dest.h <= 0) return;
+  const expansion = Math.max(layer.mask === "redact" ? 0 : -Math.min(rect.w, rect.h) / 2 + .5, Math.min(200, layer.expansion ?? 0));
+  const x = rect.x - expansion, y = rect.y - expansion, w = rect.w + expansion * 2, h = rect.h + expansion * 2;
+  if (layer.mask === "redact") {
+    // No feather, alpha or entrance/exit fade that could expose covered pixels.
+    ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.filter = "none";
+    ctx.fillStyle = /^#[0-9a-f]{6}$/i.test(layer.coverColor ?? "") ? layer.coverColor! : "#151515";
+    ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(x + w) - Math.floor(x), Math.ceil(y + h) - Math.floor(y));
+    ctx.restore(); return;
+  }
   let buffer = maskBuffers.get(ctx);
   if (!buffer) { buffer = document.createElement("canvas"); maskBuffers.set(ctx, buffer); }
   if (buffer.width !== ctx.canvas.width || buffer.height !== ctx.canvas.height) { buffer.width = ctx.canvas.width; buffer.height = ctx.canvas.height; }
-  const g = buffer.getContext("2d")!;
+  const g = buffer.getContext("2d");
+  if (!g) return;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1; g.globalCompositeOperation = "source-over"; g.filter = "none";
+  g.imageSmoothingEnabled = true;
   g.clearRect(0, 0, buffer.width, buffer.height);
   const feather = Math.max(0, Math.min(layer.feather ?? 8, Math.min(w, h) / 4));
   const path = (target: CanvasRenderingContext2D) => {
     target.beginPath();
-    if (layer.shape === "rectangle") roundRect(target, x, y, w, h, Math.min(12, w / 2, h / 2));
+    if (layer.shape === "rectangle") target.rect(x, y, w, h);
     else target.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
   };
+  // A real alpha matte, rather than clipping first, gives ALL effects the same
+  // feather and inversion semantics. Sampling remains at the marked location.
+  let matte = maskMattes.get(ctx);
+  if (!matte) { matte = document.createElement("canvas"); maskMattes.set(ctx, matte); }
+  if (matte.width !== buffer.width) matte.width = buffer.width;
+  if (matte.height !== buffer.height) matte.height = buffer.height;
+  const m = matte.getContext("2d");
+  if (!m) return;
+  m.clearRect(0, 0, matte.width, matte.height);
+  m.save(); m.filter = feather ? `blur(${feather}px)` : "none";
+  m.fillStyle = "#fff"; path(m); m.fill(); m.restore();
+  const outside = (layer.mask === "spotlight" || layer.mask === "colorFocus") !== !!layer.inverted;
   g.save();
   if (layer.mask === "spotlight") {
-    g.fillStyle = `rgba(0,0,0,${Math.min(0.95, 0.3 + layer.intensity * 0.2)})`;
+    g.fillStyle = `rgba(0,0,0,${Math.max(0, Math.min(0.95, 0.3 + layer.intensity * 0.2))})`;
     g.fillRect(0, 0, buffer.width, buffer.height);
-    g.globalCompositeOperation = "destination-out";
-    g.filter = `blur(${feather}px)`;
-    g.fillStyle = "#000"; path(g); g.fill();
   } else if (layer.mask === "blur") {
-    g.save(); path(g); g.clip();
-      g.filter = `blur(${Math.max(1, layer.intensity)}px)`;
-      g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
-    g.restore();
-  } else {
-    // Make the lens unmistakable: soften the surrounding frame, cut a clean
-    // window, then sample a smaller source rectangle into that window.
-    g.save();
-    g.filter = `blur(${Math.max(3, feather * .72)}px)`;
+    g.filter = `blur(${Math.max(.1, layer.intensity)}px)`;
     g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
-    g.restore();
-    g.save();
-    g.globalCompositeOperation = "destination-out";
-    g.fillStyle = "#000"; path(g); g.fill();
-    g.restore();
-    g.save(); path(g); g.clip();
-    const sample = resolveMagnifierSample(source, dest, rect, layer.intensity);
+  } else if (layer.mask === "pixelate") {
+    let pixels = pixelMaskBuffers.get(ctx);
+    if (!pixels) { pixels = document.createElement("canvas"); pixelMaskBuffers.set(ctx, pixels); }
+    const blockSize = Math.max(.5, Math.min(256, layer.intensity));
+    const pw = Math.max(1, Math.ceil(dest.w / blockSize)), ph = Math.max(1, Math.ceil(dest.h / blockSize));
+    if (pixels.width !== pw) pixels.width = pw;
+    if (pixels.height !== ph) pixels.height = ph;
+    const p = pixels.getContext("2d")!;
+    p.drawImage(video, source.x, source.y, source.w, source.h, 0, 0, pixels.width, pixels.height);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(pixels, dest.x, dest.y, dest.w, dest.h);
+  } else if (layer.mask === "colorFocus") {
+    g.filter = `grayscale(${Math.max(0, Math.min(1, layer.intensity))})`;
+    g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
+  } else {
+    // A lens must not blur or replace anything outside its own area.
+    const sample = resolveMagnifierSample(source, dest, { x, y, w, h }, layer.intensity);
     g.drawImage(video, sample.x, sample.y, sample.w, sample.h, x, y, w, h);
-    g.restore();
+  }
+  g.filter = "none";
+  g.globalCompositeOperation = outside ? "destination-out" : "destination-in";
+  g.drawImage(matte, 0, 0);
+  g.globalCompositeOperation = "source-over";
+  if (layer.mask === "magnifier") {
     if ((layer.borderWidth ?? 3) > 0) {
       path(g); g.strokeStyle = layer.borderColor ?? "#ffffff"; g.lineWidth = layer.borderWidth ?? 3;
-      g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = Math.max(6, feather); g.stroke();
+      g.shadowColor = "rgba(0,0,0,.35)"; g.shadowBlur = Math.max(3, feather / 2); g.stroke();
     }
   }
   g.restore();

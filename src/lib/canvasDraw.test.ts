@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { drawCameraBubble, drawCaptionTrack, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
+import { drawCameraBubble, drawCaptionTrack, drawCursorImage, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
 import type { CaptionTrack } from "./types";
 import { DEFAULT_EDITOR_CONFIG } from "./types";
+
+it("normalizes custom cursor bitmap size and keeps the hotspot proportional", () => {
+  const calls: unknown[][] = [];
+  const ctx = { save: () => {}, restore: () => {}, globalAlpha: 1, drawImage: (...args: unknown[]) => calls.push(args) } as unknown as CanvasRenderingContext2D;
+  const image = { complete: true, naturalWidth: 512, naturalHeight: 256 } as HTMLImageElement;
+  drawCursorImage(ctx, image, 100, 100, 16, { x: 25, y: 50 });
+  expect(calls[0].slice(1)).toEqual([96, 96, 16, 8]);
+});
 
 it("isolates animated camera rotation from the rest of the canvas",()=>{
   let depth=0;const rotations:number[]=[];

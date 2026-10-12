@@ -875,3 +875,9 @@
 .focusee-sidebar .dd-trigger { height: 40px; color: #ececea; background: rgba(3,3,5,.52); border-color: rgba(255,255,255,.08); }
 .teleprompter-sidebar-btn { min-height: 40px; color: #dedede; background: rgba(3,3,5,.5); border-color: rgba(255,255,255,.09); border-radius: 10px; }
 .teleprompter-sidebar-btn:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.16); }
+.setup-field-icon.microphone-fluid { position: relative; overflow: hidden; }
+.microphone-fluid > svg:not(.microphone-fluid-water) { position: relative; z-index: 1; }
+.microphone-fluid-water { position: absolute; inset: 0; width: 100%; height: 100%; transform: translateY(calc(100% - var(--mic-level) * 85%)); transition: transform 180ms ease-out; pointer-events: none; }
+.microphone-fluid.active .microphone-fluid-water g { animation: microphone-ripple 1.3s linear infinite; }
+@keyframes microphone-ripple { to { transform: translateX(-40px); } }
+@media(prefers-reduced-motion:reduce) { .microphone-fluid.active .microphone-fluid-water g { animation: none; } .microphone-fluid-water { transition: none; } }

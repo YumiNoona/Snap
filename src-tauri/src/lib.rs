@@ -1,5 +1,6 @@
 mod access;
 mod audio;
+mod microphone_meter;
 mod camera;
 mod caption_install;
 mod capture;
@@ -11,6 +12,7 @@ mod mobile;
 mod process;
 mod recording_session;
 mod transcription;
+mod cursor_library;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -118,6 +120,8 @@ fn build_system_tray(app: &tauri::App) -> tauri::Result<()> {
                     return;
                 }
                 if let Some(editor) = app.get_webview_window("editor") {
+                    let _ = editor.unminimize();
+                    let _ = editor.maximize();
                     let _ = editor.show();
                     let _ = editor.set_focus();
                     if let Some(main) = app.get_webview_window("main") {
@@ -247,6 +251,8 @@ async fn open_editor_window(
             "[Snap] open_editor_window: reusing existing editor window"
         ));
         let _ = win.emit("editor-open", (video, log));
+        win.unminimize().map_err(|e| e.to_string())?;
+        win.maximize().map_err(|e| e.to_string())?;
         let _ = win.show();
         let _ = win.set_focus();
         if let Some(main) = app.get_webview_window("main") {
@@ -282,6 +288,7 @@ async fn open_editor_window(
         .title("Snap Editor")
         .inner_size(1360.0, 860.0)
         .min_inner_size(980.0, 640.0)
+        .maximized(true)
         .center()
         .decorations(false)
         .visible(false)
@@ -364,6 +371,8 @@ async fn set_editor_suspended_for_recording(
         window.hide().map_err(|error| error.to_string())?;
     } else {
         let _ = window.emit("recording-resuming", ());
+        window.unminimize().map_err(|error| error.to_string())?;
+        window.maximize().map_err(|error| error.to_string())?;
         window.show().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
     }
@@ -376,6 +385,8 @@ async fn set_editor_suspended_for_recording(
 #[tauri::command]
 fn window_ready(window: tauri::Window) -> Result<(), String> {
     if window.label() == "editor" {
+        window.unminimize().map_err(|e| e.to_string())?;
+        window.maximize().map_err(|e| e.to_string())?;
         if let Some(main) = window.app_handle().get_webview_window("main") {
             let _ = main.hide();
         }
@@ -1328,9 +1339,17 @@ fn pack_label(name: &str) -> String {
 /// Each subfolder is one selectable pack; `pointer.png` is preferred as the
 /// active state, otherwise the first PNG found is used.
 #[tauri::command]
-fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
-    let dir =
-        resolve_cursors_dir().ok_or_else(|| "public/Cursors directory not found".to_string())?;
+fn list_cursor_packs(app: tauri::AppHandle) -> std::result::Result<Vec<CursorPack>, String> {
+    let Some(dir) = resolve_cursors_dir() else {
+        // Public frontend assets are embedded in installed builds, not a public
+        // folder on disk. Keep those bundled packs available there as well.
+        let mut packs: Vec<_> = ["Bee", "Boo", "Dorito", "Hornet", "Knight"].into_iter().map(|name| {
+            let url = format!("/Cursors/{name}/Cursor.png");
+            CursorPack { name: name.into(), label: pack_label(name), pointer_path: url.clone(), pointer_url: url.clone(), states: vec![CursorPackState { name: "Cursor.png".into(), path: url.clone(), url }] }
+        }).collect();
+        packs.extend(cursor_library::list(&app)?);
+        return Ok(packs);
+    };
     let mut packs = Vec::new();
 
     for entry in
@@ -1392,6 +1411,7 @@ fn list_cursor_packs() -> std::result::Result<Vec<CursorPack>, String> {
         });
     }
 
+    packs.extend(cursor_library::list(&app)?);
     packs.sort_by_key(|a| a.label.to_lowercase());
     Ok(packs)
 }
@@ -1905,6 +1925,7 @@ pub fn run() {
         .manage(EditorPaths(Mutex::new(None)))
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
         .setup(|app| {
+            cursor_library::grant_scope(app.handle())?;
             build_system_tray(app)?;
             Ok(())
         })
@@ -1930,6 +1951,7 @@ pub fn run() {
             capture::recommend_recording_options,
             capture::install_ffmpeg,
             audio::enumerate_audio_devices,
+            microphone_meter::microphone_preview_level,
             enumerate_video_devices,
             audio::set_microphone_muted,
             audio::audio_waveform,
@@ -2007,6 +2029,7 @@ pub fn run() {
             resolve_recording_log_path,
             organize_recording_data,
             list_cursor_packs,
+            cursor_library::import_custom_cursor,
             list_wallpaper_images,
             open_explorer,
         ])

@@ -1,4 +1,5 @@
 import type { AudioTrack, Layer } from "./types";
+import { maskLabel } from "./maskEffects";
 
 /** Imported video audio follows its layer until the audio is edited independently. */
 export function resolveMediaAudioTracks(
@@ -55,7 +56,7 @@ export function projectMediaLayers(
 export function mediaLayerName(layer: Layer): string {
   return layer.type === "image" || layer.type === "video"
     ? layer.path.split(/[\\/]/).pop() || "Media"
-    : layer.type;
+    : layer.type === "mask" ? maskLabel(layer.mask) : layer.type;
 }
 
 /** Splitting an imported video retains its source offset and relative animation timing. */
@@ -73,12 +74,13 @@ export function splitMediaLayer(
     return [layer];
   const offset = time - layer.start;
   return [
-    { ...layer, end: time, exitTransition: undefined },
+    { ...layer, end: time, exitTransition: undefined, ...(layer.type === "mask" ? { exitTransitionDuration: 0 } : {}) },
     {
       ...layer,
       id: `${layer.type}-${crypto.randomUUID()}`,
       start: time,
       transition: undefined,
+      ...(layer.type === "mask" ? { transitionDuration: 0 } : {}),
       ...(layer.type === "video"
         ? {
             sourceOffset:

@@ -1,6 +1,10 @@
 /** Product text must never interpolate backend diagnostics or local paths. */
 export function userError(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (text.includes("[cursor-name]")) return "Enter a cursor name between 1 and 48 characters.";
+  if (text.includes("[cursor-exists]")) return "A custom cursor already uses this name. Choose another name.";
+  if (text.includes("[cursor-size]")) return "Use a static PNG up to 512 × 512 pixels and smaller than 2 MB.";
+  if (text.includes("[cursor-format]")) return "Choose a valid, undamaged PNG cursor image.";
   if (text.includes("[capture-protected]")) return "Windows excludes this window from recording. Capture protection must be turned off in the app or utility applying it before Snap can record this window.";
   if (text.includes("[gpu-scaling]")) return "GPU resizing could not start. Choose Manual → Native resolution in recording settings and try again.";
   if (text.includes("[capture-start]")) return "The selected screen or window could not start capture. Restore the window, reselect the target, and try again. For full-screen games, use Full Screen capture.";

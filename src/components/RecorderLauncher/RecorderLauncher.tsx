@@ -12,7 +12,6 @@ import {
   Minus,
   X,
   Folder,
-  Mic,
   Volume2,
   FileText,
   Search,
@@ -27,6 +26,7 @@ import {
 import RegionSelector from "./RegionSelector";
 import DeviceView from "./DeviceView";
 import Dropdown from "../shared/Dropdown";
+import MicrophoneFluid from "./MicrophoneFluid";
 import DonateButton from "../shared/DonateButton";
 import { AUTOMATIC_PROFILE_VERSION, type AppSettings, readAppSettings, writeAppSettings } from "../../lib/appSettings";
 import { recordingDataPaths } from "../../lib/recordingPaths";
@@ -916,7 +916,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           <div className="setup-field" aria-label="Camera"><span className="setup-field-icon" title="Camera"><Video size={18} /></span><Dropdown value={selectedCamera} onChange={setSelectedCamera} options={[{ value: "disabled", label: "Camera off · lowest load" }, ...cameraDevices.map((camera) => ({ value: camera.id, label: camera.name }))]} /></div>
 
           {/* Microphone Dropdown */}
-          <div className="setup-field" aria-label="Microphone"><span className="setup-field-icon" title="Microphone"><Mic size={18} /></span><Dropdown value={selectedMic} onChange={setSelectedMic} options={[{ value: "disabled", label: "Microphone off" }, ...microphones.map((microphone) => ({ value: microphone.id, label: microphone.name }))]} /></div>
+          <div className="setup-field" aria-label="Microphone"><MicrophoneFluid device={selectedMic} enabled={!recording && !startingRef.current && activeView === "launcher"} /><Dropdown value={selectedMic} onChange={setSelectedMic} options={[{ value: "disabled", label: "Microphone off" }, ...microphones.map((microphone) => ({ value: microphone.id, label: microphone.name }))]} /></div>
 
           {/* Speaker Dropdown */}
           <div className="setup-field" aria-label="Desktop audio"><span className="setup-field-icon" title="Desktop audio"><Volume2 size={18} /></span><Dropdown value={selectedSpeaker} onChange={setSelectedSpeaker} options={[{ value: "disabled", label: "Desktop audio off" }, ...speakers.map((speaker) => ({ value: speaker.id, label: speaker.name }))]} /></div>

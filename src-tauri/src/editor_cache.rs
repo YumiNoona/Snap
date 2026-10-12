@@ -122,7 +122,7 @@ pub async fn editor_cached_media(
     let generation = GENERATION.load(Ordering::Relaxed);
     let source = PathBuf::from(path);
     access::require(&app, &source)?;
-    if !["proxy", "thumbnails", "voice"].contains(&kind.as_str()) || !source.is_file() {
+    if !["proxy", "compatible", "thumbnails", "poster", "voice"].contains(&kind.as_str()) || !source.is_file() {
         return Err("This preview media request is not supported".into());
     }
     tauri::async_runtime::spawn_blocking(move|| {
@@ -134,16 +134,24 @@ pub async fn editor_cached_media(
         let cache=app.path().app_cache_dir().map_err(|e|e.to_string())?.join("editor-media");std::fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
         let voice_filter=voice.as_ref().map(voice_filter).transpose()?;
         voice_filter.hash(&mut hasher);
-        let extension=if kind=="proxy" {"mp4"} else if kind=="voice" {"wav"} else {"jpg"};
+        let extension=if kind=="proxy" || kind=="compatible" {"mp4"} else if kind=="voice" {"wav"} else {"jpg"};
         let output=cache.join(format!("{}-{:016x}.{extension}",kind,hasher.finish()));
         if !output.is_file() {
             let temporary=output.with_extension(format!("part.{extension}"));
             let mut command=background_command("ffmpeg");
             command.args(["-y","-v","error","-threads","2","-i"]).arg(&source);
             if kind=="proxy" {command.args(["-map","0:v:0","-map","0:a:0?","-c:a","aac","-b:a","128k","-vf","scale='min(960,iw)':-2","-c:v","libx264","-preset","veryfast","-crf","24","-pix_fmt","yuv420p","-threads","2","-movflags","+faststart"]);}
-            else if kind=="voice" {
+            else if kind=="compatible" {
+                // Full-resolution compatibility media, not the low-resolution
+                // preview proxy. Shared by imported-video preview and export.
+                command.args(["-map","0:v:0","-an","-c:v","libx264","-preset","veryfast","-crf","18","-pix_fmt","yuv420p","-threads","2","-movflags","+faststart"]);
+            } else if kind=="voice" {
                 let filter=voice_filter.as_ref().ok_or("Voice settings are missing")?;
                 command.args(["-vn","-map","0:a:0","-af"]).arg(filter).args(["-ar","48000","-c:a","pcm_s16le"]);
+            } else if kind=="poster" {
+                // Decode only a short opening batch, not an entire timeline atlas.
+                // FFmpeg supports containers/codecs the webview cannot display.
+                command.args(["-an", "-vf", "thumbnail=12,scale='min(640,iw)':-2", "-frames:v", "1", "-q:v", "3"]);
             } else {
                 let probe=probe_output(background_command("ffprobe").args(["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1"]).arg(&source),generation)?;
                 let duration=String::from_utf8_lossy(&probe).trim().parse::<f64>().ok().filter(|d|d.is_finite()&&*d>0.0).ok_or("Thumbnail duration is unavailable")?;
@@ -151,7 +159,7 @@ pub async fn editor_cached_media(
             }
             let mut child=command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).arg(&temporary).spawn().map_err(|_|"Unable to start preview preparation. Install FFmpeg in recorder settings.")?;
             let started=Instant::now();
-            let deadline=Duration::from_secs(if kind=="proxy" || kind=="voice" {3600} else {120});
+            let deadline=Duration::from_secs(if kind=="proxy" || kind=="compatible" || kind=="voice" {3600} else {120});
             let completed=loop {
                 if started.elapsed()>=deadline {let _=child.kill();let _=child.wait();break Err("Preview preparation timed out. Continue using the original video.".to_string());}
                 if recording_active()||generation!=GENERATION.load(Ordering::Relaxed) {let _=child.kill();let _=child.wait();break Err("Preview preparation stopped".to_string());}

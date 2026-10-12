@@ -27,6 +27,7 @@ import { filmstripFrames } from "../../../lib/timelineFilmstrip";
 import GraphEditor, { type GraphTrack } from "../GraphEditor";
 import { DEFAULT_SCREEN_TILT } from "../../../lib/screenTilt";
 import type { MediaDragDetail } from "../../../lib/mediaDrag";
+import { mediaDropPosition } from "../../../lib/mediaDrop";
 
 type SelectedAnimationKey = { kind: "tilt" | "camera" | "layer"; id: string; clipId?: string; time: number };
 
@@ -260,7 +261,7 @@ export default function Timeline({
   const [mediaDropTime,setMediaDropTime]=useState(0);
   const [mediaDropLabel,setMediaDropLabel]=useState("Media");
   const [mediaDropLength,setMediaDropLength]=useState(5);
-  useEffect(()=>{const update=(event:Event)=>{const d=(event as CustomEvent<MediaDragDetail>).detail;const over=d.phase==="move"&&!!document.elementFromPoint(d.x,d.y)?.closest(".ss-timeline-container");setMediaDragOver(over);if(!over)return;const r=timeAreaRef.current?.getBoundingClientRect();if(!r)return;const raw=Math.max(0,Math.min(timelineDuration,(d.x-r.left)/r.width*timelineDuration));const points=clips.reduce<number[]>((p,c)=>[...p,p[p.length-1]+clipDuration(c)],[0]);const snap=snapping?points.find(p=>Math.abs(p-raw)<8/r.width*timelineDuration):undefined;setMediaDropTime(Math.round((snap??raw)*frameRate)/frameRate);setMediaDropLabel(d.items.length>1?`${d.items.length} items`:d.items[0]?.name??"Media");setMediaDropLength(d.items.reduce((sum,a)=>sum+(a.duration??5),0));};window.addEventListener("snap-media-drag",update);return()=>window.removeEventListener("snap-media-drag",update);},[timelineDuration,frameRate,clips,snapping]);
+  useEffect(()=>{const update=(event:Event)=>{const d=(event as CustomEvent<MediaDragDetail>).detail;const over=d.phase==="move"&&!!document.elementFromPoint(d.x,d.y)?.closest(".ss-timeline-container");setMediaDragOver(over);if(!over)return;const r=timeAreaRef.current?.getBoundingClientRect();if(!r)return;setMediaDropTime(mediaDropPosition(d.x,r,timelineDuration,clips,timeView==="source",snapping,frameRate).display);setMediaDropLabel(d.items.length>1?`${d.items.length} items`:d.items[0]?.name??"Media");setMediaDropLength(d.items.reduce((sum,a)=>sum+(a.duration??5),0));};window.addEventListener("snap-media-drag",update);return()=>window.removeEventListener("snap-media-drag",update);},[timelineDuration,frameRate,clips,snapping,timeView]);
   const [contextMenu, setContextMenu] = useState<
     | { kind:"animation-key";x:number;y:number;animationKind:"tilt"|"camera"|"layer";id:string;time:number;sourceTime:number;clipId?:string;label:string }
     | { kind:"animation-track"; x:number; y:number; animationKind:"tilt"|"camera"; label:string }
@@ -399,7 +400,7 @@ export default function Timeline({
     () => (["text", "shape", "mask", "image", "video"] as Layer["type"][]).filter((type) => layers.some((layer) => layer.type === type)),
     [layers]
   );
-  const layerRows = visibleLayerTypes.flatMap<{id:string;type:Layer["type"];name:string;items:Layer[]}>(type => type === "image" || type === "video" ? layers.filter(l => l.type === type).map(layer => ({ id: layer.id, type, name: mediaLayerName(layer), items: [layer] })) : [{ id: type, type, name: type.charAt(0).toUpperCase() + type.slice(1), items: layers.filter(l => l.type === type) }]);
+  const layerRows = visibleLayerTypes.flatMap<{id:string;type:Layer["type"];name:string;items:Layer[]}>(type => type === "image" || type === "video" || type === "mask" ? layers.filter(l => l.type === type).map(layer => ({ id: layer.id, type, name: mediaLayerName(layer), items: [layer] })) : [{ id: type, type, name: type.charAt(0).toUpperCase() + type.slice(1), items: layers.filter(l => l.type === type) }]);
   const visibleCaptionTracks = [...new Map([...captionTracks,...clips.flatMap(c=>c.effects?.captions??[])].filter(track=>track.segments.length>0).map(track=>[track.id,track])).values()];
   const showActionTrack = config.actionOverlay.enabled && resolvedActionEvents.length > 0;
 
@@ -608,7 +609,9 @@ export default function Timeline({
       }
       visualStart = Math.round(visualStart * frameRate) / frameRate;
       visualEnd = Math.round(visualEnd * frameRate) / frameRate;
-      pending = { ...layer, start: visualStart, end: visualEnd, ...(layer.type === "video" && mode === "start" ? {sourceOffset: Math.max(0,(layer.sourceOffset??0)+visualStart-initialStart)} : {}) };
+      pending = { ...layer, start: visualStart, end: visualEnd,
+        ...(mode === "start" ? { animation: layer.animation?.map(key => ({ ...key, time: key.time - (visualStart - initialStart) })) } : {}),
+        ...(layer.type === "video" && mode === "start" ? {sourceOffset: Math.max(0,(layer.sourceOffset??0)+(visualStart-initialStart)*(layer.sourceSpeed??1))} : {}) };
       if (!animationFrame) animationFrame = requestAnimationFrame(paint);
     };
     const cleanup = () => {
@@ -1567,11 +1570,12 @@ export default function Timeline({
             <div key={id} className={`ss-track-row layer-track ${type}-track`}>
               <div className="layer-connecting-line" />
               {layerInstances(items).map(({item:layer,clipId,start:visibleStart,end:visibleEnd}) => {
-                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : layer.type === "mask" ? layer.mask : layer.path.split(/[\\/]/).pop() || "Image";
+                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : mediaLayerName(layer);
                 return (
                   <div
                     key={`${layer.id}-${clipId}`}
                     className={`layer-clip-bar ${type} ${editTool === "razor" ? "razor" : ""} ${selectedLayerId === layer.id ? "selected" : ""}`}
+                    data-mask={layer.type === "mask" ? layer.mask : undefined}
                     style={{ left: x(visibleStart,clipId), width: Math.max(2, w(visibleEnd-visibleStart,visibleStart,clipId)) }}
                     onPointerDown={(event) => beginLayerEdit(event, layer, "move",clipId)}
                     onClick={(event) => { event.stopPropagation(); if(editTool==="razor" && onLayerSplit && !config.lockedTracks?.includes("annotations")){const rect=event.currentTarget.getBoundingClientRect();const at=visibleStart+(event.clientX-rect.left)/rect.width*(visibleEnd-visibleStart);const parts=splitMediaLayer(layer,at,frameRate);if(parts.length>1)onLayerSplit(layer,parts);} }}

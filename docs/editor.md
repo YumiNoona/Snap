@@ -3,7 +3,70 @@
 Snap opens the heavier editor after recording. Recording itself remains native;
 the preview, media processing and export do not run during capture.
 
-## Color & Film
+## Opening the editor
+
+The editor opens maximized for new recordings, imported media, existing projects
+and tray reopening. Users can still restore the window while editing.
+
+## Custom cursors
+
+Choose **Add custom cursor**, select a static PNG, enter a name and save. Snap
+copies it into `%LOCALAPPDATA%/com.ringale.snap/cursors/<name-id>/`, alongside a
+small `cursor.json` containing the display name. Cursor images survive moving
+or deleting the original download. PNGs are decoded before import and limited
+to 512 × 512 pixels and 2 MB. Imported names must be unique within the custom
+library. Horizontal/vertical tip controls align the image with recorded clicks.
+
+## Masks and preview player
+
+In addition to Spotlight, Blur and Magnifier, masks include **Mosaic** for block
+pixelation, **Redaction** for an opaque rectangular cover, and **Color focus** to
+desaturate the surrounding picture while retaining the selected area's color.
+They use the shared preview/export renderer and retain timeline positioning.
+Mask rendering, cursor following, selection handles and hit testing share the
+same source-space pose. New masks pin to footage through crop and pan/zoom;
+turn off **Pin to footage** for a fixed frame-space area. Camera focus is an
+explicit choice, not an automatic relocation of the mask. The lens affects
+only its own area. Feather, expansion and applicable inversion use real alpha
+mattes; masks are restricted to the video frame rather than the background.
+Each mask has its own timeline row. Splitting suppresses fades at the cut,
+start trimming preserves animation poses, and stacked effects sample the prior
+result. Sequence-timed masks can cover imported media in timeline gaps.
+These are rectangle/ellipse effects with manual pose animation and cursor
+following, not arbitrary Bezier paths or image-based object tracking.
+Redaction intentionally ignores opacity and does not fade or feather. Review
+its timing and coverage before sharing; Mosaic is not guaranteed anonymization.
+
+The maximized preview uses a transparent glass player with elapsed/remaining time,
+icon-only five-second skip controls and volume. CC toggles preview captions only
+and is disabled without visible caption segments; it never changes export
+caption settings. Drag the dock background/handle to reposition it, or focus
+the handle and use arrow keys (Shift for bigger steps, Home to reset). It stays
+inside the preview after resizing. Expansion/restoration animates where the
+webview supports view transitions; reduced motion skips the animation.
+Controls stay visible while paused or
+focused, and hide only during inactive playback. Color & Film sits above Audio
+in the tool rail.
+
+## Media previews and input levels
+
+Video library cards use bounded, cached FFmpeg posters, including containers
+the webview cannot decode. Failed/missing files show a neutral retry state
+instead of a broken image. Unsupported imported-video codecs are converted
+on demand into full-resolution H.264 compatibility media shared by preview
+and export; the original file and project reference are retained. This is a
+CRF-18 derivative, not a lossless copy. Preparation is editor-only and cancellable.
+Drag cards with a visual ghost to the timeline,
+or onto the preview to insert at the playhead. The guide and committed drop
+share clock conversion and frame snapping. Escape, pointer cancellation and
+loss of focus cancel the drag.
+
+Recorder setup's mic square responds to measured native microphone amplitude.
+The meter saves no audio, has a two-second lease, and stops while recording or
+while the launcher is hidden/unfocused. Muted, unavailable or disabled inputs
+remain still. Reduced motion keeps the level response but removes ripples.
+
+## Color & Film controls
 
 All sections remain expanded. The panel starts with Film looks and intensity,
 then exposure, contrast, saturation, warmth and vignette. Apply to, original

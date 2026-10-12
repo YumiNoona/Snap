@@ -1,4 +1,5 @@
 import { projectMediaLayers } from "./mediaTimeline";
+import { maskPose } from "./maskEffects";
 import { FootageTransitions } from "./transitions";
 import { drawGapLayers } from "./gapLayers";
 import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "./screenTilt";
@@ -19,10 +20,20 @@ import {
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
   cursorIdleOpacity, drawVisualLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
-  drawCameraBubble, reconcileVideoLayers,
+  drawCameraBubble, reconcileVideoLayers, pendingVideoRepair,
 } from "./canvasDraw";
 
 async function seekOverlay(media: HTMLVideoElement, time: number, signal?: AbortSignal): Promise<void> {
+  if (media.error && !pendingVideoRepair(media)) throw new Error("Could not decode imported video");
+  const repair = pendingVideoRepair(media);
+  if (repair) {
+    await new Promise<void>((resolve, reject) => {
+      const aborted = () => reject(new DOMException("Cancelled", "AbortError"));
+      signal?.addEventListener("abort", aborted, { once: true });
+      if (signal?.aborted) aborted();
+      void repair.then(resolve, reject).finally(() => signal?.removeEventListener("abort", aborted));
+    });
+  }
   // WebView2 must keep a painted decoder for frame callbacks to arrive.
   if (!media.isConnected) {
     Object.assign(media.style, { position: "fixed", right: "0px", bottom: "0px", width: "2px", height: "2px", opacity: "0.001", pointerEvents: "none", zIndex: "2147483646" });
@@ -31,7 +42,11 @@ async function seekOverlay(media: HTMLVideoElement, time: number, signal?: Abort
   if (media.readyState < 1) await new Promise<void>((resolve, reject) => {
     const cleanup = () => { clearTimeout(timer); media.removeEventListener("loadedmetadata", ready); media.removeEventListener("error", failed); signal?.removeEventListener("abort", aborted); };
     const ready = () => { cleanup(); resolve(); };
-    const failed = () => { cleanup(); reject(new Error("Could not decode imported video")); };
+    const failed = () => {
+      cleanup();
+      if (pendingVideoRepair(media)) void seekOverlay(media,time,signal).then(resolve,reject);
+      else reject(new Error("Could not decode imported video"));
+    };
     const aborted = () => { cleanup(); reject(new DOMException("Cancelled", "AbortError")); };
     const timer = setTimeout(() => { cleanup(); reject(new Error("Imported video metadata timed out")); }, 15000);
     media.addEventListener("loadedmetadata", ready); media.addEventListener("error", failed); signal?.addEventListener("abort", aborted, { once: true });
@@ -309,8 +324,9 @@ export async function createExportCompositor(
     const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
     const zoom = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
-    const maskLayers = config.layers.filter((layer): layer is MaskLayer => layer.type === "mask");
-    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime);
+    const maskLayers = projectMediaLayers(config.layers, video.currentTime, sequenceTime(footageClips, video.currentTime, effectClipId)).filter((layer): layer is MaskLayer => layer.type === "mask");
+    const focusCursor = getCursorAt(ts), focusPoint = focusCursor ? screenToVideo(focusCursor.x, focusCursor.y, vw, vh) : null;
+    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime, config.crop ?? undefined, focusPoint ? { x: focusPoint.x / vw, y: focusPoint.y / vh } : null);
     const focusMix = maskFocus?.mix ?? 0;
     const zoomX = maskFocus ? zoom.x + (maskFocus.x - zoom.x) * focusMix : zoom.x;
     const zoomY = maskFocus ? zoom.y + (maskFocus.y - zoom.y) * focusMix : zoom.y;
@@ -489,7 +505,6 @@ export async function createExportCompositor(
 
     screenCtx.restore();
     finishScreenTilt(ctx,tiltPass);
-    if(screenOnly){frameConsumer?.();return;}
     transitions.draw(ctx,activeClip,video.currentTime,footageClips[footageClips.findIndex(clip=>clip.id===effectClipId)+1]);
 
     if (camera && cameraMedia) {
@@ -510,34 +525,44 @@ export async function createExportCompositor(
     // frame so their result matches Preview after pan/zoom and styling.
     const videoTs = video.currentTime;
     const timedLayers = projectMediaLayers(config.layers,videoTs,sequenceTime(footageClips,videoTs,effectClipId));
-    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
+    const cursor = getCursorAt(ts), point = cursor ? screenToVideo(cursor.x, cursor.y, vw, vh) : null;
+    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start && videoTs < layer.end).map(layer => layer.type === "mask" ? maskPose(layer, videoTs, cover, vw, vh, point) : anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
     reconcileVideoLayers(timedLayers, videoTs, !video.paused, layerVideoCache);
+    for (const layer of activeLayers) {
+      if (layer.type !== "image" && layer.type !== "video") continue;
+      const lx = offsetX + layer.x * videoW, ly = offsetY + layer.y * videoH, lw = layer.w * videoW, lh = layer.h * videoH;
+      ctx.save(); ctx.globalAlpha = layer.opacity ?? 1;
+      ctx.translate(lx + lw / 2, ly + lh / 2); ctx.rotate((layer.rotation ?? 0) * Math.PI / 180); ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1); ctx.translate(-lx - lw / 2, -ly - lh / 2);
+      drawVisualLayer(ctx, layer, videoTs, !video.paused, layerVideoCache, lx, ly, lw, lh, layer.timeSpace === "sequence" ? config.playbackRate || 1 : video.playbackRate); ctx.restore();
+    }
     if (maskSourceCtx && activeLayers.some((layer) => layer.type === "mask")) {
-      maskSourceCtx.clearRect(0, 0, outputW, outputH);
-      maskSourceCtx.drawImage(canvas, 0, 0);
       for (const layer of activeLayers) {
         if (layer.type !== "mask") continue;
-        const trackedCursor = layer.followCursor ? getCursorAt(ts) : null;
-        const trackedPoint = trackedCursor ? screenToVideo(trackedCursor.x, trackedCursor.y, vw, vh) : null;
-        const trackedX = trackedPoint ? Math.max(0, Math.min(1 - layer.w, trackedPoint.x / vw - layer.w / 2)) : layer.x;
-        const trackedY = trackedPoint ? Math.max(0, Math.min(1 - layer.h, trackedPoint.y / vh - layer.h / 2)) : layer.y;
+        maskSourceCtx.clearRect(0, 0, outputW, outputH);
+        maskSourceCtx.drawImage(canvas, 0, 0);
         const layerFade = resolveLayerFade(layer, videoTs);
-        const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
-        const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
-        const lx = offsetX + (trackedX + (.5 - layer.w / 2 - trackedX) * centerShift) * videoW;
-        const ly = offsetY + (trackedY + (.5 - layer.h / 2 - trackedY) * centerShift) * videoH;
+        const effectScale = videoW / Math.max(1, cover.w);
+        const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade,
+          intensity: ["blur", "pixelate"].includes(layer.mask) ? layer.intensity * effectScale : layer.intensity,
+          feather: (layer.feather ?? 8) * effectScale, expansion: (layer.expansion ?? 0) * effectScale,
+          borderWidth: (layer.borderWidth ?? 3) * effectScale };
+        const lx = offsetX + layer.x * videoW;
+        const ly = offsetY + layer.y * videoH;
         const lw = layer.w * videoW;
         const lh = layer.h * videoH;
+        ctx.save(); ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.clip();
         drawMaskLayer(
           ctx, effectLayer, maskSource,
           { x: 0, y: 0, w: outputW, h: outputH },
           { x: 0, y: 0, w: outputW, h: outputH },
           { x: lx, y: ly, w: lw, h: lh }
         );
+        ctx.restore();
       }
     }
+    if (screenOnly) { frameConsumer?.(); return; }
     for (const layer of activeLayers) {
-      if (layer.type === "mask") continue;
+      if (layer.type === "mask" || layer.type === "image" || layer.type === "video") continue;
       const lx = offsetX + layer.x * videoW;
       const ly = offsetY + layer.y * videoH;
       const lw = layer.w * videoW;

@@ -8,6 +8,7 @@ import { FootageTransitions } from "../../../lib/transitions";
 import { drawGapLayers } from "../../../lib/gapLayers";
 import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "../../../lib/screenTilt";
 import { animatedLayer, anchoredLayer } from "../../../lib/layerAnimation";
+import { maskPose } from "../../../lib/maskEffects";
 import { userError } from "../../../lib/userError";
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -624,8 +625,9 @@ export default function Preview({
     // Shared with the export renderer via lib/canvasDraw.resolveZoom so both
     // compute the exact same pan/zoom for a given timestamp.
     const zoomResult = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
-    const maskLayers = config.layers.filter((layer): layer is MaskLayer => layer.type === "mask");
-    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime);
+    const maskLayers = projectMediaLayers(config.layers, video.currentTime, config.videoClips?.length ? sequenceTime(config.videoClips, video.currentTime, activeClipId) : video.currentTime - config.trimStart).filter((layer): layer is MaskLayer => layer.type === "mask");
+    const focusCursor = getCursorAt(ts), focusPoint = focusCursor ? screenToVideo(focusCursor.x, focusCursor.y, vw, vh) : null;
+    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime, config.crop ?? undefined, focusPoint ? { x: focusPoint.x / vw, y: focusPoint.y / vh } : null);
     const focusMix = maskFocus?.mix ?? 0;
     const zoomX = maskFocus ? zoomResult.x + (maskFocus.x - zoomResult.x) * focusMix : zoomResult.x;
     const zoomY = maskFocus ? zoomResult.y + (maskFocus.y - zoomResult.y) * focusMix : zoomResult.y;
@@ -864,9 +866,19 @@ export default function Preview({
     // ── Timed annotation and mask layers ──────────────────────────────────
     const videoTs = video.currentTime;
     const timedLayers = projectMediaLayers(config.layers, videoTs, (config.videoClips?.length?sequenceTime(config.videoClips,videoTs,activeClipId):videoTs-config.trimStart));
-    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start - 0.02 && videoTs <= layer.end + 0.02).map(layer => anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
+    const cursor = getCursorAt(ts);
+    const cursorPoint = cursor ? screenToVideo(cursor.x, cursor.y, vw, vh) : null;
+    const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start && videoTs < layer.end).map(layer => layer.type === "mask" ? maskPose(layer, videoTs, cover, vw, vh, cursorPoint) : anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
     reconcileVideoLayers(timedLayers, videoTs, playing, layerVideoCacheRef.current);
-    const activeMasks = (simplified ? [] : activeLayers).filter((layer) => layer.type === "mask");
+    // Media is underneath masks; annotations stay legible above them.
+    for (const layer of activeLayers) {
+      if (layer.type !== "image" && layer.type !== "video") continue;
+      const lx = offsetX + layer.x * videoW, ly = offsetY + layer.y * videoH, lw = layer.w * videoW, lh = layer.h * videoH;
+      ctx.save(); ctx.globalAlpha = layer.opacity ?? 1;
+      ctx.translate(lx + lw / 2, ly + lh / 2); ctx.rotate((layer.rotation ?? 0) * Math.PI / 180); ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1); ctx.translate(-lx - lw / 2, -ly - lh / 2);
+      drawVisualLayer(ctx, layer, videoTs, playing, layerVideoCacheRef.current, lx, ly, lw, lh, layer.timeSpace === "sequence" ? config.playbackRate || 1 : video.playbackRate); ctx.restore();
+    }
+    const activeMasks = activeLayers.filter((layer) => layer.type === "mask");
 
     // Masks sample the already-composited preview, not the raw video. This
     // keeps blur and magnification aligned with crop, pan/zoom, and styling.
@@ -877,34 +889,35 @@ export default function Preview({
       if (maskSource.height !== ch) maskSource.height = ch;
       const maskCtx = maskSource.getContext("2d");
       if (maskCtx) {
-        maskCtx.clearRect(0, 0, cw, ch);
-        maskCtx.drawImage(canvas, 0, 0);
         for (const layer of activeMasks) {
           if (layer.type !== "mask") continue;
-          const trackedCursor = layer.followCursor ? getCursorAt(ts) : null;
-          const trackedPoint = trackedCursor ? screenToVideo(trackedCursor.x, trackedCursor.y, vw, vh) : null;
-          const trackedX = trackedPoint ? Math.max(0, Math.min(1 - layer.w, trackedPoint.x / vw - layer.w / 2)) : layer.x;
-          const trackedY = trackedPoint ? Math.max(0, Math.min(1 - layer.h, trackedPoint.y / vh - layer.h / 2)) : layer.y;
+          maskCtx.clearRect(0, 0, cw, ch);
+          maskCtx.drawImage(canvas, 0, 0);
           const layerFade = resolveLayerFade(layer, videoTs);
-          const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade };
-          const centerShift = layer.focusCamera !== false && layer.mask !== "blur" ? layerFade : 0;
-          const lx = offsetX + (trackedX + (.5 - layer.w / 2 - trackedX) * centerShift) * videoW;
-          const ly = offsetY + (trackedY + (.5 - layer.h / 2 - trackedY) * centerShift) * videoH;
+          const effectScale = videoW / Math.max(1, cover.w);
+          const effectLayer = { ...layer, opacity: (layer.opacity ?? 1) * layerFade,
+            intensity: ["blur", "pixelate"].includes(layer.mask) ? layer.intensity * effectScale : layer.intensity,
+            feather: (layer.feather ?? 8) * effectScale, expansion: (layer.expansion ?? 0) * effectScale,
+            borderWidth: (layer.borderWidth ?? 3) * effectScale };
+          const lx = offsetX + layer.x * videoW;
+          const ly = offsetY + layer.y * videoH;
           const lw = layer.w * videoW;
           const lh = layer.h * videoH;
+          ctx.save(); ctx.beginPath(); roundRect(ctx, offsetX, offsetY, videoW, videoH, clipR); ctx.clip();
           drawMaskLayer(
             ctx, effectLayer, maskSource,
             { x: 0, y: 0, w: cw, h: ch },
             { x: 0, y: 0, w: cw, h: ch },
             { x: lx, y: ly, w: lw, h: lh }
           );
+          ctx.restore();
         }
       }
     }
 
     // Text and shapes always stay legible above masks.
     for (const layer of activeLayers) {
-      if (layer.type === "mask") continue;
+      if (layer.type === "mask" || layer.type === "image" || layer.type === "video") continue;
 
       const lx = offsetX + layer.x * videoW;
       const ly = offsetY + layer.y * videoH;
@@ -950,6 +963,9 @@ export default function Preview({
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
         ctx.strokeRect(lx, ly, lw, lh);
+        if (layer.type === "mask" && layer.mask !== "redact" && layer.shape !== "rectangle") {
+          ctx.beginPath(); ctx.ellipse(cx, cy, lw / 2, lh / 2, 0, 0, Math.PI * 2); ctx.stroke();
+        }
 
         // Rotation is available for visual objects; masks stay axis-aligned so
         // their sampled pixels remain exact.
@@ -1157,7 +1173,9 @@ export default function Preview({
         const p = canvasToBacking(e.clientX, e.clientY);
         const g = geomRef.current;
         const time = videoRef.current?.currentTime ?? 0;
-        const active = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).filter((layer) => time >= layer.start - 0.02 && time <= layer.end + 0.02).map(layer=>anchoredLayer(animatedLayer(layer,time),sourceViewRef.current,videoRef.current?.videoWidth??1,videoRef.current?.videoHeight??1));
+        const video = videoRef.current, vw = video?.videoWidth ?? 1, vh = video?.videoHeight ?? 1;
+        const cursor = getCursorAt(time * 1000), point = cursor ? screenToVideo(cursor.x, cursor.y, vw, vh) : null;
+        const active = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).filter((layer) => time >= layer.start && time < layer.end).map(layer=>layer.type === "mask" ? maskPose(layer,time,sourceViewRef.current,vw,vh,point) : anchoredLayer(animatedLayer(layer,time),sourceViewRef.current,vw,vh));
         const selected = active.find((layer) => layer.id === selectedLayerId) ?? null;
         let target = selected;
         let handle: GizmoHandle | undefined;
@@ -1244,7 +1262,7 @@ export default function Preview({
           if (d.handle.includes("s")) bottom = Math.max(local.y, top + g.videoH * 0.04);
           left = Math.max(g.offsetX, left); top = Math.max(g.offsetY, top);
           right = Math.min(g.offsetX + g.videoW, right); bottom = Math.min(g.offsetY + g.videoH, bottom);
-          onLayerChange({
+          emitLayerChange({
             ...d.layer,
             x: (left - g.offsetX) / g.videoW,
             y: (top - g.offsetY) / g.videoH,
@@ -1256,7 +1274,10 @@ export default function Preview({
       }
       if (!cropMode && !zoomTargetMode && canvasRef.current) {
         const time = videoRef.current?.currentTime ?? 0;
-        const selected = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).find((layer) => layer.id === selectedLayerId && time >= layer.start - .02 && time <= layer.end + .02);
+        const original = projectMediaLayers(config.layers,time,gapTime??(config.videoClips?.length?sequenceTime(config.videoClips,time,activeClipId):time-config.trimStart)).find((layer) => layer.id === selectedLayerId && time >= layer.start && time < layer.end);
+        const video = videoRef.current, vw = video?.videoWidth ?? 1, vh = video?.videoHeight ?? 1;
+        const cursor = getCursorAt(time * 1000), point = cursor ? screenToVideo(cursor.x, cursor.y, vw, vh) : null;
+        const selected = original ? original.type === "mask" ? maskPose(original,time,sourceViewRef.current,vw,vh,point) : anchoredLayer(animatedLayer(original,time),sourceViewRef.current,vw,vh) : null;
         if (selected) {
           const g = geomRef.current;
           const rect = layerCanvasRect(selected, g);

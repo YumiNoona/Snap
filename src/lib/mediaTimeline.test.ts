@@ -7,7 +7,7 @@ import {
 } from "./mediaTimeline";
 import { animatedLayer } from "./layerAnimation";
 import { createProject, migrateProject } from "./project";
-import type { AudioTrack, VideoLayer } from "./types";
+import type { AudioTrack, VideoLayer, MaskLayer } from "./types";
 const layer: VideoLayer = {
   id: "overlay",
   type: "video",
@@ -22,6 +22,16 @@ const layer: VideoLayer = {
   w: 0.5,
   h: 0.5,
 };
+
+it.each(["spotlight", "blur", "magnifier", "pixelate", "redact", "colorFocus"] as const)("splits %s masks without an internal fade gap and preserves animated position", mask => {
+  const original: MaskLayer = { id:mask,type:"mask",mask,intensity:2,timeSpace:"sequence",start:2,end:6,x:.2,y:.2,w:.2,h:.2,transitionDuration:.5,exitTransitionDuration:.5,
+    animation:[{time:0,x:.2,y:.2,scale:1,opacity:1,rotation:0,easing:"linear"},{time:4,x:.6,y:.5,scale:1,opacity:1,rotation:0,easing:"linear"}] };
+  const [left,right] = splitMediaLayer(original,4,30) as MaskLayer[];
+  expect(left.exitTransitionDuration).toBe(0); expect(right.transitionDuration).toBe(0);
+  expect(animatedLayer(right,4).x).toBeCloseTo(animatedLayer(original,4).x);
+  const projected = projectMediaLayers([right],20,4)[0];
+  expect(projected.start).toBe(20); expect(animatedLayer(projected,20).x).toBeCloseTo(animatedLayer(original,4).x);
+});
 describe("independent media timeline", () => {
   it("uses sequence time across repeated, reordered, sped footage and gaps", () => {
     for (const source of [0, 2, 40, 100]) {

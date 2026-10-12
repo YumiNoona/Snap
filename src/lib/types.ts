@@ -147,7 +147,8 @@ export interface ShapeLayer extends BaseLayer {
 
 export interface MaskLayer extends BaseLayer {
   type: "mask";
-  mask: "spotlight" | "blur" | "magnifier";
+  mask: "spotlight" | "blur" | "magnifier" | "pixelate" | "redact" | "colorFocus";
+  coverColor?: string;
   intensity: number;
   feather?: number;
   shape?: "ellipse" | "rectangle";
@@ -159,6 +160,8 @@ export interface MaskLayer extends BaseLayer {
   exitTransitionDuration?: number;
   transitionCurve?: Keyframe["easing"];
   followCursor?: boolean;
+  inverted?: boolean;
+  expansion?: number;
 }
 
 export interface ImageLayer extends BaseLayer {

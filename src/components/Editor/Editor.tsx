@@ -3,18 +3,20 @@ import { resolveClipEffects, editClipEffects, replaceAnimationKeys, replaceAnima
 import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
 import { userError } from "../../lib/userError";
 import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Palette, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Keyboard, Camera, Activity, Snowflake, Palette, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
 import FinishingStudio from "./FinishingStudio";
+import PreviewPlayer from "./PreviewPlayer";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useVoicePolish } from "./hooks/useVoicePolish";
 import { prepareVoiceTracks } from "../../lib/voicePolish";
@@ -39,6 +41,7 @@ import { resolveMediaAudioTracks } from "../../lib/mediaTimeline";
 import "./Editor.css";
 import type { ColorComparison } from "../../lib/colorGrade";
 import type { MediaDragDetail } from "../../lib/mediaDrag";
+import { mediaDropPosition } from "../../lib/mediaDrop";
 
 interface Props {
   videoPath: string;
@@ -89,6 +92,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [colorClipId,setColorClipId]=useState<string>();
   const [colorComparison,setColorComparison]=useState<ColorComparison>({enabled:false,split:.5,reverse:false});
   const [previewFocusMode, setPreviewFocusMode] = useState(false);
+  const [previewCaptionsVisible, setPreviewCaptionsVisible] = useState(true);
+  const [mediaPreviewDrop, setMediaPreviewDrop] = useState(false);
+  const previewTransition = useRef(false);
+  const changePreviewFocus = useCallback((expanded: boolean) => {
+    if (previewTransition.current) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || !document.startViewTransition) { setPreviewFocusMode(expanded); return; }
+    previewTransition.current = true;
+    const transition = document.startViewTransition(() => flushSync(() => setPreviewFocusMode(expanded)));
+    void transition.finished.catch(() => {}).finally(() => { previewTransition.current = false; });
+  }, []);
   const [previewMuted, setPreviewMuted] = useState(false);
   const [previewVolume, setPreviewVolume] = useState(100);
   const [previewControlsVisible, setPreviewControlsVisible] = useState(true);
@@ -122,8 +135,16 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [fileActionStatus, setFileActionStatus] = useState("");
   const [exportProgress, setExportProgress] = useState(0);
   const [lastExportPath, setLastExportPath] = useState("");
-  const [isMaximized, setIsMaximized] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(!isBrowserPreview);
   const appWindow = useMemo(() => isBrowserPreview ? null : getCurrentWindow(), [isBrowserPreview]);
+  useEffect(() => {
+    if (!appWindow) return;
+    let disposed = false;
+    const sync = () => { void appWindow.isMaximized().then(value => { if (!disposed) setIsMaximized(value); }).catch(() => {}); };
+    sync();
+    const unlisten = appWindow.onResized(sync).catch(() => () => {});
+    return () => { disposed = true; void unlisten.then(stop => stop()); };
+  }, [appWindow]);
   const fileMenuRef = useRef<HTMLDivElement | null>(null);
   const manualTargetRangeRef = useRef<ZoomRegionSelection | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
@@ -419,16 +440,32 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         return;
       }
       const timeline = target?.closest<HTMLElement>(".ss-timeline-col");
+      if (target?.closest(".ss-preview-center-area")) { void addMediaToTimeline(payload.paths, sequencePosition); return; }
       if (timeline && duration > 0) {
         const rect = timeline.getBoundingClientRect();
         const length = Number(timeline.dataset.timelineDuration) || sequenceDuration(footageClips);
-        const at = Math.max(0, Math.min(length, (clientX - rect.left) / rect.width * length));
-        addMediaToTimeline(payload.paths, timeline.dataset.timeView === "source" ? sequenceTime(footageClips,at) : at);
+        const at = mediaDropPosition(clientX, rect, length, footageClips, timeline.dataset.timeView === "source", timeline.dataset.snapping !== "false", sourceFrameRate).sequence;
+        void addMediaToTimeline(payload.paths, at);
       }
     });
     return () => { void unlisten.then((stop) => stop()); };
-  }, [addMediaToTimeline, appWindow, duration, footageClips, isBrowserPreview]);
-  useEffect(()=>{const drop=(event:Event)=>{const d=(event as CustomEvent<MediaDragDetail>).detail;if(d.phase!=="drop"||!document.elementFromPoint(d.x,d.y)?.closest(".ss-timeline-container"))return;const timeline=document.querySelector<HTMLElement>(".ss-timeline-col"),rect=timeline?.getBoundingClientRect();if(!timeline||!rect)return;const length=Number(timeline.dataset.timelineDuration)||sequenceDuration(footageClips),raw=Math.max(0,Math.min(length,(d.x-rect.left)/rect.width*length)),points=footageClips.reduce<number[]>((p,c)=>[...p,p[p.length-1]+(c.end-c.start)/(c.speed??1)],[0]),snap=timeline.dataset.snapping!=="false"?points.find(p=>Math.abs(p-raw)<8/rect.width*length):undefined;const at=timeline.dataset.timeView==="source"?sequenceTime(footageClips,raw):snap??raw;for(const item of d.items.filter(i=>i.kind==="sequence"))insertSequenceAt(item.path.slice("snap-sequence:".length),at);void addMediaToTimeline(d.items.filter(i=>i.kind!=="sequence").map(a=>a.path),Math.round(at*sourceFrameRate)/sourceFrameRate);};window.addEventListener("snap-media-drag",drop);return()=>window.removeEventListener("snap-media-drag",drop);},[addMediaToTimeline,footageClips,sourceFrameRate,insertSequenceAt]);
+  }, [addMediaToTimeline, appWindow, duration, footageClips, isBrowserPreview, sequencePosition, sourceFrameRate]);
+  useEffect(() => {
+    const drop = (event: Event) => {
+      const d = (event as CustomEvent<MediaDragDetail>).detail;
+      const target = document.elementFromPoint(d.x, d.y);
+      const overPreview = !!target?.closest(".ss-preview-center-area");
+      setMediaPreviewDrop(d.phase === "move" && overPreview);
+      if (d.phase !== "drop") return;
+      const timeline = document.querySelector<HTMLElement>(".ss-timeline-col"), rect = timeline?.getBoundingClientRect();
+      if (!overPreview && (!target?.closest(".ss-timeline-container") || !timeline || !rect)) return;
+      const at = overPreview ? sequencePosition : mediaDropPosition(d.x, rect!, Number(timeline!.dataset.timelineDuration) || sequenceDuration(footageClips), footageClips, timeline!.dataset.timeView === "source", timeline!.dataset.snapping !== "false", sourceFrameRate).sequence;
+      for (const item of d.items.filter(i => i.kind === "sequence")) insertSequenceAt(item.path.slice("snap-sequence:".length), at);
+      void addMediaToTimeline(d.items.filter(i => i.kind !== "sequence").map(a => a.path), at);
+    };
+    window.addEventListener("snap-media-drag", drop);
+    return () => window.removeEventListener("snap-media-drag", drop);
+  }, [addMediaToTimeline, footageClips, sourceFrameRate, insertSequenceAt, sequencePosition]);
 
   const handleAddAudio = useCallback(async () => {
     const selected = await openDialog({
@@ -954,18 +991,21 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   useEffect(() => {
     if (!previewFocusMode) return;
     const exitPreview = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPreviewFocusMode(false);
+      if (event.key === "Escape") changePreviewFocus(false);
     };
     window.addEventListener("keydown", exitPreview);
     return () => window.removeEventListener("keydown", exitPreview);
-  }, [previewFocusMode]);
+  }, [previewFocusMode, changePreviewFocus]);
 
   const revealPreviewControls = useCallback(() => {
     if (!previewFocusMode) return;
     setPreviewControlsVisible(true);
     if (previewControlsTimerRef.current !== null) window.clearTimeout(previewControlsTimerRef.current);
-    previewControlsTimerRef.current = window.setTimeout(() => setPreviewControlsVisible(false), 2200);
-  }, [previewFocusMode]);
+    if (!playing) return;
+    previewControlsTimerRef.current = window.setTimeout(() => {
+      if (!document.querySelector(".ss-preview-player :focus-visible") && !document.querySelector(".ss-preview-player:hover")) setPreviewControlsVisible(false);
+    }, 2200);
+  }, [previewFocusMode, playing]);
 
   useEffect(() => {
     if (!previewFocusMode) {
@@ -1141,6 +1181,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             <Focus size={20} /><span className="ss-tool-label">Motion</span>
           </button>
 
+          <button className={`ss-tool-icon-btn ${activeTool === "color" ? "active" : ""}`} onClick={() => setActiveTool("color")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "color"} title="Color & film" aria-label="Color and film looks"><Palette size={20}/><span className="ss-tool-label">Color</span></button>
+
           <button
             className={`ss-tool-icon-btn ${activeTool === "audio" ? "active" : ""}`}
             onClick={() => setActiveTool("audio")}
@@ -1162,18 +1204,17 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             <Captions size={20} /><span className="ss-tool-label">Captions</span>
           </button>
 
-          <button className={`ss-tool-icon-btn ${activeTool === "color" ? "active" : ""}`} onClick={() => setActiveTool("color")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "color"} title="Color & film" aria-label="Color and film looks"><Palette size={20}/><span className="ss-tool-label">Color</span></button>
         </aside>
 
         {/* Center Preview Workspace */}
-        <div className="ss-preview-center-area">
+        <div className={`ss-preview-center-area ${mediaPreviewDrop ? "is-media-preview-drop" : ""}`}>
           <button
             type="button"
             className="ss-preview-focus-toggle"
             title={previewFocusMode ? "Exit preview focus (Esc)" : "Maximize preview"}
             aria-label={previewFocusMode ? "Exit preview focus" : "Maximize preview"}
             aria-pressed={previewFocusMode}
-            onClick={() => setPreviewFocusMode((value) => !value)}
+            onClick={() => changePreviewFocus(!previewFocusMode)}
           >
             {previewFocusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
           </button>
@@ -1228,26 +1269,18 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           autoZoomRevision={autoZoomRevision}
           autoZoomReady={projectReady}
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
-            captionTracks={captionTracks}
+            captionTracks={previewCaptionsVisible ? captionTracks : []}
             hasExternalAudio={audioTracks.length > 0}
             activeClipId={renderClipId}
             gapTime={inGap ? sequencePosition : undefined}
             originalOnly={false}
           />
           {zoomProposal && <div className="editor-enhancements"><strong>Suggested camera movement</strong><p>{keyframes.length} current keys · {zoomProposal.length} suggested keys</p><div className="editor-tool-row"><button aria-pressed={compareZoom} onClick={() => setCompareZoom(value => !value)}>{compareZoom ? "Show current" : "Preview suggestion"}</button><button disabled={config.lockedTracks?.includes("zoom")} onClick={() => { setKeyframes(zoomProposal); setZoomProposal(null); setCompareZoom(false); }}>Apply suggestion</button><button onClick={() => { setZoomProposal(null); setCompareZoom(false); }}>Discard</button></div></div>}
-          {previewFocusMode && <div className="ss-preview-player" role="group" aria-label="Preview playback controls">
-            <div className="ss-preview-player-time"><span>{formatPlayerTime(sequencePosition / (config.playbackRate || 1))}</span><span>{formatPlayerTime(editedDuration)}</span></div>
-            <input aria-label="Preview position" type="range" min={0} max={editedDuration || 1} step="0.01" value={Math.min(sequencePosition / (config.playbackRate || 1), editedDuration)} onChange={(event) => seekSequence(Number(event.target.value) * (config.playbackRate || 1))} />
-            <div className="ss-preview-player-buttons">
-              <button type="button" title="Back 5 seconds" onClick={() => seekSequence(sequencePosition - 5 * (config.playbackRate || 1))}><SkipBack size={18} /></button>
-              <button type="button" className="primary" title={playing ? "Pause" : "Play"} onClick={togglePlay}>{playing ? <Pause size={21} /> : <Play size={21} fill="currentColor" />}</button>
-              <button type="button" title="Forward 5 seconds" onClick={() => seekSequence(sequencePosition + 5 * (config.playbackRate || 1))}><SkipForward size={18} /></button>
-              <div className="ss-preview-volume">
-                <button type="button" title={previewMuted ? "Unmute preview" : "Mute preview"} onClick={() => setPreviewMuted((muted) => !muted)}>{previewMuted || previewVolume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
-                <input aria-label="Preview volume" type="range" min={0} max={100} step={1} value={previewMuted ? 0 : previewVolume} onChange={(event) => { const value = Number(event.target.value); setPreviewVolume(value); setPreviewMuted(value === 0); }} />
-              </div>
-            </div>
-          </div>}
+          {previewFocusMode && <PreviewPlayer position={sequencePosition / (config.playbackRate || 1)} duration={editedDuration} playing={playing} muted={previewMuted} volume={previewVolume}
+            hasCaptions={captionTracks.some(track => track.visible && track.segments.length > 0)} captionsVisible={previewCaptionsVisible} onCaptions={() => setPreviewCaptionsVisible(value => !value)}
+            onSeek={seconds => seekSequence(seconds * (config.playbackRate || 1))} onToggle={togglePlay} onActivity={revealPreviewControls}
+            onMute={() => { if (previewMuted || previewVolume === 0) { setPreviewMuted(false); if (previewVolume === 0) setPreviewVolume(100); } else setPreviewMuted(true); }}
+            onVolume={value => { setPreviewVolume(value); setPreviewMuted(value === 0); }} />}
         </div>
 
         {/* Right Tool Settings Panel Drawer */}
@@ -1549,12 +1582,4 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       )}
     </div>
   );
-}
-
-function formatPlayerTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-  const whole = Math.floor(seconds);
-  const minutes = Math.floor(whole / 60);
-  const remaining = whole % 60;
-  return `${minutes}:${remaining.toString().padStart(2, "0")}`;
 }
