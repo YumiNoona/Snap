@@ -1500,6 +1500,18 @@ fn recording_data_paths(video_path: &Path) -> (PathBuf, PathBuf) {
     (data_dir, log_path)
 }
 
+#[tauri::command]
+async fn media_has_audio(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        access::require(&app, Path::new(&path))?;
+        let result = process::background_command("ffprobe")
+            .args(["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0"])
+            .arg(&path).output().map_err(|e| e.to_string())?;
+        if !result.status.success() { return Err("Could not inspect media audio".into()); }
+        Ok(!String::from_utf8_lossy(&result.stdout).trim().is_empty())
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// Copies user-added audio into the recording's support folder so projects do
 /// not silently break when the original download or music file is moved.
 #[tauri::command]
@@ -1509,8 +1521,8 @@ async fn import_audio_file(
     source_path: String,
 ) -> std::result::Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        const AUDIO_EXTENSIONS: [&str; 9] = [
-            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm",
+        const AUDIO_EXTENSIONS: [&str; 12] = [
+            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm", "mp4", "mov", "mkv",
         ];
         let source = PathBuf::from(&source_path);
         access::require(&app, &source)?;
@@ -1905,6 +1917,7 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 export::discard_export_sink_for_window(window.label());
+                export::motion::discard_for_window(window.label());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1944,6 +1957,9 @@ pub fn run() {
             export::close_export_sink,
             export::discard_canvas_export,
             export::finalize_canvas_export,
+            export::motion::prepare_export_motion,
+            export::motion::cancel_export_motion,
+            export::motion::discard_export_motion,
             export::extract_video_frame,
             editor_cache::editor_cached_media,
             editor_cache::editor_silence_ranges,
@@ -1984,6 +2000,7 @@ pub fn run() {
             list_directory,
             list_recordings,
             import_audio_file,
+            media_has_audio,
             prepare_recording_data,
             update_recording_session,
             recover_recording_sessions,

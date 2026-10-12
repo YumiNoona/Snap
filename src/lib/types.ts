@@ -1,11 +1,13 @@
 import type { ScreenTiltConfig } from "./screenTilt";
+import type { ColorGrade, CubeLut, AdjustmentLayer } from "./colorGrade";
 /** Non-destructive retained ranges in the original recording's clock. */
 export interface ClipEffects {
-  config: Pick<EditorConfig, "screenTilt" | "zoomEnabled" | "zoomLevel" | "zoomMovement" | "fixedZoomPart" | "zoomMode">;
+  config: Partial<EditorConfig>;
   keyframes: Keyframe[];
   captions: CaptionTrack[];
 }
-export interface VideoClip { id: string; start: number; end: number; groupId?: string; sourceClipId?: string; effects?: ClipEffects; gap?: boolean; speed?: number; transition?: ClipTransition }
+export interface VideoClip { id: string; start: number; end: number; sequenceId?: string; parentClipId?: string; renderSpeed?: number; groupId?: string; sourceClipId?: string; effects?: ClipEffects; colorGrade?: ColorGrade; gap?: boolean; speed?: number; transition?: ClipTransition }
+export interface NestedSequence { id: string; name: string; editor: EditorConfig; keyframes: Keyframe[]; captions: CaptionTrack[]; audioTracks: AudioTrack[] }
 
 export type TransitionEffect = "none" | "fade" | "dissolve" | "slide" | "push" | "wipe" | "zoom";
 export interface ClipTransition { effect: TransitionEffect; duration: number; direction?: "left" | "right" | "up" | "down"; easing?: Keyframe["easing"] }
@@ -25,7 +27,8 @@ export interface Keyframe {
   x: number;
   y: number;
   scale: number;
-  easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "smoother" | "sine";
+  easing: "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "smoother" | "sine" | "custom" | "hold";
+  bezier?: [number, number, number, number];
   source?: "auto" | "manual";
   /** Stable identity shared by every keyframe that belongs to one zoom bar. */
   regionId?: string;
@@ -113,7 +116,7 @@ export interface BaseLayer {
   screenAnchored?: boolean;
   animation?: LayerAnimationKey[];
 }
-export interface LayerAnimationKey { time: number; x: number; y: number; scale: number; opacity: number; rotation: number; easing: Keyframe["easing"] }
+export interface LayerAnimationKey { time: number; x: number; y: number; scale: number; opacity: number; rotation: number; easing: Keyframe["easing"]; bezier?: Keyframe["bezier"] }
 
 export interface TextLayer extends BaseLayer {
   type: "text";
@@ -175,6 +178,7 @@ export interface ImageLayer extends BaseLayer {
 }
 
 export interface VideoLayer extends BaseLayer {
+  sourceSpeed?: number;
   sourceOffset?: number;
   sourceDuration?: number;
   type: "video";
@@ -288,6 +292,7 @@ export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 
 export interface AudioClip { id: string; sourceStart: number; sourceEnd: number; start: number; videoClipId?: string; linked?: boolean; speed?: number; volume?: number; fadeIn?: number; fadeOut?: number }
 export interface AudioTrack {
+  mediaLayerId?: string;
   voicePolish?: { enabled: boolean; strength: number; hum: "off" | "50" | "60"; roomTail: boolean; loudness: boolean };
   id: string;
   kind: AudioTrackKind;
@@ -369,7 +374,11 @@ export interface CaptionTrack {
 }
 
 export interface EditorConfig {
-  exportDefaults?: Pick<ExportSettings,"format"|"fps"|"quality"|"captions"|"normalizeAudio"|"audioMode"|"deliveryPackage"|"loop">;
+  colorGrade?: ColorGrade;
+  colorLuts?: CubeLut[];
+  adjustmentLayers?: AdjustmentLayer[];
+  nestedSequences?: NestedSequence[];
+  exportDefaults?: Pick<ExportSettings,"format"|"fps"|"quality"|"captions"|"normalizeAudio"|"audioMode"|"deliveryPackage"|"loop"|"motionInterpolation">;
   cursorEdits?: CursorEdit[];
   layoutVariants?: LayoutVariant[];
   activeLayoutId?: string;
@@ -431,6 +440,7 @@ export interface LayoutVariant {
 }
 
 export interface ExportSettings {
+  motionInterpolation?: "none" | "optical-flow";
   format: "mp4" | "webm" | "gif";
   fps: number;
   width: number;

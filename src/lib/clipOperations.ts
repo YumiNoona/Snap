@@ -18,7 +18,7 @@ export function duplicateClips(clips: VideoClip[], ids: string[]): VideoClip[] {
 export function combineClips(clips: VideoClip[], ids: string[]): VideoClip[] {
   const indices = clips.flatMap((c, i) => ids.includes(c.id) ? [i] : []);
   if (indices.some(index=>clips[index].gap) || indices.length < 2 || indices.some((index, i) => i > 0 && index !== indices[i - 1] + 1)) return clips;
-  if(indices.some((index,i)=>i>0&&(Math.abs(clips[index].start-clips[index-1].end)>.001 || clipSpeed(clips[index])!==clipSpeed(clips[index-1]) || clips[index].gap || clips[index-1].gap || JSON.stringify(clips[index].effects)!==JSON.stringify(clips[index-1].effects)))) {
+  if(indices.some((index,i)=>i>0&&(Math.abs(clips[index].start-clips[index-1].end)>.001 || clipSpeed(clips[index])!==clipSpeed(clips[index-1]) || clips[index].gap || clips[index-1].gap || (JSON.stringify(clips[index].effects)!==JSON.stringify(clips[index-1].effects) || JSON.stringify(clips[index].colorGrade)!==JSON.stringify(clips[index-1].colorGrade))))) {
     const groupId=`group-${crypto.randomUUID()}`;
     return clips.map(c=>ids.includes(c.id)?{...c,groupId}:c);
   }

@@ -4,6 +4,7 @@
   --glass-opacity: 90%;
   --glass-blur: 18px;
   --glass-radius: 12px;
+  --glass-shadow: 0 22px 64px rgba(0,0,0,.28);
 }
 
 /* Portals inherit from body rather than the editor. Carry the same palette
@@ -60,6 +61,23 @@ body[data-editor-theme="light"], .theme-light {
   background: color-mix(in srgb, var(--bg-surface-sunken) var(--glass-opacity), transparent) !important;
   border-radius: var(--glass-radius) !important;
 }
+
+/* Match the export sheet's single tint, fine edge and depth. Inset content
+   stays clear, so small inspectors do not stack opaque surfaces. */
+:root :is(.timeline-clip-inspector, .ss-panels-drawer, .aspect-dropdown-menu,
+  .custom-select-menu, .dd-panel, .dd-sub-panel, .timeline-context-menu, .media-context-menu) {
+  border: 1px solid var(--border-default);
+  box-shadow: var(--glass-shadow) !important;
+}
+:root .ss-panels-drawer :is(.ss-drawer-content, .ss-section, .slider-row, .check-row),
+:root .timeline-clip-inspector :is(.timeline-source-fields, .timeline-transition-tools) {
+  background: transparent !important;
+}
+:root :is(.timeline-clip-inspector, .ss-panels-drawer) :is(input[type="number"], .custom-select-trigger, .slider-value),
+:root :is(.dd-trigger, .aspect-item, .dd-item, .custom-select-menu button) { border-radius: 8px; }
+:root .ss-panels-drawer { padding-top: 4px; }
+:root .ss-panels-drawer .ss-drawer-content { padding: 4px 18px 20px; }
+:root .ss-panels-drawer .ss-inspector-header { padding: 10px 18px; }
 
 /* Sticky rows must not put an opaque second sheet over their glass parent. */
 :root :is(.timeline-clip-inspector, .ss-panels-drawer) :is(

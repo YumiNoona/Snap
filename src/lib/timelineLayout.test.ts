@@ -14,3 +14,7 @@ describe("adaptive timeline height", () => {
 });
 
 it("fits floating inspectors above the timeline or inside a short viewport",()=>{expect(timelineInspectorLayout(520,720)).toEqual({maxHeight:494});expect(timelineInspectorLayout(150,400)).toEqual({position:"absolute",top:-134,bottom:"auto",maxHeight:368});});
+it("keeps tall clip tools below the editor title bar", () => {
+  expect(timelineInspectorLayout(717, 980, 76)).toEqual({ maxHeight: 631 });
+  expect(timelineInspectorLayout(150, 400, 76)).toEqual({ position: "absolute", top: -74, bottom: "auto", maxHeight: 308 });
+});

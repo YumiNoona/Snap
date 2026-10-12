@@ -3,6 +3,9 @@ export type RecordingResolution = "native" | "1080p" | "720p";
 export type RecordingPerformanceMode = "automatic" | "manual";
 
 export interface AutomaticRecordingProfile {
+  targetId: string;
+  sourceWidth: number;
+  sourceHeight: number;
   version: number;
   calibratedAt: number;
   summary: string;
@@ -17,7 +20,7 @@ export interface AutomaticRecordingProfile {
   };
 }
 
-export const AUTOMATIC_PROFILE_VERSION = 4;
+export const AUTOMATIC_PROFILE_VERSION = 5;
 
 export interface AppSettings {
   borderStyle: BorderStyle;
@@ -42,9 +45,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoCheckUpdates: true,
   showRecordingDataFiles: false,
   recordingPerformanceMode: "automatic",
-  recordingFps: 30,
-  recordingBitrateMbps: 10,
-  recordingResolution: "1080p",
+  recordingFps: 60,
+  recordingBitrateMbps: 24,
+  recordingResolution: "native",
   allowSoftwareEncoder: false,
   automaticRecordingProfile: null,
 };
@@ -53,11 +56,11 @@ export function readAppSettings(): AppSettings {
   try {
     const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") as Partial<AppSettings>;
     const recordingPerformanceMode = stored.recordingPerformanceMode === "manual" ? "manual" : "automatic";
-    const recordingFps = stored.recordingFps === 60 ? 60 : stored.recordingFps === 24 ? 24 : 30;
+    const recordingFps = stored.recordingFps === 30 ? 30 : stored.recordingFps === 24 ? 24 : DEFAULT_SETTINGS.recordingFps;
     const recordingBitrateMbps = Math.round(Math.max(2, Math.min(50, Number(stored.recordingBitrateMbps) || DEFAULT_SETTINGS.recordingBitrateMbps)));
-    const recordingResolution = stored.recordingResolution === "native" || stored.recordingResolution === "720p"
+    const recordingResolution = stored.recordingResolution === "1080p" || stored.recordingResolution === "720p"
       ? stored.recordingResolution
-      : "1080p";
+      : DEFAULT_SETTINGS.recordingResolution;
     const profile = stored.automaticRecordingProfile;
     const automaticRecordingProfile = profile
       && profile.version === AUTOMATIC_PROFILE_VERSION

@@ -1,13 +1,13 @@
 import type { CaptionTrack, VideoClip } from "./types";
 
 export const MIN_CLIP_SECONDS = 1 / 240;
-export const clipSpeed = (clip: VideoClip) => clip.gap ? 1 : Number.isFinite(clip.speed) ? Math.max(.25, Math.min(4, clip.speed!)) : 1;
+export const clipSpeed = (clip: VideoClip) => Number.isFinite(clip.renderSpeed) ? Math.max(.001,Math.min(64,clip.renderSpeed!)) : clip.gap ? 1 : Number.isFinite(clip.speed) ? Math.max(.25, Math.min(4, clip.speed!)) : 1;
 export const clipDuration = (clip: VideoClip) => (clip.end - clip.start) / clipSpeed(clip);
 export const frameDuration = (fps = 30) => 1 / (Number.isFinite(fps) && fps >= 1 ? Math.min(240, fps) : 30);
 export function retainedClips(clips: VideoClip[] | null | undefined, start: number, end: number): VideoClip[] {
   return (clips ?? [{ id: "recording", start, end }]).filter(c => c && typeof c.id === "string" && Number.isFinite(c.start) && Number.isFinite(c.end))
     .flatMap(c => {
-      const from = c.gap ? 0 : Math.max(start, c.start), to = c.gap ? c.end - c.start : Math.min(end, c.end);
+      const from = c.gap ? 0 : c.sequenceId ? Math.max(0,c.start) : Math.max(start, c.start), to = c.gap ? c.end - c.start : c.sequenceId ? c.end : Math.min(end, c.end);
       if (to - from < MIN_CLIP_SECONDS - 1e-6) return [];
       return [{ ...c, start: from, end: to }];
     }).map((clip,index,list)=>clip.transition&&(index===0||list[index-1].gap)?{...clip,transition:undefined}:clip);

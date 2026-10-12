@@ -6,8 +6,9 @@ export function timelineHeightBounds(visibleTrackCount: number): { minimum: numb
 }
 
 /** Keep floating tools inside the viewport, even when the timeline is very tall. */
-export function timelineInspectorLayout(timelineTop:number,viewportHeight:number):{maxHeight:number;position?:"absolute";top?:number;bottom?:"auto"} {
+export function timelineInspectorLayout(timelineTop:number,viewportHeight:number,minimumTop=16):{maxHeight:number;position?:"absolute";top?:number;bottom?:"auto"} {
   const height=Math.max(180,Number.isFinite(viewportHeight)?viewportHeight:800);
   const top=Number.isFinite(timelineTop)?timelineTop:height-280;
-  return top<240?{position:"absolute",top:16-top,bottom:"auto",maxHeight:height-32}:{maxHeight:Math.max(140,top-26)};
+  const safeTop = Math.max(16, Math.min(height - 164, Number.isFinite(minimumTop) ? minimumTop : 16));
+  return top<safeTop+224?{position:"absolute",top:safeTop-top,bottom:"auto",maxHeight:height-safeTop-16}:{maxHeight:Math.max(140,top-safeTop-10)};
 }

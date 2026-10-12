@@ -1,6 +1,7 @@
 import { mediaLayerName, splitMediaLayer } from "../../../lib/mediaTimeline";
 import { TRANSITION_EFFECTS } from "../../../lib/transitions";
 import { SelectRow } from "../Panels/PanelControls";
+import { hasColorEffect } from "../../../lib/colorRenderer";
 import type { ScreenTiltKey } from "../../../lib/screenTilt";
 import { copyKeys, retimeKeys, pasteKeys, duplicateKeys } from "../../../lib/keyframeEditing";
 import { type AnimationKeyUpdate, snapshotClipEffects } from "../../../lib/clipEffects";
@@ -8,7 +9,7 @@ import { resolvedAudioClips, splitAudioClip, duplicateAudioClip, editAudioClip }
 import { useRef, useCallback, useState, useEffect, useMemo, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { Plus, Circle, Layers, PanelLeft, MoveRight, Scissors, MousePointer2, Magnet, RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, BookmarkPlus, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon, Keyboard, Lock, LockOpen, Combine, ArrowLeftRight, X, GripVertical, StepBack, StepForward, BetweenHorizontalStart, Diamond, Box } from "lucide-react";
+import { Activity, Plus, Circle, Layers, PanelLeft, MoveRight, Scissors, MousePointer2, Magnet, RectangleHorizontal, Crop, SkipBack, SkipForward, Play, Pause, ChevronDown, ChevronUp, BookmarkPlus, ZoomIn, ZoomOut, Film, Undo2, Redo2, Copy, Trash2, SlidersHorizontal, Volume2, VolumeX, RotateCcw, LoaderCircle, Music2, Clock3, Sparkles, Captions, Type, Shapes, ScanSearch, Image as ImageIcon, Keyboard, Lock, LockOpen, Combine, ArrowLeftRight, X, GripVertical, StepBack, StepForward, BetweenHorizontalStart, Diamond, Box } from "lucide-react";
 import { retainedClips, splitClip, sequenceDuration, sequenceTime, sourceTime, frameDuration, clipDuration, clipSpeed } from "../../../lib/videoEditing";
 import type { VideoClip, LayerAnimationKey, AudioClip } from "../../../lib/types";
 import type { TransportStatus } from "../hooks/usePlaybackController";
@@ -23,10 +24,19 @@ import { moveClips, duplicateClips, combineClips, deleteClips, changeClipSpeed, 
 import { sequenceClip } from "../../../lib/videoEditing";
 import TrimPreview from "./TrimPreview";
 import { filmstripFrames } from "../../../lib/timelineFilmstrip";
+import GraphEditor, { type GraphTrack } from "../GraphEditor";
+import { DEFAULT_SCREEN_TILT } from "../../../lib/screenTilt";
+import type { MediaDragDetail } from "../../../lib/mediaDrag";
 
 type SelectedAnimationKey = { kind: "tilt" | "camera" | "layer"; id: string; clipId?: string; time: number };
 
 interface Props {
+  onGraphEdit?:(kind:"zoom"|"tilt"|"camera"|"layer",id:string,clipId?:string)=>void;
+  onNestSelection?:(ids:string[])=>void;
+  onSequenceEdit?:(id:string)=>void;
+  onUnnest?:(id:string)=>void;
+  onClipSelect?: (id:string)=>void;
+  onAdjustmentsChange?: (layers:NonNullable<EditorConfig["adjustmentLayers"]>)=>void;
   editorTheme: "dark" | "light";
   inputLogPath: string;
   audioTracks: AudioTrack[];
@@ -101,6 +111,9 @@ interface ZoomSegment {
 }
 
 export default function Timeline({
+  onGraphEdit,
+  onNestSelection,onSequenceEdit,onUnnest,
+  onClipSelect, onAdjustmentsChange,
   editorTheme,
   inputLogPath,
   audioTracks,
@@ -162,6 +175,7 @@ export default function Timeline({
 }: Props) {
   const [editTool, setEditTool] = useState<"select" | "razor">("select");
   const [timeView, setTimeView] = useState<"sequence" | "source">("sequence");
+  const [showGraph,setShowGraph]=useState(false);
   const [cutGuide,setCutGuide]=useState<{id:string;time:number;left:number}|null>(null);
   useEffect(()=>{setCutGuide(null);if(editTool==="razor")setTimeView("sequence");},[editTool]);
   const [snapping, setSnapping] = useState(true);
@@ -170,7 +184,10 @@ export default function Timeline({
   const [inspectorLayout,setInspectorLayout]=useState<ReturnType<typeof timelineInspectorLayout>>({maxHeight:620});
   useLayoutEffect(()=>{
     if(!inspectorOpen)return;
-    const place=()=>setInspectorLayout(timelineInspectorLayout(timelineRootRef.current?.getBoundingClientRect().top??NaN,window.innerHeight));
+    const place=()=>{
+      const workspaceTop=document.querySelector(".ss-preview-center-area")?.getBoundingClientRect().top??6;
+      setInspectorLayout(timelineInspectorLayout(timelineRootRef.current?.getBoundingClientRect().top??NaN,window.innerHeight,workspaceTop+18));
+    };
     place();window.addEventListener("resize",place);
     const observer=new ResizeObserver(place);if(timelineRootRef.current)observer.observe(timelineRootRef.current);
     return ()=>{window.removeEventListener("resize",place);observer.disconnect();};
@@ -241,6 +258,9 @@ export default function Timeline({
   const [timelineHeight, setTimelineHeight] = useState(240);
   const [mediaDragOver, setMediaDragOver] = useState(false);
   const [mediaDropTime,setMediaDropTime]=useState(0);
+  const [mediaDropLabel,setMediaDropLabel]=useState("Media");
+  const [mediaDropLength,setMediaDropLength]=useState(5);
+  useEffect(()=>{const update=(event:Event)=>{const d=(event as CustomEvent<MediaDragDetail>).detail;const over=d.phase==="move"&&!!document.elementFromPoint(d.x,d.y)?.closest(".ss-timeline-container");setMediaDragOver(over);if(!over)return;const r=timeAreaRef.current?.getBoundingClientRect();if(!r)return;const raw=Math.max(0,Math.min(timelineDuration,(d.x-r.left)/r.width*timelineDuration));const points=clips.reduce<number[]>((p,c)=>[...p,p[p.length-1]+clipDuration(c)],[0]);const snap=snapping?points.find(p=>Math.abs(p-raw)<8/r.width*timelineDuration):undefined;setMediaDropTime(Math.round((snap??raw)*frameRate)/frameRate);setMediaDropLabel(d.items.length>1?`${d.items.length} items`:d.items[0]?.name??"Media");setMediaDropLength(d.items.reduce((sum,a)=>sum+(a.duration??5),0));};window.addEventListener("snap-media-drag",update);return()=>window.removeEventListener("snap-media-drag",update);},[timelineDuration,frameRate,clips,snapping]);
   const [contextMenu, setContextMenu] = useState<
     | { kind:"animation-key";x:number;y:number;animationKind:"tilt"|"camera"|"layer";id:string;time:number;sourceTime:number;clipId?:string;label:string }
     | { kind:"animation-track"; x:number; y:number; animationKind:"tilt"|"camera"; label:string }
@@ -1102,6 +1122,12 @@ export default function Timeline({
     const occurrences=sequenceLayer?(timeView==="sequence"&&source>=offset&&source<=end?["sequence-media"]:[]):onlyClipId?(timeView==="source"||onlyClip&&source>=onlyClip.start&&source<=onlyClip.end?[onlyClipId]:[]):timeView === "sequence" ? clips.filter((clip,index)=>!clip.gap&&source>=clip.start && (source<clip.end || index===clips.length-1 && source<=clip.end)).map(clip=>clip.id) : [undefined];
     return occurrences.map(clipId=><button key={`${kind}-${id}-${key.time}-${clipId}`} className={`timeline-animation-key ${Math.abs((sequenceLayer?sequenceTime(clips,currentTime,activeClipId):currentTime)-source)<1/frameRate && (sequenceLayer||!activeClipId||activeClipId===clipId) ? "active" : ""} ${selectedKeys.some(k=>k.kind===kind&&k.id===id&&k.clipId===clipId&&Math.abs(k.time-key.time)<1e-6)?"selected":""}`} data-key-time={key.time} data-key-kind={kind} data-key-id={id} data-key-clip={clipId??""} style={{left:x(source,clipId)}} aria-label={`${kind === "tilt" ? "3D tilt" : kind === "camera" ? "Webcam" : "Object"} keyframe at ${source.toFixed(3)} seconds`} title={`Keyframe · ${source.toFixed(3)}s`} onClick={event=>{event.stopPropagation();if(suppressKeyClick.current){suppressKeyClick.current=false;return;}const entry={kind,id,clipId,time:key.time};setSelectedKeys(previous=>event.ctrlKey||event.metaKey||event.shiftKey?previous.some(k=>k.kind===kind&&k.id===id&&k.clipId===clipId&&k.time===key.time)?previous.filter(k=>!(k.kind===kind&&k.id===id&&k.clipId===clipId&&k.time===key.time)):[...previous,entry]:[entry]);if(kind==="layer")onLayerSelect(id);seekKeyTime(source,clipId);}} onPointerDown={event=>beginSelectedKeyDrag(event,{kind,id,clipId,time:key.time})} onKeyDown={handleSelectedKeyShortcut} onContextMenu={event=>{event.preventDefault();event.stopPropagation();if(!selectedKeys.some(selected=>selected.kind===kind&&selected.id===id&&selected.clipId===clipId&&selected.time===key.time))setSelectedKeys([{kind,id,clipId,time:key.time}]);setContextMenu({kind:"animation-key",animationKind:kind,id,time:key.time,sourceTime:source,clipId,label:kind==="tilt"?"3D tilt":kind==="camera"?"Webcam":"Object",...menuPosition(event)});}}><Diamond size={15}/></button>);
   });
+  const poseChannels=[{id:"x",name:"Position X",min:0,max:1,step:.01},{id:"y",name:"Position Y",min:0,max:1,step:.01},{id:"scale",name:"Scale",min:.05,max:5,step:.01},{id:"opacity",name:"Opacity",min:0,max:1,step:.01},{id:"rotation",name:"Rotation",min:-180,max:180,step:1}];
+  const graphClip=clips.find(c=>c.id===(selectedClipId??activeClipId));
+  const graphTracks:GraphTrack[]=[{id:"zoom",name:"Zoom",keys:(graphClip?.effects?.keyframes??keyframes).map(k=>({...k,time:k.time/1000})),maximum:duration,zoom:true,channels:poseChannels.slice(0,3),base:{time:0,duration:600,x:.5,y:.5,scale:1,easing:"ease-in-out",source:"manual"},locked:config.lockedTracks?.includes("zoom"),seek:t=>onSeek(t,graphClip?.id),onChange:next=>{onGraphEdit?.("zoom","zoom",graphClip?.id);onKeyframesChange(next.map(k=>({...k,time:k.time*1000})) as unknown as Keyframe[],graphClip?.id);}},
+  {id:"tilt",name:"3D tilt",keys:(graphClip?.effects?.config.screenTilt?.keys??config.screenTilt?.keys??[]).map(k=>({...k})),maximum:duration,channels:[{id:"tiltX",name:"Tilt X",min:-45,max:45,step:1},{id:"tiltY",name:"Tilt Y",min:-45,max:45,step:1},{id:"rotation",name:"Rotation",min:-180,max:180,step:1},{id:"scale",name:"Scale",min:.05,max:3,step:.01},{id:"perspective",name:"Perspective",min:1.5,max:6,step:.1}],base:{...DEFAULT_SCREEN_TILT,time:0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("tilt"),seek:t=>onSeek(t,graphClip?.id),onChange:next=>{onGraphEdit?.("tilt","tilt",graphClip?.id);onAnimationKeysChange?.("tilt","tilt",next as unknown as ScreenTiltKey[],graphClip?.id);}},
+  {id:"camera",name:"Webcam",keys:(config.cameraOverlay.animation??[]).map(k=>({...k})),maximum:duration,channels:poseChannels,base:{time:0,x:config.cameraOverlay.x,y:config.cameraOverlay.y,scale:1,opacity:1,rotation:0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("camera"),seek:t=>onSeek(t,graphClip?.id),onChange:next=>onAnimationKeysChange?.("camera","camera",next as unknown as LayerAnimationKey[])},
+  ...layers.map((l):GraphTrack=>({id:l.id,name:mediaLayerName(l),keys:(l.animation??[]).map(k=>({...k})),maximum:l.end-l.start,channels:poseChannels,base:{time:0,x:l.x,y:l.y,scale:1,opacity:l.opacity??1,rotation:l.rotation??0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("annotations"),seek:t=>seekKeyTime(t+l.start,l.timeSpace==="sequence"?"sequence-media":activeClipId),onChange:next=>onAnimationKeysChange?.("layer",l.id,next as unknown as LayerAnimationKey[])}))];
   return (
     <div
       ref={timelineRootRef}
@@ -1124,6 +1150,7 @@ export default function Timeline({
         if (paths.length) { const rect=timeAreaRef.current?.getBoundingClientRect(); const at=rect?Math.max(0,Math.min(timelineDuration,(event.clientX-rect.left)/rect.width*timelineDuration)):0; onMediaDrop(paths,timeView==="sequence"?Math.round(at*frameRate)/frameRate:sequenceTime(clips,at)); setTimeView("sequence"); }
       }}
     >
+      {showGraph&&<GraphEditor tracks={graphTracks} initialTrack={selectedKeys[0]?.kind==="layer"?selectedKeys[0].id:selectedKeys[0]?.kind} fps={frameRate} onClose={()=>setShowGraph(false)}/>}
       <div className="timeline-resize-edge" onMouseDown={beginResize} title="Drag the timeline edge to resize" />
       {/* ── Screen Studio Toolbar ──────────────────────────────────── */}
       <div className="ss-timeline-toolbar">
@@ -1211,6 +1238,7 @@ export default function Timeline({
 
         {/* Right Tools (Scissor cut & Zoom scale) */}
         <div className="tb-right-group">
+          <button className="ss-tb-btn" aria-label="Open keyframe graph editor" title="Keyframe graph editor" onClick={()=>setShowGraph(true)}><Activity size={16}/></button>
           <button className="ss-tb-btn primary-scissor-btn" onClick={handleAddMarker} title="Add timeline marker (M)" aria-label="Add timeline marker">
             <BookmarkPlus size={16} />
           </button>
@@ -1256,17 +1284,20 @@ export default function Timeline({
         if(!segment)return null;
         const update=(patch:Partial<AudioClip>)=>{if(!locked){const next=editAudioClip(track,clips,audioDurations[track.id]??duration,segment.id,patch);if(next===track){setClipNotice("Audio clips cannot overlap on the same track.");return;}setClipNotice("");onAudioTrackChange(next);}};
         return <aside className="timeline-clip-inspector editor-glass-surface" style={inspectorLayout} aria-label="Audio clip settings"><header><span><Music2 size={16}/>Audio</span><button aria-label="Close audio settings" onClick={()=>setInspectorOpen(false)}><X size={16}/></button></header>
+          <div className="timeline-inspector-scroll">
           <SelectRow label="Link" value={(segment.linked??track.linked??true)&&segment.videoClipId?"linked":"unlinked"} options={["linked","unlinked"]} onChange={value=>{if(locked)return;if(value==="linked"&&!segment.videoClipId){const target=sequenceClip(clips,segment.start);if(!target||target.clip.gap){setClipNotice("Select footage at this audio position first.");return;}update({linked:true,videoClipId:target.clip.id});}else update({linked:value==="linked"});}}/>
           <div className="timeline-source-fields"><label className="timeline-value-field">In<input type="number" min={0} max={segment.sourceEnd-1/frameRate} step={1/frameRate} disabled={locked} value={Number(segment.sourceStart.toFixed(3))} onChange={e=>{const value=e.target.valueAsNumber;if(Number.isFinite(value)&&value>=0&&value<=segment.sourceEnd-1/frameRate)update({sourceStart:Math.round(value*frameRate)/frameRate});}}/></label><label className="timeline-value-field">Out<input type="number" min={segment.sourceStart+1/frameRate} max={audioDurations[track.id]??duration} step={1/frameRate} disabled={locked} value={Number(segment.sourceEnd.toFixed(3))} onChange={e=>{const value=e.target.valueAsNumber;if(Number.isFinite(value)&&value>segment.sourceStart&&value<=(audioDurations[track.id]??duration))update({sourceEnd:Math.round(value*frameRate)/frameRate});}}/></label></div>
           <div className="timeline-source-fields"><label className="timeline-value-field">Volume<input type="number" min={0} max={200} step={5} disabled={locked} value={Math.round((segment.volume??1)*100)} onChange={e=>{if(Number.isFinite(e.target.valueAsNumber))update({volume:Math.max(0,Math.min(2,e.target.valueAsNumber/100))});}}/></label><label className="timeline-value-field">Position<input type="number" min={0} step={1/frameRate} disabled={locked||(segment.linked??track.linked??true)&&!!segment.videoClipId} value={Number(segment.start.toFixed(3))} onChange={e=>{if(Number.isFinite(e.target.valueAsNumber))update({start:Math.max(0,e.target.valueAsNumber)});}}/></label></div>
           <div className="timeline-source-fields">{(["fadeIn","fadeOut"] as const).map(kind=><label className="timeline-value-field" key={kind}>{kind==="fadeIn"?"Fade in":"Fade out"}<input type="number" min={0} max={segment.sourceEnd-segment.sourceStart} step={.05} disabled={locked} value={segment[kind]??0} onChange={e=>{if(Number.isFinite(e.target.valueAsNumber))update({[kind]:Math.max(0,Math.min(segment.sourceEnd-segment.sourceStart,e.target.valueAsNumber))});}}/></label>)}</div>
           <SelectRow label="Pitch" value={track.preservePitch===false?"natural":"preserve"} options={["preserve","natural"]} onChange={value=>{if(!locked)onAudioTrackChange({...track,preservePitch:value==="preserve"});}}/>
           {clipNotice&&<p className="timeline-inline-notice" role="status">{clipNotice}</p>}
+          </div>
           <div className="timeline-inspector-actions"><button className="ss-tb-btn" aria-label="Split audio at playhead" disabled={locked} onClick={()=>onAudioTrackChange(splitAudioClip(track,clips,audioDurations[track.id]??duration,segment.id,sequenceTime(clips,currentTime,activeClipId),frameRate))}><Scissors size={20}/></button><button className="ss-tb-btn" aria-label="Duplicate audio clip" disabled={locked} onClick={()=>onAudioTrackChange(duplicateAudioClip(track,clips,audioDurations[track.id]??duration,segment.id))}><Copy size={20}/></button><button className="ss-tb-btn" aria-label="Delete audio clip" disabled={locked} onClick={()=>{onAudioTrackChange({...track,clips:segments.filter(clip=>clip.id!==segment.id)});setSelectedAudio(null);}}><Trash2 size={20}/></button></div>
         </aside>;
       })()}
       {inspectorOpen && selectedClip && <aside className="timeline-clip-inspector editor-glass-surface" style={inspectorLayout} aria-label="Clip trim settings" onKeyDown={e => { if(e.key === "Escape") setInspectorOpen(false); }}>
         <header><span><SlidersHorizontal size={16}/>Clip settings</span><button aria-label="Close clip settings" onClick={() => setInspectorOpen(false)}><X size={16}/></button></header>
+        <div className="timeline-inspector-scroll">
         {selectedClip.gap ? <button className="ss-drawer-action-btn" disabled={videoLocked} onClick={()=>deleteClip(true)}>Close gap</button> : <>
         <SelectRow label="Effects" value={selectedClip.effects?"independent":"shared"} options={["shared","independent"]} onChange={value=>{if(videoLocked)return;onVideoClipsChange(clips.map(c=>c.id===selectedClip.id?{...c,effects:value==="shared"?undefined:snapshotClipEffects(config,keyframes,captionTracks)}:c));onSeek(selectedClip.start,selectedClip.id);}}/>
         <div className="timeline-source-fields">
@@ -1289,10 +1320,10 @@ export default function Timeline({
             <SelectRow label="Easing" value={selectedClip.transition.easing??"ease-in-out"} options={["linear","ease-in","ease-out","ease-in-out","sine","smoother"]} optionLabels={{"ease-in":"Ease in","ease-out":"Ease out","ease-in-out":"Smooth",sine:"Sine",smoother:"Gentle"}} onChange={easing=>{if(!videoLocked)onVideoClipsChange(clips.map(clip=>clip.id===selectedClip.id?{...clip,transition:{...selectedClip.transition!,easing:easing as Keyframe["easing"]}}:clip));}}/>
           </>}
         </section>
-
         </>}
         {clipNotice&&<p className="timeline-inline-notice" role="status">{clipNotice}</p>}
         {trimPreview&&videoPath&&<TrimPreview path={videoPath} left={trimPreview.left} right={trimPreview.right} onClose={()=>setTrimPreview(null)}/>}
+        </div>
         <div className="timeline-inspector-actions">          <button className="ss-tb-btn" disabled={videoLocked || !selectedClip} title="Duplicate selected clips" onClick={() => onVideoClipsChange(duplicateClips(clips, selectedClipIds.length ? selectedClipIds : selectedClip ? [selectedClip.id] : []))}><Copy size={16}/></button>
           <button className="ss-tb-btn" disabled={videoLocked || selectedClipIds.length < 2 || clips.flatMap((c,i)=>selectedClipIds.includes(c.id)?[i]:[]).some((index,i,indices)=>i>0&&index!==indices[i-1]+1)} title="Combine adjacent ranges or group adjacent cuts" onClick={() => onVideoClipsChange(combineClips(clips, selectedClipIds))}><Combine size={16}/></button>
           <button className="ss-tb-btn" disabled={videoLocked || !selectedClip} title="Move selected clips to the beginning" onClick={() => onVideoClipsChange(moveClips(clips, selectedClipIds.length ? selectedClipIds : [selectedClip!.id], 0))}><SkipBack size={16}/></button>
@@ -1301,6 +1332,7 @@ export default function Timeline({
       </aside>}
       {/* ── Multi-Track Area (Video / Audio / Zoom layers) ──────────── */}
       {selectedKeys.length > 0 && <div className="timeline-key-selection-toolbar" aria-label="Selected keyframes">
+        <button aria-label="Edit selection in graph" onClick={()=>setShowGraph(true)}><Activity size={15}/></button>
         <span>{keyGroups(selectedKeys,true).reduce((count,group)=>count+group.times.length,0)} keys</span>
         <button aria-label="Copy selected keyframes" title="Copy (Ctrl+C)" onClick={()=>copySelectedKeys()}><Copy size={15}/></button>
         <button aria-label="Paste copied keyframes" title="Paste at playhead (Ctrl+V)" disabled={!selectionClipboard.current.length} onClick={()=>pasteSelectedKeys()}><BookmarkPlus size={15}/></button>
@@ -1312,6 +1344,7 @@ export default function Timeline({
         {/* Left label rail */}
         <div className="ss-labels-col">
           <div className="timeline-ruler-label" title="Time"><Clock3 size={13} /></div>
+          {timeView==="sequence"&&(config.adjustmentLayers??[]).slice().reverse().map(a=><div key={a.id} className="track-label animation-label" title={a.name}><SlidersHorizontal size={14}/><span className="rail-track-name">{a.name}</span>{trackLock("adjustments","adjustments")}</div>)}
           <div className="track-label video-label" title="Video" onContextMenu={e=>trackHeaderMenu(e,"Video","video","video")}><Film size={15} /><span className="rail-track-name">Video</span><button className="track-lock" aria-label={videoLocked ? "Unlock footage track" : "Lock footage track"} title={videoLocked ? "Unlock footage track" : "Lock footage track"} aria-pressed={videoLocked} onClick={() => onTrackLocksChange?.(videoLocked ? (config.lockedTracks ?? []).filter(id => id !== "video") : [...config.lockedTracks ?? [], "video"])}>{videoLocked ? <Lock size={12}/> : <LockOpen size={12}/>}</button></div>
           {timelineAudioTracks.map((track) => {
             const muted = audioTrackMuted(track);
@@ -1337,15 +1370,16 @@ export default function Timeline({
 
         {/* Shared timeline columns */}
         <div className={`ss-timeline-scroll ${zoomScale > 1 ? "is-zoomed" : ""}`} ref={scrollRef}>
-        <div className="ss-timeline-col" onPointerDownCapture={beginKeyMarquee} data-time-view={timeView} data-timeline-duration={timelineDuration} ref={timeAreaRef} style={{ width: `${zoomScale * 100}%` }} onMouseDownCapture={event => { if (!(event.target instanceof Element && event.target.closest(".footage-segment"))) setSelectedClipId(null); }} onClick={(e) => { if(suppressMarqueeClick.current){suppressMarqueeClick.current=false;return;} const time = getTimeFromEvent(e); const rect = timeAreaRef.current?.getBoundingClientRect(); const target = timeView === "sequence" && rect ? sequenceClip(clips, (e.clientX - rect.left) / rect.width * timelineDuration) : null; onSeek(time, target?.clip.id); }}>
+        <div className="ss-timeline-col" onPointerDownCapture={beginKeyMarquee} data-time-view={timeView} data-snapping={snapping} data-timeline-duration={timelineDuration} ref={timeAreaRef} style={{ width: `${zoomScale * 100}%` }} onMouseDownCapture={event => { if (!(event.target instanceof Element && event.target.closest(".footage-segment"))) setSelectedClipId(null); }} onClick={(e) => { if(suppressMarqueeClick.current){suppressMarqueeClick.current=false;return;} const time = getTimeFromEvent(e); const rect = timeAreaRef.current?.getBoundingClientRect(); const target = timeView === "sequence" && rect ? sequenceClip(clips, (e.clientX - rect.left) / rect.width * timelineDuration) : null; onSeek(time, target?.clip.id); }}>
           {config.cuts.flatMap(cutTime => (timeView === "sequence" ? clips.filter(clip=>!clip.gap&&cutTime>=clip.start&&cutTime<clip.end).map(clip=>clip.id) : [undefined]).map(clipId=><div key={`guide-${cutTime}-${clipId}`} className="timeline-marker-guide" style={{left:x(cutTime,clipId)}} aria-hidden="true"/>))}
           {keyMarquee && <div className="timeline-key-marquee" style={keyMarquee}/>}
-          {mediaDragOver&&<div className="timeline-media-drop-guide" style={{left:timelineDuration?mediaDropTime/timelineDuration*effectiveWidth:0}}><span><Plus size={14}/>New layer · {formatTimecode(mediaDropTime)}</span></div>}
+          {mediaDragOver&&<div className="timeline-media-drop-guide" style={{left:timelineDuration?mediaDropTime/timelineDuration*effectiveWidth:0,width:Math.min(mediaDropLength,Math.max(0,timelineDuration-mediaDropTime))/Math.max(.001,timelineDuration)*effectiveWidth}}><span><Plus size={14}/>{mediaDropLabel} · {formatTimecode(mediaDropTime)}</span></div>}
           <div className="timeline-ruler">
-            {config.cuts.flatMap(cutTime => (timeView === "sequence" ? clips.filter(clip=>!clip.gap&&cutTime>=clip.start&&cutTime<clip.end).map(clip=>clip.id) : [undefined]).map(clipId=><button key={`${cutTime}-${clipId}`} className="timeline-ruler-marker" style={{left:x(cutTime,clipId)}} aria-label={`Timeline marker at ${formatTimecode(cutTime)}`} title={`Marker · ${formatTimecode(cutTime)} · double-click to remove`} onClick={event=>{event.stopPropagation();onSeek(cutTime,clipId);}} onDoubleClick={event=>{event.preventDefault();event.stopPropagation();if(!videoLocked)onCutsChange(config.cuts.filter(time=>time!==cutTime));}} onKeyDown={event=>{if(event.key==="Delete"||event.key==="Backspace"){event.preventDefault();event.stopPropagation();if(!videoLocked)onCutsChange(config.cuts.filter(time=>time!==cutTime));}}}><BookmarkPlus size={13}/></button>))}
+            {config.cuts.flatMap(cutTime => (timeView === "sequence" ? clips.filter(clip=>!clip.gap&&cutTime>=clip.start&&cutTime<clip.end).map(clip=>clip.id) : [undefined]).map(clipId=><button key={`${cutTime}-${clipId}`} className="timeline-ruler-marker" style={{left:x(cutTime,clipId)}} aria-label={`Timeline marker at ${formatTimecode(cutTime)}`} title={`Marker · ${formatTimecode(cutTime)} · double-click to remove`} onClick={event=>{event.stopPropagation();onSeek(cutTime,clipId);}} onDoubleClick={event=>{event.preventDefault();event.stopPropagation();if(!videoLocked)onCutsChange(config.cuts.filter(time=>time!==cutTime));}} onKeyDown={event=>{if(event.key==="Delete"||event.key==="Backspace"){event.preventDefault();event.stopPropagation();if(!videoLocked)onCutsChange(config.cuts.filter(time=>time!==cutTime));}}}/>))}
             {timelineDuration > 0 ? Array.from({ length: 11 }, (_, index) => <span key={index} style={{ left: `${index * 10}%` }}>{formatTimecode(timelineDuration * index / 10 / (timeView === "sequence" ? config.playbackRate || 1 : 1))}</span>) : <span className="timeline-loading-label">Loading video duration…</span>}
           </div>
           {/* Video layer */}
+          {timeView==="sequence"&&(config.adjustmentLayers??[]).slice().reverse().map(a=><div key={a.id} className="ss-track-row animation-track"><div className={`timeline-adjustment ${a.enabled?"":"bypassed"}`} style={{left:a.start/Math.max(.001,timelineDuration)*effectiveWidth,width:(a.end-a.start)/Math.max(.001,timelineDuration)*effectiveWidth}} onClick={e=>e.stopPropagation()} onPointerDown={e=>{if(e.button!==0||config.lockedTracks?.includes("adjustments"))return;e.stopPropagation();e.preventDefault();const x=e.clientX,edge=(e.target as HTMLElement).dataset.edge;let next=a;const move=(ev:PointerEvent)=>{const delta=Math.round((ev.clientX-x)/effectiveWidth*timelineDuration*frameRate)/frameRate;next=edge==="start"?{...a,start:Math.max(0,Math.min(a.end-1/frameRate,a.start+delta))}:edge==="end"?{...a,end:Math.max(a.start+1/frameRate,a.end+delta)}:{...a,start:Math.max(0,a.start+delta),end:Math.max(0,a.start+delta)+a.end-a.start};bar.style.left=`${next.start/timelineDuration*effectiveWidth}px`;bar.style.width=`${(next.end-next.start)/timelineDuration*effectiveWidth}px`;};const bar=e.currentTarget;const original={left:bar.style.left,width:bar.style.width};const up=()=>{window.removeEventListener("pointermove",move);bar.style.left=original.left;bar.style.width=original.width;onAdjustmentsChange?.((config.adjustmentLayers??[]).map(l=>l.id===a.id?next:l));};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up,{once:true});}}><i data-edge="start"/><span>{a.name}</span><i data-edge="end"/></div></div>)}
           <div className="ss-track-row video-track">
             {(trimDraft ?? clips).flatMap((clip,index)=>timeView==="sequence"||!clip.gap?[{clip,index}]:[]).map(({clip,index}) => <div
               key={clip.id}
@@ -1395,20 +1429,25 @@ export default function Timeline({
               onClick={event => { event.stopPropagation(); if(suppressClipClick.current) { suppressClipClick.current=false; return; } event.currentTarget.focus(); setSelectedClipId(clip.id);setSelectedAudio(null);
                 setSelectedClipIds(ids => event.ctrlKey || event.metaKey ? ids.includes(clip.id) ? ids.filter(id => id !== clip.id) : [...ids, clip.id] : clip.groupId ? clips.filter(c=>c.groupId===clip.groupId).map(c=>c.id) : [clip.id]);
                 if (editTool === "razor") { if (!videoLocked) { const next = splitClip(clips, Math.round(getTimeFromEvent(event) * frameRate) / frameRate, clip.id, frameRate); if (next.length !== clips.length) onVideoClipsChange(next); } }
-                else onSeek(getTimeFromEvent(event), clip.id);
+                else { onClipSelect?.(clip.id); onSeek(getTimeFromEvent(event), clip.id); }
               }}
-              onKeyDown={event => { if (event.key === "Enter") { setSelectedClipId(clip.id); onSeek(clip.start, clip.id); } }}
+              onDoubleClick={e=>{if(clip.sequenceId){e.stopPropagation();onSequenceEdit?.(clip.sequenceId);}else {setSelectedClipId(clip.id);setInspectorOpen(true);}}}
+              onKeyDown={event => { if (event.key === "Enter") { setSelectedClipId(clip.id); onClipSelect?.(clip.id); onSeek(clip.start, clip.id); } }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 setSelectedClipId(clip.id);
+                if(!selectedClipIds.includes(clip.id))setSelectedClipIds([clip.id]);
+                onClipSelect?.(clip.id);
                 setContextMenu({ kind: "clip", ...menuPosition(event) });
               }}
             >
+              {!clip.gap&&(hasColorEffect(clip.colorGrade??config.colorGrade)||clip.effects||clip.transition||(config.adjustmentLayers??[]).some(a=>a.enabled&&hasColorEffect(a.grade)&&a.start<sequenceTime(clips,clip.end,clip.id)&&a.end>sequenceTime(clips,clip.start,clip.id)))&&<span className="clip-effect-badge" title={[hasColorEffect(clip.colorGrade??config.colorGrade)?"Color grade":"",clip.effects?"Independent motion":"",clip.transition?"Transition":"",(config.adjustmentLayers??[]).some(a=>a.enabled&&a.start<sequenceTime(clips,clip.end,clip.id)&&a.end>sequenceTime(clips,clip.start,clip.id))?"Adjustment layer":""].filter(Boolean).join(" · ")}><Sparkles size={11}/>FX</span>}
               {cutGuide?.id===clip.id&&<span className="timeline-cut-guide" style={{left:cutGuide.left}}><Scissors size={14}/><small>{formatTimecode(sequenceTime(clips,cutGuide.time,clip.id))}</small></span>}
               {clip.transition&&<div className="timeline-transition" style={{width:Math.min(clip.transition.duration,clipDuration(clip))*(timeView==="source"?clipSpeed(clip):1)/Math.max(.001,timelineDuration)*effectiveWidth}} onPointerDown={event=>event.stopPropagation()}><button className="timeline-transition-open" aria-label="Edit transition" title={`${clip.transition.effect} transition`} onClick={event=>{event.stopPropagation();setSelectedAudio(null);setSelectedClipId(clip.id);setInspectorOpen(true);}}><Sparkles size={14}/></button><span className="timeline-transition-handle" role="slider" tabIndex={videoLocked?-1:0} aria-label="Transition length" aria-valuemin={1/frameRate} aria-valuemax={Math.min(2,clipDuration(clip))} aria-valuenow={clip.transition.duration} onPointerDown={event=>resizeTransition(event,clip)} onClick={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key!=="ArrowLeft"&&event.key!=="ArrowRight")return;event.preventDefault();event.stopPropagation();if(!videoLocked)onVideoClipsChange(clips.map(item=>item.id===clip.id?{...item,transition:{...clip.transition!,duration:Math.max(1/frameRate,Math.min(2,clipDuration(clip),clip.transition!.duration+(event.key==="ArrowLeft"?-1:1)*(event.shiftKey?10:1)/frameRate))}}:item));}}/></div>}
               {!clip.transition&&!clip.gap&&index>0&&!clips[index-1].gap&&<button className="timeline-add-transition" aria-label="Add transition at this cut" disabled={videoLocked} onPointerDown={event=>event.stopPropagation()} onClick={event=>{event.stopPropagation();setSelectedAudio(null);setSelectedClipId(clip.id);setInspectorOpen(true);onVideoClipsChange(clips.map(item=>item.id===clip.id?{...item,transition:{effect:"dissolve",duration:Math.min(.3,clipDuration(clip))}}:item));}}><Plus size={14}/></button>}
-              {!clip.gap && thumbnailStrip && <div className="footage-filmstrip" aria-hidden="true">{filmstripFrames(clip.start,clip.end,duration,(timeView==="sequence"?clipDuration(clip):clip.end-clip.start)/Math.max(.001,timelineDuration)*effectiveWidth).map((frame,i)=><span key={i} style={{backgroundImage:`url("${thumbnailStrip}")`,backgroundPosition:`${frame/9*100}% center`}}/>)}</div>}
+              {clip.sequenceId&&<span className="nested-clip-title"><Layers size={13}/>{config.nestedSequences?.find(d=>d.id===clip.sequenceId)?.name??"Sequence"}</span>}
+              {!clip.gap && !clip.sequenceId && thumbnailStrip && <div className="footage-filmstrip" aria-hidden="true">{filmstripFrames(clip.start,clip.end,duration,(timeView==="sequence"?clipDuration(clip):clip.end-clip.start)/Math.max(.001,timelineDuration)*effectiveWidth).map((frame,i)=><span key={i} style={{backgroundImage:`url("${thumbnailStrip}")`,backgroundPosition:`${frame/9*100}% center`}}/>)}</div>}
               {clip.gap && <span className="timeline-gap-label">Gap</span>}
               {!clip.gap && <><div className="footage-trim-handle start" title="Trim segment start" onMouseDown={e => trimClip(e, clip, "start")} onClick={e => e.stopPropagation()} />
               <div className="footage-trim-handle end" title="Trim segment end" onMouseDown={e => trimClip(e, clip, "end")} onClick={e => e.stopPropagation()} /></>}
@@ -1605,6 +1644,7 @@ export default function Timeline({
                     : "Video clip"}
           </div>
           {contextMenu.kind === "animation-track" && <>
+            <button role="menuitem" onClick={()=>{setShowGraph(true);setContextMenu(null);}}><Activity size={15}/>Keyframe graph</button>
             <button role="menuitem" disabled={keyLocked(contextMenu.animationKind)} onClick={()=>{setSelectedKeys(Array.from(timeAreaRef.current?.querySelectorAll?.<HTMLElement>(`.timeline-animation-key[data-key-kind="${contextMenu.animationKind}"]`)??[]).map(entryFromNode));setContextMenu(null);timelineRootRef.current?.focus?.({preventScroll:true});}}><Diamond size={15}/>Select all keyframes</button>
             {(["ease-in","ease-out","ease-in-out","linear"] as const).map(easing=><button role="menuitem" key={easing} disabled={keyLocked(contextMenu.animationKind)} onClick={()=>{easeKeys(allTrackEntries(contextMenu.animationKind),easing);setContextMenu(null);}}><SlidersHorizontal size={15}/>{easing==="linear"?"Linear":easing==="ease-in-out"?"Ease in & out":easing==="ease-in"?"Ease in":"Ease out"} · all keys</button>)}
             <div className="timeline-context-separator"/>
@@ -1612,6 +1652,7 @@ export default function Timeline({
             <button role="menuitem" className="danger" disabled={keyLocked(contextMenu.animationKind)} onClick={()=>{editSelectedKeys("delete",allTrackEntries(contextMenu.animationKind));setContextMenu(null);}}><Trash2 size={15}/>Delete all keyframes</button>
           </>}
           {contextMenu.kind === "animation-key" && <>
+            <button role="menuitem" onClick={()=>{setShowGraph(true);setContextMenu(null);}}><Activity size={15}/>Keyframe graph</button>
             <button role="menuitem" onClick={()=>{copySelectedKeys(selectedKeys.some(key=>key.kind===contextMenu.animationKind&&key.id===contextMenu.id&&key.clipId===contextMenu.clipId&&key.time===contextMenu.time)?selectedKeys:[{kind:contextMenu.animationKind,id:contextMenu.id,clipId:contextMenu.clipId,time:contextMenu.time}]);setContextMenu(null);}}><Copy size={15}/>Copy selected keyframes</button>
             <button role="menuitem" disabled={!onAnimationKeysChange||keyClipboard.current?.kind!==contextMenu.animationKind||config.lockedTracks?.includes(contextMenu.animationKind==="layer"?"annotations":contextMenu.animationKind)} onClick={()=>{if(selectionClipboard.current.length>1)pasteSelectedKeys();else pasteAnimation(contextMenu.animationKind,contextMenu.id,contextMenu.clipId);setContextMenu(null);}}>Paste at playhead</button>
             <button role="menuitem" disabled={keyLocked(contextMenu.animationKind)} onClick={()=>{editSelectedKeys("duplicate");setContextMenu(null);}}><Layers size={15}/>Duplicate selected keyframes</button>
@@ -1702,6 +1743,8 @@ export default function Timeline({
             </>}
           </>}
           {contextMenu.kind === "clip" && <>
+            <button role="menuitem" disabled={videoLocked||!(selectedClipIds.length||selectedClipId)} onClick={()=>{onNestSelection?.(selectedClipIds.length?selectedClipIds:selectedClipId?[selectedClipId]:[]);setContextMenu(null);}}><Layers size={15}/>Nest selected clips</button>
+            {selectedClip?.sequenceId&&<><button role="menuitem" onClick={()=>{onSequenceEdit?.(selectedClip.sequenceId!);setContextMenu(null);}}><Layers size={15}/>Edit nested sequence</button><button role="menuitem" disabled={videoLocked} onClick={()=>{onUnnest?.(selectedClip.id);setContextMenu(null);}}><ArrowLeftRight size={15}/>Unnest into clips</button></>}
             <button role="menuitem" onClick={() => { splitAt(currentTime); setContextMenu(null); }}><Scissors size={15} /> Split at playhead · Ctrl+K</button>
             <button role="menuitem" disabled={videoLocked||!selectedClip || !clips.length} onClick={() => { deleteClip(); setContextMenu(null); }}><Trash2 size={15} />Delete</button>
             <button role="menuitem" disabled={videoLocked||!selectedClip} onClick={()=>{deleteClip(true);setContextMenu(null);}}><Trash2 size={15}/>Ripple delete</button>

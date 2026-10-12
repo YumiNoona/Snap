@@ -1153,8 +1153,11 @@
   align-self: start;
   padding: 8px 4px;
   gap: 5px;
-  overflow: visible;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
+.screenstudio-editor-layout .ss-vertical-tool-palette::-webkit-scrollbar { display: none; }
 .screenstudio-editor-layout .ss-preview-center-area {
   grid-column: 2;
   grid-row: 2;
@@ -1344,3 +1347,4 @@
 :root .screenstudio-editor-layout[data-theme] :is(.custom-select-trigger,.ss-file-menu>button,.custom-select-menu>button,.caption-language-menu>button,.timeline-clip-inspector button,.timeline-clip-inspector input),
 :root :is(.aspect-dropdown-menu,.timeline-context-menu,.media-context-menu)>button { border-radius:8px; }
 :root .screenstudio-editor-layout[data-theme] .timeline-clip-inspector { right:8px;bottom:calc(100% + 18px); }
+.sequence-breadcrumbs { position:absolute;left:80px;top:58px;z-index:45;display:flex;gap:5px;padding:5px;border:1px solid var(--border-subtle);border-radius:12px;background:color-mix(in srgb,var(--bg-surface) 90%,transparent);backdrop-filter:blur(18px); }.sequence-breadcrumbs button { border:0;border-radius:12px;color:var(--text-secondary);background:transparent;padding:7px 10px;font-size:11px;cursor:pointer; }.sequence-breadcrumbs button:last-child { color:var(--text-primary);background:var(--bg-surface-sunken); }

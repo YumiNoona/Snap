@@ -401,12 +401,13 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
       };
       let recordingOptions = manualOptions;
       if (settings.recordingPerformanceMode === "automatic") {
+        const captureBounds = await invoke<{ w: number; h: number }>("get_target_bounds", { targetId });
         const savedProfile = settings.automaticRecordingProfile;
-        if (savedProfile?.version === AUTOMATIC_PROFILE_VERSION) {
+        if (savedProfile?.version === AUTOMATIC_PROFILE_VERSION && savedProfile.targetId === targetId && savedProfile.sourceWidth === captureBounds.w && savedProfile.sourceHeight === captureBounds.h) {
           recordingOptions = savedProfile.options;
           setRecordStatus(`Automatic: ${savedProfile.summary}`);
         } else {
-          setRecordStatus("Checking this PC once for the lightest recording profile…");
+          setRecordStatus("Checking hardware for native 60 FPS recording…");
           let recommendation: RecordingRecommendation;
           try {
             recommendation = await invoke<RecordingRecommendation>("recommend_recording_options", { targetId });
@@ -420,6 +421,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
           setSettings((current) => ({
             ...current,
             automaticRecordingProfile: {
+              targetId, sourceWidth: captureBounds.w, sourceHeight: captureBounds.h,
               version: AUTOMATIC_PROFILE_VERSION,
               calibratedAt: Date.now(),
               summary: recommendation.summary,

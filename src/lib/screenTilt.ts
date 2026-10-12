@@ -2,7 +2,7 @@ import { motionEase } from "./easing";
 import type { Keyframe } from "./types";
 
 export interface ScreenTiltPose { tiltX:number; tiltY:number; rotation:number; scale:number; perspective:number }
-export interface ScreenTiltKey extends ScreenTiltPose { time:number; easing:Keyframe["easing"] }
+export interface ScreenTiltKey extends ScreenTiltPose { time:number; easing:Keyframe["easing"]; bezier?:Keyframe["bezier"] }
 export interface ScreenTiltConfig extends ScreenTiltPose { enabled:boolean; keys:ScreenTiltKey[] }
 export const DEFAULT_SCREEN_TILT:ScreenTiltConfig={enabled:false,tiltX:0,tiltY:0,rotation:0,scale:1,perspective:2.5,keys:[]};
 const fields=["tiltX","tiltY","rotation","scale","perspective"] as const;
@@ -16,7 +16,7 @@ export function resolveScreenTilt(config:ScreenTiltConfig|undefined,time:number)
   const right=keys.findIndex(k=>k.time>time);
   if(right<0)return safePose(keys[keys.length-1]);
   const a=safePose(keys[right-1]),b=safePose(keys[right]);
-  const mix=motionEase((time-keys[right-1].time)/Math.max(.000001,keys[right].time-keys[right-1].time),keys[right].easing);
+  const mix=motionEase((time-keys[right-1].time)/Math.max(.000001,keys[right].time-keys[right-1].time),keys[right].easing,keys[right].bezier);
   const pose={...a};for(const field of fields)pose[field]=a[field]+(b[field]-a[field])*mix;return pose;
 }
 export function projectScreenPoint(x:number,y:number,frame:{x:number;y:number;w:number;h:number},raw:ScreenTiltPose):{x:number;y:number} {

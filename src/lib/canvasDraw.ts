@@ -242,9 +242,9 @@ export function drawVideoLayer(
 ): void {
   const video = loadCachedVideo(layer.path, cache, layer.id);
   if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
-  const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), timeSeconds - layer.start + (layer.sourceOffset ?? 0)));
+  const localTime = Math.max(0, Math.min(Math.max(0, video.duration - .02), (timeSeconds - layer.start) * (layer.sourceSpeed ?? 1) + (layer.sourceOffset ?? 0)));
   if (Math.abs(video.currentTime - localTime) > (playing ? .18 : .035) && !video.seeking) video.currentTime = localTime;
-  video.playbackRate = Math.max(.0625,Math.min(16,playbackRate));
+  video.playbackRate = Math.max(.0625,Math.min(16,playbackRate * (layer.sourceSpeed ?? 1)));
   if (playing && video.paused) void video.play().catch(() => undefined);
   if (!playing && !video.paused) video.pause();
   ctx.save();
@@ -898,7 +898,7 @@ export function smoothTowards(
  * keyframe's click position — only scale still animates).
  */
 export function resolveZoom(
-  keyframes: { time: number; duration: number; x: number; y: number; scale: number; easing?: string }[],
+  keyframes: { time: number; duration: number; x: number; y: number; scale: number; easing?: string; bezier?:[number,number,number,number] }[],
   ts: number,
   zoomEnabled: boolean,
   fixedZoomPart: boolean,
@@ -920,7 +920,7 @@ export function resolveZoom(
     const transStart = segEnd - Math.max(0, next.duration || 0);
     const from = Math.max(kf.time, transStart);
     const span = Math.max(1, segEnd - from);
-    const eased = ts < from ? 0 : motionEase(Math.min(1, Math.max(0, (ts - from) / span)), curve && curve !== "keyframes" ? curve : next.easing);
+    const eased = ts < from ? 0 : motionEase(Math.min(1, Math.max(0, (ts - from) / span)), curve && curve !== "keyframes" ? curve : next.easing,next.bezier);
     x = kf.x + (next.x - kf.x) * eased;
     y = kf.y + (next.y - kf.y) * eased;
     scale = kf.scale + (next.scale - kf.scale) * eased;

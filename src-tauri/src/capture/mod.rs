@@ -60,10 +60,10 @@ pub struct RecordingOptions {
 impl Default for RecordingOptions {
     fn default() -> Self {
         Self {
-            fps: 30,
-            bitrate_mbps: 10,
-            max_width: Some(1920),
-            max_height: Some(1080),
+            fps: 60,
+            bitrate_mbps: 24,
+            max_width: None,
+            max_height: None,
             allow_software_encoder: false,
         }
     }
@@ -372,16 +372,18 @@ fn recommend_recording_options_blocking(
     if !ffmpeg_available {
         return Err("FFmpeg is unavailable for the automatic performance check".to_string());
     }
-    static CACHE: OnceLock<Mutex<Vec<(GpuVendor, u64, RecordingRecommendation)>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<Vec<(GpuVendor, u64, u64, RecordingRecommendation)>>> = OnceLock::new();
 
     let capability = target_gpu_capability(target_id);
     let memory_bucket = capability.dedicated_video_memory / (512 * 1024 * 1024);
+    let bounds = get_target_bounds(target_id.to_string())?;
+    let pixels = bounds.w.max(1) as u64 * bounds.h.max(1) as u64;
     let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
-    if let Some((_, _, recommendation)) = cache
+    if let Some((_, _, _, recommendation)) = cache
         .lock()
         .map_err(|error| error.to_string())?
         .iter()
-        .find(|(vendor, memory, _)| *vendor == capability.vendor && *memory == memory_bucket)
+        .find(|(vendor, memory, size, _)| *vendor == capability.vendor && *memory == memory_bucket && *size == pixels)
         .cloned()
     {
         return Ok(recommendation);
@@ -401,15 +403,15 @@ fn recommend_recording_options_blocking(
         return Err("No working hardware H.264 encoder was detected. Update your graphics driver, or explicitly choose manual CPU compatibility recording in Settings.".to_string());
     };
     let options = RecordingOptions {
-        fps: 30,
-        bitrate_mbps: 10,
-        max_width: Some(1920),
-        max_height: Some(1080),
+        fps: 60,
+        bitrate_mbps: native_capture_bitrate(pixels),
+        max_width: None,
+        max_height: None,
         allow_software_encoder: false,
     };
     let encoder = label.to_string();
     let hardware_encoding = true;
-    let summary = format!("1920x1080 at 30 FPS and 10 Mbps using {label}; hardware-only capture");
+    let summary = format!("{}x{} native pixels at 60 FPS and {} Mbps using {label}; hardware-only capture", bounds.w, bounds.h, options.bitrate_mbps);
     let recommendation = RecordingRecommendation {
         options,
         encoder,
@@ -419,9 +421,14 @@ fn recommend_recording_options_blocking(
     cache.lock().map_err(|error| error.to_string())?.push((
         capability.vendor,
         memory_bucket,
+        pixels,
         recommendation.clone(),
     ));
     Ok(recommendation)
+}
+
+fn native_capture_bitrate(pixels: u64) -> u32 {
+    ((pixels as f64 / (1920.0 * 1080.0) * 24.0).ceil() as u32).clamp(12, 50)
 }
 
 fn probe_h264_encoder(encoder: &str) -> bool {
@@ -498,6 +505,9 @@ struct CaptureRuntime {
 }
 
 static STATE: Mutex<Option<CaptureHandle>> = Mutex::new(None);
+pub(crate) fn recording_is_active() -> bool {
+    STATE.lock().map(|state| state.is_some()).unwrap_or(true)
+}
 static GFXCAPTURE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 static BOUNDED_FILTER_QUEUE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 const RESILIENT_MP4_MOVFLAGS: &str = "+frag_keyframe+empty_moov+default_base_moof";
@@ -2259,8 +2269,8 @@ mod tests {
     #[test]
     fn game_display_source_keeps_scaling_and_capture_on_gpu() {
         let source=duplication_source(2,3840,2160,RecordingOptions::default());
-        assert!(source.starts_with("ddagrab=output_idx=2:framerate=30:draw_mouse=0:"));
-        assert!(source.contains("scale_d3d11=width=1920:height=1080:format=bgra"));
+        assert!(source.starts_with("ddagrab=output_idx=2:framerate=60:draw_mouse=0:"));
+        assert!(!source.contains("scale_d3d11"));
         assert!(!source.contains("hwdownload"));
         let native=duplication_source(0,1280,720,quality_options());
         assert!(!native.contains("scale_d3d11"));
@@ -2365,12 +2375,16 @@ mod tests {
     }
 
     #[test]
-    fn balanced_profile_scales_4k_to_1080p_without_changing_aspect() {
-        let options = RecordingOptions::default();
+    fn native_quality_retains_pixels_and_manual_limits_preserve_aspect() {
+        let native = RecordingOptions::default();
+        assert_eq!(constrained_size(3840, 2160, native), (3840, 2160));
+        assert_eq!(super::native_capture_bitrate(1920 * 1080), 24);
+        assert_eq!(super::native_capture_bitrate(3840 * 2160), 50);
+        let options = RecordingOptions { max_width: Some(1920), max_height: Some(1080), ..native };
         assert_eq!(constrained_size(3840, 2160, options), (1920, 1080));
         assert_eq!(
             editor_ready_fps_filter(options.fps),
-            "fps=fps=30:round=near:start_time=0"
+            "fps=fps=60:round=near:start_time=0"
         );
     }
 

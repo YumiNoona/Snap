@@ -51,7 +51,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   const [exportsDir, setExportsDir] = useState(fallbackExportsDir);
   const defaultPath = defaultExportPath(videoPath, fallbackExportsDir, "edited", config.exportDefaults?.format??"mp4");
   const [settings, setSettings] = useState<ExportSettings>({
-    format: "mp4", fps: 60,...layoutExportSize(config.aspectRatio), quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true,...config.exportDefaults,
+    format: "mp4", fps: 60,...layoutExportSize(config.aspectRatio), quality: "high", outputPath: defaultPath, captions: captionTrackCount > 0 ? "burned" : "none", audioMode: "mixed", normalizeAudio: false, deliveryPackage: false, loop: true, motionInterpolation: "none",...config.exportDefaults,
   });
   useEffect(() => {
     let cancelled = false;
@@ -68,17 +68,17 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   const activeDuration = outputDuration(0, sequenceDuration(retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration)), config.playbackRate);
   const pixelFactor = (settings.width * settings.height) / (1920 * 1080);
   const fpsFactor = Math.sqrt(settings.fps / 60);
-  const baseMbps = settings.quality === "high" ? 12 : settings.quality === "medium" ? 8 : 5;
+  const baseMbps = settings.quality === "high" ? 24 : settings.quality === "medium" ? 8 : 5;
   const bitrateMbps = Math.max(2, Math.min(65, baseMbps * pixelFactor * fpsFactor));
   const estimatedMB = settings.format === "gif"
     ? activeDuration * Math.min(15, settings.fps) * settings.width * settings.height * 0.00000015
     : activeDuration * (bitrateMbps + 0.192) / 8;
-  // Canvas export runs in real time, followed by FFmpeg finalization.
+  // Composition and final encoding vary with resolution and enabled effects.
   const encodeFactor = Math.max(0.2, Math.min(2.2, pixelFactor * (settings.fps / 60) * 0.45));
-  const estimatedSeconds = activeDuration * (1 + encodeFactor) + 3;
+  const estimatedSeconds = activeDuration * (1 + encodeFactor) * (settings.motionInterpolation === "optical-flow" ? 5 : 1) + 3;
   const exporting = status.startsWith("Exporting") || status === "Finalizing..." || status.startsWith("Cancelling");
   const cancellable = status.startsWith("Exporting");
-  const done = status.startsWith("Done");
+  const done = status.startsWith("Export Saved") || status.startsWith("Done");
   const [fileActionError, setFileActionError] = useState("");
   const [fileActionBusy, setFileActionBusy] = useState(false);
   const fileActionRef = useRef({ busy: false, generation: 0 });
@@ -176,6 +176,10 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
             {captionTrackCount > 0 && <div className="export-options-row">
               <ExportChoice label="Captions" value={settings.captions ?? "none"} options={[["burned", "Burn into video"], ...(settings.format !== "gif" ? [["embedded", "Embedded subtitle track"]] as [string, string][] : []), ["srt", "SRT sidecar only"], ["vtt", "WebVTT sidecar only"], ["burned-srt", "Burned + SRT"], ["none", "No captions"]]} onChange={captions => setSettings({ ...settings, captions: captions as ExportSettings["captions"] })}/>
             </div>}
+            {settings.format !== "gif" && <div className="export-delivery-choice">
+              <ExportChoice label="Motion" value={settings.motionInterpolation ?? "none"} options={[["none", "Original frames · crisp text"], ["optical-flow", "Optical flow · smoother motion"]]} onChange={motionInterpolation => setSettings({ ...settings, motionInterpolation: motionInterpolation as ExportSettings["motionInterpolation"] })}/>
+              {settings.motionInterpolation === "optical-flow" && <p className="export-estimate-note">Adds frames for slow motion and low FPS footage. Takes longer; fast text can distort.</p>}
+            </div>}
             {settings.format === "mp4" && <div className="export-options-row">
               <ExportChoice label="Audio tracks" value={settings.audioMode ?? "mixed"} options={[["mixed", "Mixed · most compatible"], ["separate", "Separate editable tracks"]]} onChange={audioMode => setSettings({ ...settings, audioMode: audioMode as ExportSettings["audioMode"] })}/>
               <ExportChoice label="Normalization" value={settings.normalizeAudio ? "on" : "off"} options={[["off", "Preserve levels"], ["on", "Normalize loudness"]]} onChange={value => setSettings({ ...settings, normalizeAudio: value === "on" })}/>
@@ -191,12 +195,12 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
             <div className="export-summary-row"><Clock3 size={17} /><span><small>Video length</small><strong>{formatDuration(activeDuration)}</strong></span></div>
             <div className="export-summary-row"><HardDrive size={17} /><span><small>Estimated size</small><strong>≈ {estimatedMB < 10 ? estimatedMB.toFixed(1) : Math.round(estimatedMB)} MB</strong></span></div>
             <div className="export-summary-row"><Download size={17} /><span><small>Estimated time</small><strong>{formatEstimate(estimatedSeconds)}</strong></span></div>
-            <p className="export-estimate-note">Snap renders the canvas in real time, then encodes the final file. Estimates vary with your GPU and selected effects.</p>
+            <p className="export-estimate-note">Each frame is rendered at its exact timestamp. Time varies with your footage, GPU and effects.</p>
           </aside>
         </div>
 
         {(exporting || done || status.startsWith("Export failed")) && <div className={`export-progress ${done ? "done" : status.startsWith("Export failed") ? "error" : ""}`}>
-          <div><span>{status}</span><strong>{done ? "100%" : `${Math.round(progress * 100)}%`}</strong></div>
+          <div><span>{status === "Done — export saved" ? "Export Saved" : status}</span><strong>{done ? "100%" : `${Math.round(progress * 100)}%`}</strong></div>
           <div className="export-progress-track"><i style={{ width: `${Math.max(2, progress * 100)}%` }} /></div>
         </div>}
 

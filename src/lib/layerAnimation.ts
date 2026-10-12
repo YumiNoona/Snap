@@ -12,7 +12,7 @@ export function animatedLayer(layer: Layer, sourceTime: number): Layer {
   else if (right < 0) pose = keys[keys.length-1];
   else {
     const a = keys[right-1], b = keys[right];
-    const t = motionEase((time-a.time)/Math.max(.0001,b.time-a.time),b.easing);
+    const t = motionEase((time-a.time)/Math.max(.0001,b.time-a.time),b.easing,b.bezier);
     const lerp = (x:number,y:number) => x+(y-x)*t;
     pose = {...b,x:lerp(a.x,b.x),y:lerp(a.y,b.y),scale:lerp(a.scale,b.scale),opacity:lerp(a.opacity,b.opacity),rotation:lerp(a.rotation,b.rotation)};
   }

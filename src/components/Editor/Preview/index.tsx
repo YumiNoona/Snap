@@ -1,4 +1,6 @@
 import { projectMediaLayers } from "../../../lib/mediaTimeline";
+import type { ColorComparison } from "../../../lib/colorGrade";
+import { gradedSource, releaseColorRenderer } from "../../../lib/colorRenderer";
 import { applyCursorEdits, cursorVisible } from "../../../lib/editorFinishing";
 import { sequenceTime } from "../../../lib/videoEditing";
 import { renderTransitionBoundary } from "../../../lib/exportCompositor";
@@ -27,6 +29,8 @@ import {
 import "./Preview.css";
 
 interface Props {
+  colorComparison?:ColorComparison;
+  onColorComparisonChange?:(c:ColorComparison)=>void;
   videoPath: string;
   sourceDuration?: number;
   readyToPaint?:boolean;
@@ -112,6 +116,7 @@ function firstClickAfter(clicks: InputEvent[], timestampMs: number) {
 }
 
 export default function Preview({
+  colorComparison, onColorComparisonChange,
   videoPath,
   sourceDuration=0,
   readyToPaint=true,
@@ -147,7 +152,7 @@ export default function Preview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas=canvasRef.current;
-    return () => { if(canvas)releaseScreenTilt(canvas); };
+    return () => { if(canvas){releaseScreenTilt(canvas);releaseColorRenderer(canvas);} };
   }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
@@ -191,7 +196,6 @@ export default function Preview({
   const transitionPendingRef=useRef<string|null>(null);
   const transitionCacheRef=useRef<{config:EditorConfig;keys:Keyframe[];w:number;h:number;path:string}|null>(null);
   const [eventsReady, setEventsReady] = useState(false);
-  const [currentZoom, setCurrentZoom] = useState(1.0);
   const [zoomTargetDragging, setZoomTargetDragging] = useState(false);
   const videoMetaRef = useRef<{ w: number; h: number; d: number } | null>(null);
   const kfGenerated = useRef(false);
@@ -626,10 +630,6 @@ export default function Preview({
     const zoomX = maskFocus ? zoomResult.x + (maskFocus.x - zoomResult.x) * focusMix : zoomResult.x;
     const zoomY = maskFocus ? zoomResult.y + (maskFocus.y - zoomResult.y) * focusMix : zoomResult.y;
     const zoomScale = maskFocus ? zoomResult.scale + (maskFocus.scale - zoomResult.scale) * focusMix : zoomResult.scale;
-    if (config.zoomEnabled && keyframes.length > 0) {
-      const z = Math.round(zoomScale * 100) / 100;
-      setCurrentZoom((current) => Math.abs(current - z) > 0.01 ? z : current);
-    }
 
 
     // ── Draw Background ────────────────────────────────────────────────────
@@ -738,14 +738,18 @@ export default function Preview({
       const zoomDelta = prevZoom && ts >= prevZoom.ts && ts - prevZoom.ts < 100
         ? { x: (zoomX - prevZoom.x) * videoW, y: (zoomY - prevZoom.y) * videoH, scale: zoomScale - prevZoom.scale }
         : null;
+      screenCtx.save();
+      screenCtx.imageSmoothingEnabled = true; screenCtx.imageSmoothingQuality = "high";
+      const colorSource=gradedSource(canvas,video,vw,vh,config,config.videoClips?.length?sequenceTime(config.videoClips,video.currentTime,activeClipId):video.currentTime-config.trimStart,colorComparison);
       drawVideoWithMotionBlur(
         screenCtx,
-        video,
+        colorSource,
         { x: coverX, y: coverY, w: coverW, h: coverH },
         { x: offsetX, y: offsetY, w: videoW, h: videoH },
         simplified ? { ...config.motionBlur, enabled: false } : config.motionBlur,
         zoomDelta
       );
+      screenCtx.restore();
       previousZoomRef.current = { x: zoomX, y: zoomY, scale: zoomScale, ts };
     }
 
@@ -1069,7 +1073,7 @@ export default function Preview({
     }
 
   }, [
-    canvasSize, config, keyframes, captionTracks, playing, selectedLayerId, eventsReady, activeClipId, gapTime, readyToPaint, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
+    canvasSize, config, colorComparison, keyframes, captionTracks, playing, selectedLayerId, eventsReady, activeClipId, gapTime, readyToPaint, zoomTargetMode, zoomFocusPoint, zoomFocusSource,
     getCursorAt, screenToVideo, spawnClickRipples
   ]);
   renderRef.current = render;
@@ -1443,6 +1447,7 @@ export default function Preview({
       {!frameReady&&!loadError&&<span className="preview-loading" role="status">Loading recording…</span>}
       {proxyStatus && <small className="preview-proxy-status">{proxyStatus}</small>}
       {loadError && <p className="preview-error">{loadError}</p>}
+      {colorComparison?.enabled&&<button type="button" className="color-wipe-handle" aria-label="Drag color comparison divider" onPointerDown={e=>{e.preventDefault();e.stopPropagation();const move=(ev:PointerEvent)=>{const p=canvasToBacking(ev.clientX,ev.clientY),g=geomRef.current,view=sourceViewRef.current,vw=videoRef.current?.videoWidth??1;onColorComparisonChange?.({...colorComparison,split:Math.max(0,Math.min(1,(view.x+(p.x-g.offsetX)/Math.max(1,g.videoW)*view.w)/vw))});};const up=()=>{window.removeEventListener("pointermove",move);};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up,{once:true});}}>Original ↔ Graded</button>}
       <canvas
         ref={canvasRef}
         width={canvasSize.w}
@@ -1454,9 +1459,6 @@ export default function Preview({
         <div className="crop-hint">
           Drag to crop region • Esc to cancel • tiny click to reset
         </div>
-      )}
-      {config.zoomEnabled && keyframes.length > 0 && currentZoom > 1.02 && (
-        <div className="zoom-badge">{Math.round(currentZoom * 100)}%</div>
       )}
       <video
         ref={assignVideoElement}

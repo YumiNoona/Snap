@@ -38,7 +38,7 @@ describe("non-destructive footage editing", () => {
   it("migrates old projects and round-trips footage edits with a new schema version", () => {
     const project = createProject("demo.mp4", "events.json");
     const old = migrateProject({ ...project, schemaVersion: 1, editor: { ...project.editor, videoClips: undefined } });
-    expect(old.schemaVersion).toBe(3);
+    expect(old.schemaVersion).toBe(4);
     expect(old.editor.videoClips).toBeNull();
     const clips = [{ id: "a", start: 0, end: 2 }, { id: "b", start: 4, end: 8 }];
     expect(migrateProject(JSON.parse(JSON.stringify({ ...project, editor: { ...project.editor, videoClips: clips } }))).editor.videoClips).toEqual(clips);

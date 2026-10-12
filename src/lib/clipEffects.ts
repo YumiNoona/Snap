@@ -6,7 +6,8 @@ export function snapshotClipEffects(config: EditorConfig, keyframes: Keyframe[],
 }
 
 export function resolveClipEffects(clip: VideoClip | undefined, config: EditorConfig, keyframes: Keyframe[], captions: CaptionTrack[]) {
-  return { config: clip?.effects ? { ...config, ...clip.effects.config } : config, keyframes: clip?.effects?.keyframes ?? keyframes, captions: clip?.effects?.captions ?? captions };
+  const resolved = clip?.effects ? { ...config, ...clip.effects.config,videoClips:config.videoClips,nestedSequences:config.nestedSequences } : config;
+  return { config: clip?.colorGrade ? { ...resolved, colorGrade: clip.colorGrade } : resolved, keyframes: clip?.effects?.keyframes ?? keyframes, captions: clip?.effects?.captions ?? captions };
 }
 
 export function editClipEffects(config: EditorConfig, clipId: string, patch: Partial<ClipEffects>): EditorConfig {

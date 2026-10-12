@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe } from "./types";
 import { DEFAULT_EDITOR_CONFIG } from "./types";
 import { recordingDataPaths } from "./recordingPaths";
+import { validateSequences } from "./nestedSequences";
 
-export const CURRENT_PROJECT_VERSION = 3 as const;
+export const CURRENT_PROJECT_VERSION = 4 as const;
 export const PROJECT_FILENAME = "project.snap.json";
 
 export interface SnapProject {
@@ -52,11 +53,12 @@ export function createProject(videoPath: string, inputLogPath: string, now = new
 export function migrateProject(value: unknown): SnapProject {
   if (!value || typeof value !== "object") throw new Error("Project file is not a JSON object");
   const raw = value as Partial<SnapProject> & { schemaVersion?: number };
-  if (raw.schemaVersion !== CURRENT_PROJECT_VERSION && raw.schemaVersion !== 1 && raw.schemaVersion !== 2) {
+  if (raw.schemaVersion !== CURRENT_PROJECT_VERSION && raw.schemaVersion !== 1 && raw.schemaVersion !== 2 && raw.schemaVersion !== 3) {
     throw new Error(`Unsupported Snap project version: ${String(raw.schemaVersion ?? "missing")}`);
   }
   if (!raw.media?.videoPath || !raw.media.inputLogPath) throw new Error("Project media paths are missing");
   const defaults = cloneDefaultEditor();
+  if(Array.isArray(raw.editor?.nestedSequences))validateSequences(raw.editor.nestedSequences);
   return {
     ...raw,
     schemaVersion: CURRENT_PROJECT_VERSION,

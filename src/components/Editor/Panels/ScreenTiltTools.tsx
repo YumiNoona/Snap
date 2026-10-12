@@ -19,7 +19,7 @@ export default function ScreenTiltTools({config,time,onChange,frameRate=30}:{con
   const locked=config.lockedTracks?.includes("tilt")??false;
   const update=(patch:Partial<typeof effect>)=>!locked&&onChange({...config,screenTilt:{...effect,...patch}});
   const setKey=(patch:Partial<ScreenTiltPose>={})=>{
-    const next:ScreenTiltKey={...pose,time:frameTime,easing:key?.easing??"ease-in-out",...patch};
+    const next:ScreenTiltKey={...pose,time:frameTime,easing:key?.easing??"ease-in-out",bezier:key?.bezier,...patch};
     update({enabled:true,keys:[...effect.keys.filter(k=>Math.abs(k.time-frameTime)>=.5/rate),next].sort((a,b)=>a.time-b.time)});
   };
   const change=(patch:Partial<ScreenTiltPose>)=>effect.keys.length?setKey(patch):update(patch);

@@ -3,6 +3,12 @@ import { Section, SelectRow, CheckRow } from "./PanelControls";
 import ScreenTiltTools from "./ScreenTiltTools";
 import CameraAnimation from "./CameraAnimation";
 import BackgroundImages from "./BackgroundImages";
+
+import ColorStudio from "./ColorStudio";
+import SequenceLibrary from "./SequenceLibrary";
+import { beginMediaDrag } from "../../../lib/mediaDrag";
+import type { ColorComparison } from "../../../lib/colorGrade";
+import type { ColorGrade } from "../../../lib/colorGrade";
 import "./Animation.css";
 import { userError } from "../../../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -25,6 +31,19 @@ import { buildDisplayActions, resolveDisplayActions, type DisplayAction } from "
 import "./Panels.css";
 
 interface Props {
+  sequenceScopeId?:string;
+  referencedSequenceIds?: string[];
+  onSequenceInsert?:(id:string)=>void;
+  onSequenceEdit?:(id:string)=>void;
+  onSequencesChange?:(sequences:NonNullable<EditorConfig["nestedSequences"]>)=>void;
+  colorConfig?: EditorConfig;
+  colorClipId?: string;
+  sequencePosition?: number;
+  sequenceLength?: number;
+  comparison?: ColorComparison;
+  onComparison?: (c:ColorComparison)=>void;
+  onColorConfigChange?: (c:EditorConfig)=>void;
+  projectColorGrade?: ColorGrade;
   config: EditorConfig;
   inputLogPath: string;
   onConfigChange: (cfg: EditorConfig) => void;
@@ -97,7 +116,7 @@ const CAPTION_MODEL_OPTIONS: Array<{ value: TranscriptionModel; label: string; d
 ];
 const MEDIA_LIBRARY_KEY = "snap.editorMediaLibrary.v1";
 type MediaKind = "image" | "audio" | "video";
-interface MediaAsset { id: string; name: string; path: string; kind: MediaKind }
+interface MediaAsset { id: string; name: string; path: string; kind: MediaKind; duration?: number }
 interface DuplicateMediaConflict { existing: MediaAsset; incomingPath: string; incomingName: string }
 
 function mediaKind(path: string): MediaKind {
@@ -139,6 +158,9 @@ const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
 };
 
 export default function Panels({
+  sequenceScopeId,referencedSequenceIds,onSequenceInsert,onSequenceEdit,onSequencesChange,
+  colorConfig, colorClipId, sequencePosition=0, sequenceLength=0, comparison, onComparison, onColorConfigChange,
+
   config, inputLogPath, onConfigChange, duration, currentTime, frameRate = 30,
   layers, selectedLayerId, onAddLayer, onSelectLayer,
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
@@ -147,6 +169,7 @@ export default function Panels({
   audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
+  const [selectedMediaIds,setSelectedMediaIds]=useState<string[]>([]);
   const [cursorPacksError, setCursorPacksError] = useState("");
   const [recordedActions, setRecordedActions] = useState<DisplayAction[]>([]);
   const [bgCategory, setBgCategory] = useState<"gradient" | "color" | "image">(config.bgType === "wallpaper" ? "gradient" : config.bgType);
@@ -176,6 +199,7 @@ export default function Panels({
           name: typeof saved.name === "string" && saved.name ? saved.name : saved.path.split(/[\\/]/).pop() || `Media ${index + 1}`,
           path: saved.path,
           kind: mediaKind(saved.path),
+          duration: typeof saved.duration === "number" && Number.isFinite(saved.duration) && saved.duration > 0 ? saved.duration : undefined,
         }];
       }) };
     } catch { return { assets: [] }; }
@@ -190,6 +214,7 @@ export default function Panels({
   const [pendingMediaRemoval, setPendingMediaRemoval] = useState<MediaAsset | null>(null);
   const mediaContextMenuRef = useRef<HTMLDivElement>(null);
   const mediaLibraryRef = useRef(mediaLibrary);
+  const probedMedia = useRef(new Set<string>());
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
   const updateCursor = (patch: Partial<EditorConfig["cursorStyle"]>) =>
@@ -249,6 +274,16 @@ export default function Panels({
     mediaLibraryRef.current = mediaLibrary;
     localStorage.setItem(MEDIA_LIBRARY_KEY, JSON.stringify(mediaLibrary));
   }, [mediaLibrary]);
+
+  useEffect(() => {
+    for (const asset of mediaLibrary.assets) {
+      if (asset.kind === "image" || asset.duration || probedMedia.current.has(asset.path)) continue;
+      probedMedia.current.add(asset.path);
+      void invoke<number>("probe_media_duration", { path: asset.path }).then(length => {
+        if (Number.isFinite(length) && length > 0) setMediaLibrary(current => ({ assets: current.assets.map(item => item.path === asset.path ? { ...item, duration: length } : item) }));
+      }).catch(() => {});
+    }
+  }, [mediaLibrary.assets]);
 
   const addMediaPaths = useCallback((paths: string[]) => {
     const supported = paths.filter(isSupportedMedia);
@@ -340,7 +375,7 @@ export default function Panels({
       if (payload.type === "leave") setMediaDragOver(false);
       if (payload.type === "drop") {
         setMediaDragOver(false);
-        addMediaPaths(payload.paths);
+        // The editor routes a native drop once, based on its actual destination.
       }
     });
     return () => { void unlisten.then((stop) => stop()); };
@@ -385,8 +420,7 @@ export default function Panels({
   }, [mediaContextMenu]);
 
   const addAssetToTimeline = (asset: MediaAsset) => {
-    if (asset.kind === "audio") void onAddAudioSources([asset.path]);
-    else onAddMediaToTimeline([asset.path]);
+    onAddMediaToTimeline([asset.path]);
     setMediaContextMenu(null);
   };
 
@@ -651,11 +685,13 @@ export default function Panels({
           <div className="media-asset-list">
             {visibleMedia.map((asset, index) => {
               return <article
-                className="media-asset-card"
+                className={`media-asset-card ${selectedMediaIds.includes(asset.id)?"selected":""}`}
                 key={asset.id}
                 style={{ "--media-index": index } as CSSProperties}
-                draggable
+                draggable={false}
                 tabIndex={0}
+                onPointerDown={e=>{if((e.target as Element).closest("button"))return;const ids=e.ctrlKey||e.metaKey||e.shiftKey?selectedMediaIds.includes(asset.id)?selectedMediaIds.filter(id=>id!==asset.id):[...selectedMediaIds,asset.id]:selectedMediaIds.includes(asset.id)?selectedMediaIds:[asset.id];setSelectedMediaIds(ids);beginMediaDrag(e,mediaLibrary.assets.filter(a=>ids.includes(a.id)));}}
+                onKeyDown={e=>{if(e.key==="Enter")onAddMediaToTimeline(mediaLibrary.assets.filter(a=>selectedMediaIds.includes(a.id)||a.id===asset.id).map(a=>a.path));}}
                 onDoubleClick={() => addAssetToTimeline(asset)}
                 onContextMenu={(event) => {
                   event.preventDefault();
@@ -689,6 +725,7 @@ export default function Panels({
               <span>{mediaDragOver ? "Release to add them to your library." : "Click to browse or drop media here."}</span>
             </button>}
           </div>
+          {onSequenceInsert&&onSequenceEdit&&onSequencesChange&&<SequenceLibrary sequences={config.nestedSequences??[]} scopeId={sequenceScopeId} referencedIds={referencedSequenceIds} duration={duration} onInsert={onSequenceInsert} onEdit={onSequenceEdit} onChange={onSequencesChange}/>}
           {mediaContextMenu && createPortal(<div
             ref={mediaContextMenuRef}
             className={`media-context-menu ${document.querySelector(".screenstudio-editor-layout")?.getAttribute("data-theme") === "light" ? "theme-light" : ""}`}
@@ -711,6 +748,7 @@ export default function Panels({
           <ScreenTiltTools config={config} time={currentTime} frameRate={frameRate} onChange={onConfigChange}/>
         </div>
       )}
+      {activeTab === "color" && colorConfig && onColorConfigChange && comparison && onComparison && <ColorStudio config={colorConfig} onChange={onColorConfigChange} clipId={colorClipId} position={sequencePosition} length={sequenceLength} comparison={comparison} onComparison={onComparison}/>}
       {/* ═══ CANVAS TAB ═══════════════════════════════════════════════ */}
       {activeTab === "canvas" && (
         <div className="ss-drawer-content canvas-drawer-content">

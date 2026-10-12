@@ -3,9 +3,11 @@ import type { AudioTrack, CaptionTrack, EditorConfig, ExportSettings, Keyframe }
 import { createExportCompositor } from "./exportCompositor";
 import { captionsToSrt, captionsToVtt } from "./captions";
 import { createIvfHeader, wrapIvfFrame, type IvfCodec } from "./ivf";
-import { exportPlaybackRate, renderProgress } from "./exportTiming";
+import { exportPlaybackRate } from "./exportTiming";
+import { exportFramePosition, motionSourceFps } from "./exportFramePlan";
+import { seekMediaFrame } from "./mediaSeek";
 import { ExportWriteBudget } from "./exportWriteBudget";
-import { retainedClips, sequenceDuration, sequenceTime, clipSpeed, clipDuration, mapCaptionTracks } from "./videoEditing";
+import { retainedClips, sequenceDuration, sequenceTime, clipSpeed, mapCaptionTracks } from "./videoEditing";
 
 export interface ExportProgress {
   phase: "preparing" | "recording" | "finalizing" | "done" | "error";
@@ -38,13 +40,9 @@ async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> 
 }
 
 /**
- * Runs the full canvas-accurate export: plays the recording in real time
- * through the same compositor Preview uses, captures the composited canvas
- * via MediaRecorder, streams the encoded bytes to a temp file on disk, then
- * asks Rust to mux the original audio in and transcode to the requested
- * output format. The result is a true match of what the editor shows —
- * cursor, background, pan/zoom, and styling are all already baked into the
- * recorded frames.
+ * Decodes and composes each output timestamp before encoding it, so slow
+ * rendering cannot skip source frames. WebCodecs (or JPEG staging) streams
+ * bytes to Rust for final encoding and edited audio/caption delivery.
  */
 export async function runCanvasExport(
   videoPath: string,
@@ -58,7 +56,8 @@ export async function runCanvasExport(
   trimStart: number,
   trimEnd: number,
   onProgress: (p: ExportProgress) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  renderSourcePath?: string
 ): Promise<string> {
   const throwIfAborted = () => {
     if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
@@ -70,8 +69,25 @@ export async function runCanvasExport(
   const editedDuration = sequenceDuration(clips);
   const outputCaptions = mapCaptionTracks(captionTracks, clips);
 
+  if (!renderSourcePath && exportSettings.motionInterpolation === "optical-flow" && exportSettings.format !== "gif") {
+    const jobId = crypto.randomUUID();
+    const cancel = () => { void invoke("cancel_export_motion", { jobId }).catch(() => {}); };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      onProgress({ phase: "preparing", progress: .01, message: "Analyzing motion for optical flow…" });
+      const prepared = await invoke<string>("prepare_export_motion", {
+        inputVideo: videoPath, fps: motionSourceFps(clips, exportSettings.fps, exportPlaybackRate(config.playbackRate)), jobId,
+      });
+      throwIfAborted();
+      return await runCanvasExport(videoPath, inputLogPath, keyframes, config, captionTracks, audioTracks, cameraMedia, exportSettings, trimStart, trimEnd, onProgress, signal, prepared);
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+      await invoke("discard_export_motion", { jobId }).catch(() => {});
+    }
+  }
+
   const compositor = await createExportCompositor(
-    videoPath,
+    renderSourcePath ?? videoPath,
     inputLogPath,
     keyframes,
     config,
@@ -80,7 +96,9 @@ export async function runCanvasExport(
     exportSettings.width,
     exportSettings.height,
     signal,
-    exportSettings.captions === "burned" || exportSettings.captions === "burned-srt"
+    exportSettings.captions === "burned" || exportSettings.captions === "burned-srt",
+    false,
+    true
   );
 
   const stagingBasePath = exportSettings.outputPath.replace(/\.(mp4|webm|gif)$/i, "");
@@ -90,7 +108,6 @@ export async function runCanvasExport(
   let completed = false;
   let encoder: VideoEncoder | null = null;
   let writeQueue: Promise<void> = Promise.resolve();
-  let jpegQueue: Promise<void> = Promise.resolve();
   try {
     throwIfAborted();
     const hasWebCodecs = typeof VideoEncoder !== "undefined" && typeof VideoFrame !== "undefined";
@@ -100,8 +117,8 @@ export async function runCanvasExport(
     const fps = Math.max(1, Math.round(exportSettings.fps));
     const totalFrames = Math.max(1, Math.ceil((totalMs / 1000) * fps));
     const pixelsComparedWith1080p = (exportSettings.width * exportSettings.height) / (1920 * 1080);
-    const qualityBitrate = exportSettings.quality === "high" ? 12_000_000 : exportSettings.quality === "medium" ? 8_000_000 : 4_000_000;
-    const bitrate = Math.round(Math.max(1_000_000, Math.min(50_000_000, qualityBitrate * pixelsComparedWith1080p * (fps / 60))));
+    const qualityBitrate = exportSettings.quality === "high" ? 24_000_000 : exportSettings.quality === "medium" ? 8_000_000 : 4_000_000;
+    const bitrate = Math.round(Math.max(1_000_000, Math.min(100_000_000, qualityBitrate * pixelsComparedWith1080p * (fps / 60))));
     type EncoderChoice =
       | { config: VideoEncoderConfig; format: "annexb" }
       | { config: VideoEncoderConfig; format: "ivf"; fourCc: IvfCodec };
@@ -110,7 +127,7 @@ export async function runCanvasExport(
       ? "avc1.640034"
       : "avc1.64002A";
     const candidates: EncoderChoice[] = [
-      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" }, hardwareAcceleration: "prefer-hardware", latencyMode: "realtime" }, format: "annexb" },
+      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" }, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, format: "annexb" },
       { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" } }, format: "annexb" },
       { config: { ...baseConfig, codec: "avc1.42002A", avc: { format: "annexb" } }, format: "annexb" },
       { config: { ...baseConfig, codec: "vp8" }, format: "ivf", fourCc: "VP80" },
@@ -180,7 +197,6 @@ export async function runCanvasExport(
 
     let encoderError: Error | null = null;
     let encodedFrames = 0;
-    let jpegQueueDepth = 0;
     if (exportMode.format !== "mjpeg") {
       encoder = new VideoEncoder({
         output: (chunk) => {
@@ -199,174 +215,51 @@ export async function runCanvasExport(
       encoder.configure(exportMode.config);
     }
 
-    // Install the listener before seeking; seeking to the current time may emit nothing.
-    if (Math.abs(compositor.video.currentTime - clips[0].start) > 0.001) {
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => { clearTimeout(timeout); compositor.video.removeEventListener("seeked", done); };
-        const done = () => { cleanup(); resolve(); };
-        const timeout = setTimeout(() => { cleanup(); reject(new Error("Video seek timed out")); }, 15000);
-        compositor.video.addEventListener("seeked", done, { once: true });
-        compositor.video.currentTime = clips[0].start;
-      });
-    }
-
-    compositor.video.defaultPlaybackRate = playbackRate;
-    compositor.video.playbackRate = playbackRate * clipSpeed(clips[0]);
-    // A tainted canvas can display normally but browsers prohibit exporting
-    // pixels from it. Verify the sought frame before spending time rendering.
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    try {
-      compositor.canvas.getContext("2d")?.getImageData(0, 0, 1, 1);
-    } catch (error) {
-      throw new Error(`A local video or image could not be prepared for export: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    let submittedFrames = 0;
-    const submitFramesThrough = (targetExclusive: number) => {
-      const cappedTarget = Math.min(totalFrames, Math.max(0, targetExclusive));
-      if (exportMode.format === "mjpeg" && submittedFrames < cappedTarget) {
-        const repeatCount = cappedTarget - submittedFrames;
-        submittedFrames = cappedTarget;
-        jpegQueueDepth += 1;
-        const snapshot = canvasToJpeg(compositor.canvas);
-        // Observe failures immediately while earlier frames are still draining.
-        void snapshot.catch(() => undefined);
-        jpegQueue = jpegQueue
-          .then(async () => {
-            const payload = await snapshot;
-            for (let index = 0; index < repeatCount; index += 1) queueBytes(payload);
-            encodedFrames += repeatCount;
-          })
-          .catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); })
-          .finally(() => { jpegQueueDepth -= 1; });
-        return;
+    // Decode and draw each timestamp once: rendering speed cannot change
+    // motion cadence, even when composition takes longer than a frame.
+    let lastClipId = "";
+    let lastProgress = -1;
+    for (let index = 0; index < totalFrames; index++) {
+      throwIfAborted();
+      if (encoderError) throw encoderError;
+      if (writeError) throw new Error(writeError);
+      const position = exportFramePosition(clips, index, fps, playbackRate);
+      if (lastClipId !== position.clip.id) {
+        compositor.setClip?.(position.clip.id);
+        await compositor.prepareClip?.(position.clip.id);
+        lastClipId = position.clip.id;
       }
-      while (submittedFrames < cappedTarget) {
-        const timestamp = Math.round((submittedFrames * 1_000_000) / fps);
-        const duration = Math.round(1_000_000 / fps);
-        const frame = new VideoFrame(compositor.canvas, { timestamp, duration });
-        try { encoder!.encode(frame, { keyFrame: submittedFrames % Math.max(1, fps * 2) === 0 }); }
-        finally { frame.close(); }
-        submittedFrames += 1;
+      if (compositor.renderAt) await compositor.renderAt(position.source, position.clip.id, position.sequence);
+      else {
+        if (!position.clip.gap) await seekMediaFrame(compositor.video, position.source, signal);
+        else compositor.setGapTime?.(position.sequence);
+        compositor.renderFrame();
       }
-    };
-    let gapElapsed = 0, gapWall = performance.now();
-    let clipIndex = 0;
-    compositor.setClip?.(clips[0].id);
-    await compositor.prepareClip?.(clips[0].id);
-    let changingClip = false;
-    compositor.setFrameConsumer(() => {
-      const clip = clips[clipIndex];
-      if (changingClip || clip.gap && gapElapsed >= clip.end || !clip.gap && (compositor.video.seeking || compositor.video.currentTime < clip.start || compositor.video.currentTime >= clip.end)) return;
-      const sourceElapsed = sequenceTime(clips, clip.gap ? gapElapsed : compositor.video.currentTime, clips[clipIndex].id);
-      const exportElapsed = sourceElapsed / playbackRate;
-      try {
-        submitFramesThrough(Math.floor(exportElapsed * fps) + 1);
-      } catch (error) {
-        encoderError = error instanceof Error ? error : new Error(String(error));
+      if (index === 0) {
+        try { compositor.canvas.getContext("2d")?.getImageData(0, 0, 1, 1); }
+        catch { throw new Error("A local video or image could not be prepared for export"); }
       }
-    });
-    compositor.renderFrame();
-    if(!clips[0].gap) await compositor.video.play();
-
-    await new Promise<void>((resolve, reject) => {
-      let lastTime = compositor.video.currentTime;
-      let lastAdvance = performance.now();
-      let heldForEncoder = false;
-      let heldSince = 0;
-      const check = () => {
-        if (signal?.aborted) {
-          reject(new DOMException("Export cancelled", "AbortError"));
-          return;
-        }
-        if (encoderError) {
-          reject(encoderError);
-          return;
-        }
-        if (changingClip) { requestAnimationFrame(check); return; }
-        const clip = clips[clipIndex];
-        const now=performance.now();
-        if(clip.gap&&!heldForEncoder)gapElapsed+=(now-gapWall)/1000*playbackRate;
-        gapWall=now;
-        if(clip.gap){compositor.setGapTime?.(sequenceTime(clips,gapElapsed,clip.id));compositor.renderFrame();}
-        const mediaTime=clip.gap?gapElapsed:compositor.video.currentTime;
-        if (mediaTime >= clip.end || !clip.gap && compositor.video.ended) {
-          compositor.video.pause();
-          try { submitFramesThrough(Math.ceil((sequenceTime(clips, clip.start, clip.id) + clipDuration(clip)) / playbackRate * fps)); }
-          catch (error) { reject(error); return; }
-          if (clipIndex === clips.length - 1) { resolve(); return; }
-          clipIndex += 1;
-          compositor.setClip?.(clips[clipIndex].id);
-          heldForEncoder = false;
-          gapElapsed=0;gapWall=performance.now();
-          if(clips[clipIndex].gap){compositor.setGapTime?.(sequenceTime(clips,0,clips[clipIndex].id));compositor.renderFrame();requestAnimationFrame(check);return;}
-          changingClip = true;
-          const target = clips[clipIndex].start;
-          const seekNext = new Promise<void>((done, fail) => {
-            const abort = () => { cleanup(); fail(new DOMException("Export cancelled", "AbortError")); };
-            const cleanup = () => { clearTimeout(timer); compositor.video.removeEventListener("seeked", ready); signal?.removeEventListener("abort", abort); };
-            const ready = () => { cleanup(); done(); };
-            const timer = setTimeout(() => { cleanup(); fail(new Error("Video seek timed out")); }, 15_000);
-            compositor.video.addEventListener("seeked", ready, { once: true });
-            signal?.addEventListener("abort", abort, { once: true });
-            if(Math.abs(compositor.video.currentTime-target)<.001&&!compositor.video.seeking){ready();return;}
-            try { compositor.video.currentTime = target; } catch (error) { cleanup(); fail(error); }
-          });
-          void Promise.all([seekNext,compositor.prepareClip?.(clips[clipIndex].id)]).then(async () => {
-            lastTime = target; lastAdvance = performance.now();
-            changingClip = false;
-            if (!signal?.aborted) { compositor.video.playbackRate=playbackRate*clipSpeed(clips[clipIndex]);compositor.renderFrame(); await compositor.video.play(); }
-          }).catch(error => { changingClip = false; encoderError = error instanceof Error ? error : new Error(String(error)); });
-          requestAnimationFrame(check); return;
-        }
-        if (writeError || (writeBudget.bytes > 0 && performance.now() - lastWriteAdvance > 30_000)) {
-          reject(new Error(writeError || "The export destination stopped responding"));
-          return;
-        }
-        const encodeBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
-        const pauseThreshold = encoder ? 24 : 4;
-        const resumeThreshold = encoder ? 6 : 1;
-        if (!heldForEncoder && (encodeBacklog > pauseThreshold || writeBudget.shouldPause)) {
-          compositor.video.pause();
-          heldForEncoder = true;
-          heldSince = performance.now();
-          flushPendingBytes();
-        }
-        if (heldForEncoder) {
-          lastAdvance = performance.now();
-          const currentBacklog = encoder ? encoder.encodeQueueSize : jpegQueueDepth;
-          if (performance.now() - heldSince > 30_000) {
-            reject(new Error("The video encoder stopped responding. Try a lower resolution or frame rate."));
-            return;
-          }
-          if (currentBacklog <= resumeThreshold && writeBudget.canResume) {
-            heldForEncoder = false;
-            if(!clip.gap)void compositor.video.play().catch((error) => { encoderError = error instanceof Error ? error : new Error(String(error)); });
-          }
-          requestAnimationFrame(check);
-          return;
-        }
-        if (mediaTime !== lastTime) { lastTime = mediaTime; lastAdvance = performance.now(); }
-        if (compositor.video.error || performance.now() - lastAdvance > 15000) {
-          reject(new Error("Export stopped because video playback stalled. Check that the source file is readable."));
-          return;
-        }
-        if (writeError) {
-          reject(new Error(writeError));
-          return;
-        }
-        onProgress({
-          phase: "recording",
-          progress: renderProgress(sequenceTime(clips, mediaTime, clip.id), 0, editedDuration),
-          message: "Recording composited frames…",
+      if (exportMode.format === "mjpeg") {
+        const payload = await canvasToJpeg(compositor.canvas);
+        queueBytes(payload); encodedFrames++;
+      } else {
+        const frame = new VideoFrame(compositor.canvas, {
+          timestamp: Math.round(index * 1_000_000 / fps), duration: Math.round(1_000_000 / fps),
         });
-        requestAnimationFrame(check);
-      };
-      requestAnimationFrame(check);
-    });
+        try { encoder!.encode(frame, { keyFrame: index % Math.max(1, fps * 2) === 0 }); }
+        finally { frame.close(); }
+      }
+      if (encoder && encoder.encodeQueueSize > 12) await withTimeout(encoder.flush(), "The video encoder stopped responding");
+      if (writeBudget.shouldPause) { flushPendingBytes(); await writeQueue; }
+      if (writeBudget.bytes > 0 && performance.now() - lastWriteAdvance > 30_000) throw new Error("The export destination stopped responding");
+      const progress = Math.floor((index + 1) / totalFrames * 96);
+      if (progress !== lastProgress) {
+        lastProgress = progress;
+        onProgress({ phase: "recording", progress: progress / 100, message: "Rendering video frames…" });
+      }
+    }
 
-    submitFramesThrough(totalFrames);
     if (encoder) await withTimeout(encoder.flush(), "The video encoder stopped responding");
-    await jpegQueue;
     flushPendingBytes();
     await writeQueue;
 
@@ -411,7 +304,6 @@ export async function runCanvasExport(
     compositor.setFrameConsumer(null);
     compositor.destroy();
     if (encoder && encoder.state !== "closed") encoder.close();
-    await jpegQueue.catch(() => {});
     await writeQueue.catch(() => {});
     if (sinkOpen) await invoke("close_export_sink").catch(() => {});
     if (!completed) {

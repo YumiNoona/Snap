@@ -18,7 +18,7 @@ export function SelectRow({ label, value, options, optionLabels, onChange, disab
     const place = () => {
       const trigger = triggerRef.current?.getBoundingClientRect();
       if (!trigger) return;
-      const boundary = rootRef.current?.closest?.(".ss-panels-drawer, .timeline-clip-inspector, .finishing-body, .finishing-studio")?.getBoundingClientRect();
+      const boundary = rootRef.current?.closest?.(".timeline-inspector-scroll, .ss-panels-drawer, .timeline-clip-inspector, .finishing-body, .finishing-studio")?.getBoundingClientRect();
       const below = Math.max(40, Math.min(boundary?.bottom ?? window.innerHeight, window.innerHeight) - trigger.bottom - 12);
       const above = Math.max(40, trigger.top - Math.max(boundary?.top ?? 0, 0) - 12);
       const upwards = below < Math.min(238, options.length * 37 + 10) && above > below;

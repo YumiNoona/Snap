@@ -12,6 +12,8 @@ import { applyCursorEdits, cursorVisible } from "./editorFinishing";
 import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
 import { retainedClips, sequenceTime } from "./videoEditing";
 import { resolveClipEffects } from "./clipEffects";
+import { seekMediaFrame } from "./mediaSeek";
+import { gradedSource, releaseColorRenderer } from "./colorRenderer";
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
@@ -21,17 +23,21 @@ import {
 } from "./canvasDraw";
 
 async function seekOverlay(media: HTMLVideoElement, time: number, signal?: AbortSignal): Promise<void> {
-  await new Promise<void>((resolve,reject)=>{
-    const cleanup=()=>{clearTimeout(timer);media.removeEventListener("seeked",ready);media.removeEventListener("loadeddata",ready);media.removeEventListener("loadedmetadata",ready);media.removeEventListener("error",failed);signal?.removeEventListener("abort",aborted);};
-    let requested=false;
-    const ready=()=>{if(!Number.isFinite(media.duration)||media.duration<=0)return;if(!requested){requested=true;const target=Math.max(0,Math.min(media.duration-.02,time));if(Math.abs(media.currentTime-target)>.001){media.currentTime=target;return;}}if(media.readyState<2||media.seeking)return;cleanup();resolve();};
-    const failed=()=>{cleanup();reject(new Error("Could not decode imported video"));};
-    const aborted=()=>{cleanup();reject(new DOMException("Cancelled","AbortError"));};
-    const timer=setTimeout(()=>{cleanup();reject(new Error("Imported video seek timed out"));},15000);
-    media.addEventListener("seeked",ready);media.addEventListener("loadeddata",ready);media.addEventListener("loadedmetadata",ready);media.addEventListener("error",failed);signal?.addEventListener("abort",aborted,{once:true});
-    if(signal?.aborted){aborted();return;}
-    media.pause();ready();
+  // WebView2 must keep a painted decoder for frame callbacks to arrive.
+  if (!media.isConnected) {
+    Object.assign(media.style, { position: "fixed", right: "0px", bottom: "0px", width: "2px", height: "2px", opacity: "0.001", pointerEvents: "none", zIndex: "2147483646" });
+    document.body.appendChild(media);
+  }
+  if (media.readyState < 1) await new Promise<void>((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); media.removeEventListener("loadedmetadata", ready); media.removeEventListener("error", failed); signal?.removeEventListener("abort", aborted); };
+    const ready = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error("Could not decode imported video")); };
+    const aborted = () => { cleanup(); reject(new DOMException("Cancelled", "AbortError")); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("Imported video metadata timed out")); }, 15000);
+    media.addEventListener("loadedmetadata", ready); media.addEventListener("error", failed); signal?.addEventListener("abort", aborted, { once: true });
+    if (signal?.aborted) aborted(); else if (media.readyState >= 1) ready();
   });
+  await seekMediaFrame(media, Math.min(media.duration - .00001, time + .00005), signal);
 }
 
 export interface ExportCompositor {
@@ -40,6 +46,7 @@ export interface ExportCompositor {
   clickTimesMs: number[];
   setFrameConsumer: (consumer: (() => void) | null) => void;
   renderFrame: () => void;
+  renderAt?: (source: number, clipId: string, sequence: number) => Promise<void>;
   setGapTime?: (time:number) => void;
   setClip?: (clipId: string) => void;
   prepareClip?: (clipId:string) => Promise<void>;
@@ -66,7 +73,8 @@ export async function createExportCompositor(
   outputH: number,
   signal?: AbortSignal,
   renderCaptions = true,
-  screenOnly = false
+  screenOnly = false,
+  manualRender = false
 ): Promise<ExportCompositor> {
   await Promise.all(config.layers.filter((layer) => layer.type === "image").map(async (layer) => {
     const image = preloadImageAsset(layer.path);
@@ -77,7 +85,7 @@ export async function createExportCompositor(
   try { await Promise.all(config.layers.filter((layer): layer is VideoLayer => layer.type === "video" && (layer.timeSpace === "sequence" || config.trimStart >= layer.start && config.trimStart < layer.end)).map(async layer => {
     const media=loadCachedVideo(layer.path,layerVideoCache,layer.id);
     await seekOverlay(media,layer.sourceOffset??0,signal);
-  })); } catch(error) { for(const media of layerVideoCache.values()){media.pause();media.removeAttribute("src");media.load();} layerVideoCache.clear();throw error; }
+  })); } catch(error) { for(const media of layerVideoCache.values()){media.pause();media.removeAttribute("src");media.load();media.remove();} layerVideoCache.clear();throw error; }
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.src = convertFileSrc(videoPath);
@@ -85,8 +93,15 @@ export async function createExportCompositor(
   video.playsInline = true;
   video.preload = "auto";
   video.style.position = "fixed";
-  video.style.left = "-99999px";
-  video.style.top = "0px";
+  // Keep a tiny painted decoder under the export canvas. WebView2 can cull
+  // offscreen media even while its clock or seek events keep advancing.
+  video.style.right = "0px";
+  video.style.bottom = "0px";
+  video.style.width = "2px";
+  video.style.height = "2px";
+  video.style.opacity = "0.001";
+  video.style.pointerEvents = "none";
+  video.style.zIndex = "2147483646";
   document.body.appendChild(video);
 
   let camera: HTMLVideoElement | null = null;
@@ -98,7 +113,13 @@ export async function createExportCompositor(
     camera.playsInline = true;
     camera.preload = "auto";
     camera.style.position = "fixed";
-    camera.style.left = "-99999px";
+    camera.style.right = "0px";
+    camera.style.bottom = "0px";
+    camera.style.width = "2px";
+    camera.style.height = "2px";
+    camera.style.opacity = "0.001";
+    camera.style.pointerEvents = "none";
+    camera.style.zIndex = "2147483646";
     document.body.appendChild(camera);
   }
 
@@ -120,13 +141,14 @@ export async function createExportCompositor(
   let frameConsumer: (() => void) | null = null;
   const cleanup = () => {
     releaseScreenTilt(canvas);
+    releaseColorRenderer(canvas);
     destroyed = true;
     if (rafId) cancelAnimationFrame(rafId);
     video.pause();
     camera?.pause();
     video.removeAttribute("src");
     camera?.removeAttribute("src");
-    for (const media of layerVideoCache.values()) { media.pause(); media.removeAttribute("src"); media.load(); }
+    for (const media of layerVideoCache.values()) { media.pause(); media.removeAttribute("src"); media.load(); media.remove(); }
     layerVideoCache.clear();
     video.load();
     camera?.load();
@@ -235,7 +257,7 @@ export async function createExportCompositor(
     // Keep the last retained canvas at cut boundaries, rather than drawing
     // deleted footage while the transport seeks to the next segment.
     if (!activeClip?.gap && (video.readyState<2 || video.seeking || !footageClips.some(clip => video.currentTime >= clip.start && video.currentTime < clip.end))) {
-      rafId = requestAnimationFrame(drawFrame);
+      if (!manualRender) rafId = requestAnimationFrame(drawFrame);
       return;
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -253,6 +275,9 @@ export async function createExportCompositor(
     const br = config.borderRadius;
     const vw = video.videoWidth || 1;
     const vh = video.videoHeight || 1;
+    const previousTime = prevTs < 0 ? ts - 1 : prevTs;
+    prevTs = ts;
+    spawnClickRipples(Math.abs(ts - previousTime) > 300 ? ts - 1 : previousTime, ts, vw, vh);
 
     let videoW: number, videoH: number, offsetX: number, offsetY: number;
     if (config.aspectRatio && config.aspectRatio.width > 0) {
@@ -333,7 +358,7 @@ export async function createExportCompositor(
     }
     ctx.restore();
 
-    if(activeClip?.gap) { camera?.pause(); drawGapLayers(ctx,config.layers,gapTime,true,layerVideoCache,{x:offsetX,y:offsetY,w:videoW,h:videoH},config.playbackRate||1);frameConsumer?.();rafId=requestAnimationFrame(drawFrame);return; }
+    if(activeClip?.gap) { camera?.pause(); drawGapLayers(ctx,config.layers,gapTime,!manualRender,layerVideoCache,{x:offsetX,y:offsetY,w:videoW,h:videoH},config.playbackRate||1);frameConsumer?.();if(!manualRender)rafId=requestAnimationFrame(drawFrame);return; }
     const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
     const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
@@ -371,12 +396,16 @@ export async function createExportCompositor(
       const zoomDelta = previousZoom && ts >= previousZoom.ts && ts - previousZoom.ts < 100
         ? { x: (zoomX - previousZoom.x) * videoW, y: (zoomY - previousZoom.y) * videoH, scale: zoomScale - previousZoom.scale }
         : null;
+      screenCtx.save();
+      screenCtx.imageSmoothingEnabled = true; screenCtx.imageSmoothingQuality = "high";
+      const colorSource=gradedSource(canvas,video,vw,vh,config,sequenceTime(footageClips,video.currentTime,effectClipId));
       drawVideoWithMotionBlur(
-        screenCtx, video,
+        screenCtx, colorSource,
         { x: coverX, y: coverY, w: coverW, h: coverH },
         { x: offsetX, y: offsetY, w: videoW, h: videoH },
         config.motionBlur, zoomDelta
       );
+      screenCtx.restore();
       previousZoom = { x: zoomX, y: zoomY, scale: zoomScale, ts };
     }
 
@@ -532,17 +561,10 @@ export async function createExportCompositor(
     // frame after the compositor has finished drawing each updated canvas.
     frameConsumer?.();
 
-    // Click-ripple spawning — export always plays forward in real time, so
-    // this mirrors Preview's "playing" branch (never the seek/scrub branch).
-    const prev = prevTs < 0 ? ts : prevTs;
-    prevTs = ts;
-    const jumped = Math.abs(ts - prev) > 300;
-    spawnClickRipples(jumped ? ts : prev, ts, vw, vh);
-
-    rafId = requestAnimationFrame(drawFrame);
+    if (!manualRender) rafId = requestAnimationFrame(drawFrame);
   }
 
-  rafId = requestAnimationFrame(drawFrame);
+  if (!manualRender) rafId = requestAnimationFrame(drawFrame);
 
   return {
     video,
@@ -550,6 +572,20 @@ export async function createExportCompositor(
     clickTimesMs: clickEvents.map((event) => event.ts),
     setFrameConsumer: (consumer) => { frameConsumer = consumer; },
     renderFrame: () => { cancelAnimationFrame(rafId); drawFrame(); },
+    renderAt: async (source, clipId, sequence) => {
+      const clip = footageClips.find(item => item.id === clipId);
+      if (!clip) throw new Error("Export clip is missing");
+      effectClipId = clipId;
+      gapTime = sequence;
+      // FFmpeg timestamps are rounded to a timebase. Sample just inside the
+      // requested frame rather than on its boundary (e.g. 43/60 vs .716667).
+      if (!clip.gap) await seekMediaFrame(video, Math.min(clip.end - .000001, source + .00005), signal);
+      const timed = projectMediaLayers(sharedConfig.layers, source, sequence);
+      await Promise.all(timed.filter((layer): layer is VideoLayer => layer.type === "video" && source >= layer.start && source < layer.end).map(layer =>
+        seekOverlay(loadCachedVideo(layer.path, layerVideoCache, layer.id), (source - layer.start) * (layer.sourceSpeed ?? 1) + (layer.sourceOffset ?? 0), signal)));
+      if (camera && !clip.gap && sharedConfig.cameraOverlay.enabled) await seekOverlay(camera, Math.max(0, source - (cameraMedia?.startOffsetMs ?? 0) / 1000), signal);
+      drawFrame();
+    },
     setGapTime: (time) => { gapTime=time; },
     prepareClip: async (clipId) => {
       if(screenOnly)return;
@@ -557,7 +593,7 @@ export async function createExportCompositor(
       if(clip){
         const source=clip.gap?0:clip.start,sequence=sequenceTime(footageClips,source,clip.id);
         const timed=projectMediaLayers(sharedConfig.layers,source,sequence);
-        await Promise.all(timed.filter((layer):layer is VideoLayer=>layer.type==="video"&&source>=layer.start&&source<layer.end).map(layer=>seekOverlay(loadCachedVideo(layer.path,layerVideoCache,layer.id),source-layer.start+(layer.sourceOffset??0),signal)));
+        await Promise.all(timed.filter((layer):layer is VideoLayer=>layer.type==="video"&&source>=layer.start&&source<layer.end).map(layer=>seekOverlay(loadCachedVideo(layer.path,layerVideoCache,layer.id),(source-layer.start)*(layer.sourceSpeed??1)+(layer.sourceOffset??0),signal)));
       }
 
       if(!clip?.transition||!previous||previous.gap)return;

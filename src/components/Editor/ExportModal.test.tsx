@@ -16,7 +16,7 @@ it("keeps export success when opening fails, reveals the saved file, and allows 
   const props: ComponentProps<typeof ExportModal> = {
     videoPath: "C:\\Videos\\recording.mp4", duration: 5,
     config: { ...DEFAULT_EDITOR_CONFIG, trimEnd: 5 }, captionTrackCount: 0,
-    status: "Done — export saved", progress: 1, exportedPath: "C:\\Videos\\Exports\\finished.mp4",
+    status: "Export Saved", progress: 1, exportedPath: "C:\\Videos\\Exports\\finished.mp4",
     onClose: vi.fn(), onCancel: vi.fn(), onOpenFile, onExport: vi.fn(),
   };
   let renderer!: ReturnType<typeof create>;
@@ -48,7 +48,7 @@ it("ignores repeated open clicks and stale failures after a new export begins", 
   const props: ComponentProps<typeof ExportModal> = {
     videoPath: "C:\\Videos\\recording.mp4", duration: 5,
     config: { ...DEFAULT_EDITOR_CONFIG, trimEnd: 5 }, captionTrackCount: 0,
-    status: "Done — export saved", progress: 1, exportedPath: "C:\\Videos\\Exports\\finished.mp4",
+    status: "Export Saved", progress: 1, exportedPath: "C:\\Videos\\Exports\\finished.mp4",
     onClose: vi.fn(), onCancel: vi.fn(), onOpenFile, onExport: vi.fn(),
   };
   let renderer!: ReturnType<typeof create>;

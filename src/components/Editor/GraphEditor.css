@@ -1,0 +1,120 @@
+.graph-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0003;
+  backdrop-filter: blur(8px);
+  padding: 24px;
+}
+.graph-editor {
+  width: min(950px, 100%);
+  max-height: 90vh;
+  padding: 24px;
+  border-radius: 12px;
+  overflow: auto;
+  scrollbar-width: none;
+  color: var(--text-primary);
+}
+.graph-editor::-webkit-scrollbar {
+  display: none;
+}
+.graph-editor header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.graph-editor h2 {
+  font-size: 18px;
+  margin: 0 0 5px;
+}
+.graph-editor small {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.6;
+}
+.graph-toolbar,
+.graph-controls {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+  border: 0;
+  padding: 0;
+  margin: 14px 0;
+}
+.graph-editor label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: 1;
+}
+.graph-editor input,
+.graph-editor select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-surface-sunken);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 9px;
+  margin-top: 6px;
+}
+.graph-editor button {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 9px;
+  border-radius: 12px;
+  background: var(--bg-surface-sunken);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.graph-editor button:disabled {
+  opacity: 0.4;
+}
+.graph-plot {
+  width: 100%;
+  height: 280px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface-sunken) 70%, transparent);
+  overflow: hidden;
+  touch-action: none;
+}
+.graph-editor svg line {
+  stroke: var(--border-subtle);
+}
+.graph-editor svg circle {
+  cursor: grab;
+}
+.graph-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.graph-bezier {
+  display: flex;
+  gap: 20px;
+  margin: 15px 0;
+}
+.graph-bezier svg {
+  width: 240px;
+  min-width: 160px;
+  height: 160px;
+  background: var(--bg-surface-sunken);
+  border-radius: 12px;
+  touch-action: none;
+}
+.graph-bezier > div {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}

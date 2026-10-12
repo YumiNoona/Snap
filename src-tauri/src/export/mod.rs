@@ -1,4 +1,5 @@
 use serde::Deserialize;
+pub mod motion;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::Stdio;
@@ -557,12 +558,12 @@ fn source_audio_filter(
     filter.push(';');
     for (i, segment) in segments.iter().enumerate() {
         let mut tempo = String::new();
-        let mut rate = segment.speed.unwrap_or(1.0).clamp(0.25,4.0);
+        let mut rate = segment.speed.unwrap_or(1.0).clamp(0.001,64.0);
         while rate < 0.5 { tempo.push_str(",atempo=0.5"); rate /= 0.5; }
         while rate > 2.0 { tempo.push_str(",atempo=2.0"); rate /= 2.0; }
         if (rate-1.0).abs()>0.000001 { tempo.push_str(&format!(",atempo={rate:.6}")); }
         let silence=if segment.gap {",volume=0"} else {""};
-        let length=(segment.end-segment.start)/segment.speed.unwrap_or(1.0).clamp(0.25,4.0);
+        let length=(segment.end-segment.start)/segment.speed.unwrap_or(1.0).clamp(0.001,64.0);
         filter.push_str(&format!("[{label}_src{idx}_{i}]atrim=start={:.6}:end={:.6},asetpts=PTS-STARTPTS{silence}{tempo},apad,atrim=duration={length:.6}[{label}_cut{idx}_{i}];", segment.start, segment.end));
     }
     for i in 0..segments.len() {
@@ -933,7 +934,7 @@ fn finalize_canvas_export_blocking(
     }
     for track in &request.audio_tracks {
         if let Some(clips)=&track.clips {
-            if clips.len()>1000 || clips.iter().any(|clip| !clip.source_start.is_finite()||!clip.source_end.is_finite()||!clip.start.is_finite()||clip.source_start<0.0||clip.source_end<=clip.source_start||clip.source_end>86400.0||!(0.0..=86400.0).contains(&clip.start)||clip.speed.is_some_and(|rate|!rate.is_finite()||!(0.25..=4.0).contains(&rate))||[clip.volume,clip.fade_in,clip.fade_out].iter().flatten().any(|value|!value.is_finite()||*value<0.0)) { return Err("Invalid audio clip".into()); }
+            if clips.len()>1000 || clips.iter().any(|clip| !clip.source_start.is_finite()||!clip.source_end.is_finite()||!clip.start.is_finite()||clip.source_start<0.0||clip.source_end<=clip.source_start||clip.source_end>86400.0||!(0.0..=86400.0).contains(&clip.start)||clip.speed.is_some_and(|rate|!rate.is_finite()||!(0.001..=64.0).contains(&rate))||[clip.volume,clip.fade_in,clip.fade_out].iter().flatten().any(|value|!value.is_finite()||*value<0.0)) { return Err("Invalid audio clip".into()); }
         }
         crate::access::require(&app, std::path::Path::new(&track.path))?;
     }
@@ -952,7 +953,7 @@ fn finalize_canvas_export_blocking(
             return Err("Invalid source segment range".into());
         }
         let rate=segment.speed.unwrap_or(1.0);
-        if !rate.is_finite() || !(0.25..=4.0).contains(&rate) { return Err("Invalid clip speed".into()); }
+        if !rate.is_finite() || !(0.001..=64.0).contains(&rate) { return Err("Invalid clip speed".into()); }
         source_duration += (segment.end - segment.start) / rate;
     }
     if !request.source_segments.is_empty()
@@ -1410,6 +1411,17 @@ fn finalize_canvas_export_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_audio_speeds_use_supported_tempo_stages() {
+        for (rate, stage, count) in [(16.0, "atempo=2.0", 4), (0.0625, "atempo=0.5", 4)] {
+            let segments = [SourceSegment { start: 0.0, end: 1.0, speed: Some(rate), ..Default::default() }];
+            let filter = source_audio_filter(0, 1.0, "", "", "a", &segments);
+            assert_eq!(filter.matches(stage).count(), count);
+            assert!(!filter.contains(&format!("atempo={rate:.6}")));
+            assert!(filter.contains(&format!("atrim=duration={:.6}", 1.0 / rate)));
+        }
+    }
 
     #[test]
     #[ignore = "Requires FFmpeg on PATH; validates edited audio and ducking"]

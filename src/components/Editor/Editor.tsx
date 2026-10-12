@@ -2,14 +2,14 @@ import { reconcileAudioClips, resolvedAudioClips } from "../../lib/audioEditing"
 import { resolveClipEffects, editClipEffects, replaceAnimationKeys, replaceAnimationKeyGroups } from "../../lib/clipEffects";
 import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
 import { userError } from "../../lib/userError";
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, type SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Keyboard, Camera, Activity, Snowflake, Palette, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -33,8 +33,12 @@ import { trimEndAfterDurationChange } from "../../lib/playbackTransport";
 import { clearInputLogCache, loadInputLog } from "../../lib/inputLog";
 import { clearImageAssets } from "../../lib/canvasDraw";
 import { buildDeliveryPackage } from "../../lib/deliveryPackage";
-import { retainedClips, sequenceDuration, sequenceTime, mapCaptionTracks } from "../../lib/videoEditing";
+import { retainedClips, sequenceDuration, sequenceTime, sequenceClip, mapCaptionTracks } from "../../lib/videoEditing";
+import { compileSequence, nestSelection, insertSequence, unnestClip } from "../../lib/nestedSequences";
+import { resolveMediaAudioTracks } from "../../lib/mediaTimeline";
 import "./Editor.css";
+import type { ColorComparison } from "../../lib/colorGrade";
+import type { MediaDragDetail } from "../../lib/mediaDrag";
 
 interface Props {
   videoPath: string;
@@ -44,7 +48,7 @@ interface Props {
   onClose: () => void;
 }
 
-export type SidebarToolTab = "uploads" | "canvas" | "tilt" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
+export type SidebarToolTab = "uploads" | "canvas" | "color" | "tilt" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
 const EDITOR_THEME_STORAGE_KEY = "snap.editorTheme.v1";
@@ -60,19 +64,30 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
 export default function Editor({ videoPath, inputLogPath, initialProjectPath = "", onOpenProject, onClose }: Props) {
   const isBrowserPreview =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
-  const [config, setConfig] = useState<EditorConfig>(() => ({
+  const [rootConfig, setRootConfig] = useState<EditorConfig>(() => ({
     ...DEFAULT_EDITOR_CONFIG,
     cursorHotspots: loadCursorHotspots(),
   }));
-  const [sharedKeyframes, setSharedKeyframes] = useState<Keyframe[]>([]);
-  const [sharedCaptionTracks, setSharedCaptionTracks] = useState<CaptionTrack[]>([]);
-  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
+  const [rootKeyframes, setRootKeyframes] = useState<Keyframe[]>([]);
+  const [rootCaptionTracks, setRootCaptionTracks] = useState<CaptionTrack[]>([]);
+  const [rootAudioTracks, setRootAudioTracks] = useState<AudioTrack[]>([]);
+  const [sequenceScope,setSequenceScope]=useState<string[]>([]);
+  const scopeId=sequenceScope[sequenceScope.length-1],scopeRef=useRef(scopeId);scopeRef.current=scopeId;
+  const definition=rootConfig.nestedSequences?.find(d=>d.id===scopeId);
+  const config=useMemo(()=>definition?{...definition.editor,colorGrade:definition.editor.colorGrade??rootConfig.colorGrade,colorLuts:rootConfig.colorLuts,nestedSequences:rootConfig.nestedSequences}:rootConfig,[definition,rootConfig]);
+  const sharedKeyframes=definition?.keyframes??rootKeyframes,sharedCaptionTracks=definition?.captions??rootCaptionTracks,audioTracks=definition?.audioTracks??rootAudioTracks;
+  const setConfig=useCallback((action:SetStateAction<EditorConfig>)=>setRootConfig(root=>{const id=scopeRef.current,def=root.nestedSequences?.find(d=>d.id===id);if(!def)return typeof action==="function"?action(root):action;const previous={...def.editor,colorGrade:def.editor.colorGrade??root.colorGrade,colorLuts:root.colorLuts,nestedSequences:root.nestedSequences},next=typeof action==="function"?action(previous):action;return {...root,colorLuts:next.colorLuts,nestedSequences:(next.nestedSequences??root.nestedSequences??[]).map(d=>d.id===id?{...d,editor:{...next,colorGrade:!def.editor.colorGrade&&next.colorGrade===root.colorGrade?undefined:next.colorGrade,nestedSequences:undefined,colorLuts:undefined}}:d)};}),[]);
+  const setSharedKeyframes=useCallback((action:SetStateAction<Keyframe[]>)=>{if(!scopeRef.current){setRootKeyframes(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,keyframes:typeof action==="function"?action(d.keyframes):action}:d)}));},[]);
+  const setSharedCaptionTracks=useCallback((action:SetStateAction<CaptionTrack[]>)=>{if(!scopeRef.current){setRootCaptionTracks(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,captions:typeof action==="function"?action(d.captions):action}:d)}));},[]);
+  const setAudioTracks=useCallback((action:SetStateAction<AudioTrack[]>)=>{if(!scopeRef.current){setRootAudioTracks(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,audioTracks:typeof action==="function"?action(d.audioTracks):action}:d)}));},[]);
   const [audioError, setAudioError] = useState("");
   const [cameraMedia, setCameraMedia] = useState<{ path: string; startOffsetMs: number } | null>(null);
   const metadataDurationRef = useRef(0);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
   const [exportStatus, setExportStatus] = useState("");
   const [activeTool, setActiveTool] = useState<SidebarToolTab | null>(null);
+  const [colorClipId,setColorClipId]=useState<string>();
+  const [colorComparison,setColorComparison]=useState<ColorComparison>({enabled:false,split:.5,reverse:false});
   const [previewFocusMode, setPreviewFocusMode] = useState(false);
   const [previewMuted, setPreviewMuted] = useState(false);
   const [previewVolume, setPreviewVolume] = useState(100);
@@ -95,7 +110,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [showFinishing, setShowFinishing] = useState(false);
   const [voiceBypass, setVoiceBypass] = useState(false);
   const healthRef = useModalFocus(showProjectHealth);
-  const { audio: previewAudioTracks, status: voiceStatus } = useVoicePolish(audioTracks, voiceBypass);
+  const compiled=useMemo(()=>compileSequence(config,sharedKeyframes,sharedCaptionTracks,audioTracks,duration),[config,sharedKeyframes,sharedCaptionTracks,audioTracks,duration]);
+  const { audio: previewAudioTracks, status: voiceStatus } = useVoicePolish(compiled.audioTracks, voiceBypass);
   const [recordingHealth, setRecordingHealth] = useState<{ encoders: string[]; encodedFrames: number; mediaSeconds: number; quietIntervals: number; recoveryAttempts: number; interrupted: boolean } | null>(null);
   useEffect(() => {
     let disposed = false;
@@ -142,18 +158,21 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if (activeTool) setShowFileMenu(false);
   }, [activeTool]);
   const { undo, redo, replaceWithoutHistory, canUndo, canRedo } = useEditorHistory({
-    config, keyframes: sharedKeyframes, captions: sharedCaptionTracks, audioTracks, setAudioTracks, setConfig, setKeyframes: setSharedKeyframes, setCaptions: setSharedCaptionTracks,
+    config:rootConfig, keyframes:rootKeyframes, captions:rootCaptionTracks, audioTracks:rootAudioTracks, setAudioTracks:setRootAudioTracks, setConfig:setRootConfig, setKeyframes:setRootKeyframes, setCaptions:setRootCaptionTracks,
   });
   useEffect(()=>()=>{void invoke("cancel_editor_cached_media").catch(()=>{});},[videoPath]);
   const [sourceFrameRate,setSourceFrameRate]=useState(30);
   useEffect(()=>{let cancelled=false;setSourceFrameRate(30);void invoke<number>("editor_source_frame_rate",{path:videoPath}).then(rate=>{if(!cancelled&&Number.isFinite(rate))setSourceFrameRate(rate);}).catch(()=>{});return ()=>{cancelled=true;};},[videoPath]);
-  const { currentTime, audioDurations, activeClipId, inGap, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
-    videoPath, trimStart: config.trimStart, trimEnd: config.trimEnd, duration,
-    frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks: previewAudioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: config.videoClips,
+  const { currentTime:renderTime, audioDurations, activeClipId:renderClipId, inGap, sequencePosition, seekSequence, playing, playbackStatus, setMediaElement, togglePlay, pausePlayback, seekTo } = usePlaybackController({
+    videoPath, trimStart: compiled.config.trimStart, trimEnd: compiled.config.trimEnd, duration,
+    frameRate: sourceFrameRate, playbackRate: config.playbackRate, audioTracks: previewAudioTracks, audioMix: config.audio, previewMuted, previewVolume, videoClips: compiled.clips,
   });
   const footageClips = useMemo(() => retainedClips(config.videoClips, config.trimStart, config.trimEnd || duration), [config.videoClips, config.trimStart, config.trimEnd, duration]);
-  const activeEffectsClip = footageClips.find(clip=>clip.id===activeClipId);
-  const effects = resolveClipEffects(activeEffectsClip, config, sharedKeyframes, sharedCaptionTracks);
+  const timelineAudioTracks = useMemo(() => resolveMediaAudioTracks(audioTracks, config.layers), [audioTracks, config.layers]);
+  const editablePosition=sequenceClip(footageClips,sequencePosition);
+  const activeClipId=editablePosition?.clip.id,currentTime=editablePosition?.clip.sequenceId?editablePosition.source:renderTime;
+  const activeEffectsClip = compiled.clips.find(clip=>clip.id===renderClipId);
+  const effects = resolveClipEffects(activeEffectsClip, compiled.config, sharedKeyframes, sharedCaptionTracks);
   const visualConfig = effects.config;
   const keyframes = effects.keyframes;
   const captionTracks = effects.captions;
@@ -183,6 +202,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, []);
   const sequenceCaptions = useMemo(() => mapCaptionTracks(sharedCaptionTracks, footageClips), [sharedCaptionTracks, footageClips]);
   const editedDuration = sequenceDuration(footageClips) / (config.playbackRate || 1);
+  const openSequence=(id:string)=>{if(!rootConfig.nestedSequences?.some(d=>d.id===id)||sequenceScope.includes(id)||exportAbortRef.current)return;pausePlayback();setSequenceScope(s=>[...s,id]);setSelectedLayerId(null);setColorClipId(undefined);setSelectedZoomRegion(null);setActiveTool(null);};
+  const insertSequenceAt=useCallback((id:string,at=sequencePosition)=>{if(config.lockedTracks?.includes("video"))return;try{const result=insertSequence(config,audioTracks,id,at,duration,scopeId);pausePlayback();setConfig(result.config);setAudioTracks(result.audioTracks);}catch(e){setFileActionStatus(userError(e));setShowFileMenu(true);}},[config,audioTracks,duration,scopeId,sequencePosition,pausePlayback,setConfig,setAudioTracks]);
+  useEffect(()=>{pausePlayback();seekSequence(0);setSelectedLayerId(null);setSelectedZoomRegion(null);},[scopeId]);
+  useEffect(()=>{if(scopeId&&!rootConfig.nestedSequences?.some(d=>d.id===scopeId))setSequenceScope([]);},[scopeId,rootConfig.nestedSequences]);
 
   const decorateRestoredConfig = useCallback((restored: EditorConfig): EditorConfig => ({
     ...restored,
@@ -197,12 +220,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     inputLogPath,
     initialProjectPath,
     duration,
-    config,
-    keyframes: sharedKeyframes,
-    captions: sharedCaptionTracks,
-    audioTracks,
+    config:rootConfig,
+    keyframes:rootKeyframes,
+    captions:rootCaptionTracks,
+    audioTracks:rootAudioTracks,
     restore: replaceWithoutHistory,
-    restoreAudioTracks: (saved) => setAudioTracks((current) => current.length > 0 ? mergeAudioTracks(current, saved) : saved),
+    restoreAudioTracks: (saved) => setRootAudioTracks((current) => current.length > 0 ? mergeAudioTracks(current, saved) : saved),
     decorateRestoredConfig,
   });
 
@@ -310,7 +333,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     setAudioError("");
     void discoverAudioTracks(videoPath).then((discovered) => {
       if (cancelled) return;
-      setAudioTracks((current) => mergeAudioTracks(discovered, current));
+      setRootAudioTracks((current) => mergeAudioTracks(discovered, current));
     }).catch((error) => {
       if (!cancelled) setAudioError(`Audio could not be loaded: ${userError(error)}`);
     });
@@ -351,33 +374,37 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   const addMediaToTimeline = useCallback(async (paths: string[], atTime = sequencePosition) => {
     const audio = paths.filter(path => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
-    if (audio.length) void addAudioSources(audio, atTime);
+    if (audio.length) await addAudioSources(audio, atTime);
     if (config.lockedTracks?.includes("annotations")) return;
     const visuals = paths.filter(path => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm)$/i.test(path));
     if (!visuals.length) return;
     const start = Math.max(0, Math.round(atTime * sourceFrameRate) / sourceFrameRate);
     try {
-      const additions = await Promise.all(visuals.map(async (path, index): Promise<Layer> => {
+      const additions = await Promise.all(visuals.map(async (path): Promise<Layer> => {
         const type = /\.(mp4|mov|mkv|webm)$/i.test(path) ? "video" as const : "image" as const;
         const length = type === "video" ? await invoke<number>("probe_media_duration", {path}) : 5;
         if (!Number.isFinite(length) || length <= 0) throw new Error("Media duration is unavailable");
         return {
-          id: `${type}-${crypto.randomUUID()}`, type, path, timeSpace: "sequence", fit: "contain", cornerRadius: 10,
+          id: `${type}-${crypto.randomUUID()}`, type, path, timeSpace: "sequence", fit: "contain", cornerRadius: 0,
           start, end: start + length, ...(type === "video" ? {sourceDuration:length,sourceOffset:0} : {}),
-          x: .25 + (index % 3) * .035, y: .2 + (index % 3) * .035, w: .5, h: .5,
+          x: 0, y: 0, w: 1, h: 1,
           opacity: 1, rotation: 0, flipX: false, flipY: false,
         };
       }));
+      let placement=start;for(const layer of additions){const length=layer.end-layer.start;layer.start=placement;layer.end=placement+length;placement=layer.end;}
+      const videoAudio:AudioTrack[]=[];
+      for(const layer of additions){if(layer.type!=="video")continue;if(!await invoke<boolean>("media_has_audio",{path:layer.path}))continue;const path=await invoke<string>("import_audio_file",{videoPath,sourcePath:layer.path});videoAudio.push({id:`media-audio-${crypto.randomUUID()}`,mediaLayerId:layer.id,kind:"imported",path,label:layer.path.split(/[\\/]/).pop()??"Video audio",muted:false,volume:1,linked:false,start:layer.start,sourceStart:0,sourceEnd:layer.end-layer.start});}
       setConfig(current => {
         if (current.lockedTracks?.includes("annotations")) return current;
         const clips = retainedClips(current.videoClips,current.trimStart,current.trimEnd||duration);
         const extra = Math.max(...additions.map(l=>l.end)) - sequenceDuration(clips);
         return {...current, layers:[...current.layers,...additions], videoClips:extra>0 ? [...clips,{id:`gap-${crypto.randomUUID()}`,gap:true,start:0,end:extra}] : current.videoClips};
       });
+      if(videoAudio.length)setAudioTracks(tracks=>[...tracks,...videoAudio]);
       setSelectedLayerId(additions[additions.length - 1].id);
       setSelectedCaption(null); setSelectedZoomRegion(null); setActiveTool("annotations");
     } catch (error) { setAudioError(`Media could not be added: ${userError(error)}`); }
-  }, [addAudioSources, config.lockedTracks, duration, sequencePosition, sourceFrameRate]);
+  }, [addAudioSources, config.lockedTracks, duration, sequencePosition, sourceFrameRate,videoPath]);
 
   useEffect(() => {
     if (isBrowserPreview || !appWindow) return;
@@ -401,6 +428,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     });
     return () => { void unlisten.then((stop) => stop()); };
   }, [addMediaToTimeline, appWindow, duration, footageClips, isBrowserPreview]);
+  useEffect(()=>{const drop=(event:Event)=>{const d=(event as CustomEvent<MediaDragDetail>).detail;if(d.phase!=="drop"||!document.elementFromPoint(d.x,d.y)?.closest(".ss-timeline-container"))return;const timeline=document.querySelector<HTMLElement>(".ss-timeline-col"),rect=timeline?.getBoundingClientRect();if(!timeline||!rect)return;const length=Number(timeline.dataset.timelineDuration)||sequenceDuration(footageClips),raw=Math.max(0,Math.min(length,(d.x-rect.left)/rect.width*length)),points=footageClips.reduce<number[]>((p,c)=>[...p,p[p.length-1]+(c.end-c.start)/(c.speed??1)],[0]),snap=timeline.dataset.snapping!=="false"?points.find(p=>Math.abs(p-raw)<8/rect.width*length):undefined;const at=timeline.dataset.timeView==="source"?sequenceTime(footageClips,raw):snap??raw;for(const item of d.items.filter(i=>i.kind==="sequence"))insertSequenceAt(item.path.slice("snap-sequence:".length),at);void addMediaToTimeline(d.items.filter(i=>i.kind!=="sequence").map(a=>a.path),Math.round(at*sourceFrameRate)/sourceFrameRate);};window.addEventListener("snap-media-drag",drop);return()=>window.removeEventListener("snap-media-drag",drop);},[addMediaToTimeline,footageClips,sourceFrameRate,insertSequenceAt]);
 
   const handleAddAudio = useCallback(async () => {
     const selected = await openDialog({
@@ -574,7 +602,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       const effectConfig={...independent.config,screenTilt:locked("tilt")?independent.config.screenTilt:next.screenTilt,zoomEnabled:locked("zoom")?independent.config.zoomEnabled:next.zoomEnabled,zoomLevel:locked("zoom")?independent.config.zoomLevel:next.zoomLevel,zoomMovement:locked("zoom")?independent.config.zoomMovement:next.zoomMovement,fixedZoomPart:locked("zoom")?independent.config.fixedZoomPart:next.fixedZoomPart,zoomMode:locked("zoom")?independent.config.zoomMode:next.zoomMode};
       next={...next,videoClips:editClipEffects(current,activeClipId!,{config:effectConfig}).videoClips,screenTilt:current.screenTilt,zoomEnabled:current.zoomEnabled,zoomLevel:current.zoomLevel,zoomMovement:current.zoomMovement,fixedZoomPart:current.fixedZoomPart,zoomMode:current.zoomMode};
     }
-    return {...next,layers:locked("annotations")?current.layers:next.layers,videoClips:locked("video")?current.videoClips?.map(clip=>({...clip,effects:next.videoClips?.find(item=>item.id===clip.id)?.effects??clip.effects}))??null:next.videoClips,trimStart:locked("video")?current.trimStart:next.trimStart,trimEnd:locked("video")?current.trimEnd:next.trimEnd,actionOverlay:locked("action")?current.actionOverlay:next.actionOverlay,screenTilt:locked("tilt")?current.screenTilt:next.screenTilt,cameraOverlay:locked("camera")?current.cameraOverlay:next.cameraOverlay,zoomEnabled:locked("zoom")?current.zoomEnabled:next.zoomEnabled,zoomLevel:locked("zoom")?current.zoomLevel:next.zoomLevel,zoomMovement:locked("zoom")?current.zoomMovement:next.zoomMovement,fixedZoomPart:locked("zoom")?current.fixedZoomPart:next.fixedZoomPart,zoomMode:locked("zoom")?current.zoomMode:next.zoomMode};
+    return {...next,colorGrade:locked("video")||activeTool!=="color"?current.colorGrade:next.colorGrade,layers:locked("annotations")?current.layers:next.layers,videoClips:locked("video")?current.videoClips?.map(clip=>({...clip,effects:next.videoClips?.find(item=>item.id===clip.id)?.effects??clip.effects}))??null:next.videoClips,trimStart:locked("video")?current.trimStart:next.trimStart,trimEnd:locked("video")?current.trimEnd:next.trimEnd,actionOverlay:locked("action")?current.actionOverlay:next.actionOverlay,screenTilt:locked("tilt")?current.screenTilt:next.screenTilt,cameraOverlay:locked("camera")?current.cameraOverlay:next.cameraOverlay,zoomEnabled:locked("zoom")?current.zoomEnabled:next.zoomEnabled,zoomLevel:locked("zoom")?current.zoomLevel:next.zoomLevel,zoomMovement:locked("zoom")?current.zoomMovement:next.zoomMovement,fixedZoomPart:locked("zoom")?current.fixedZoomPart:next.fixedZoomPart,zoomMode:locked("zoom")?current.zoomMode:next.zoomMode};
   });
 
   const handleTrimStart = (t: number) => {
@@ -595,8 +623,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       const selected = await saveDialog({ title: "Export video", defaultPath: settings.outputPath, filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }] });
       if (!selected) return;
       settings = { ...settings, outputPath: selected };
-      const {format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop}=settings;
-      setConfig(current=>({...current,exportDefaults:{format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop}}));
+      const {format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop,motionInterpolation}=settings;
+      setConfig(current=>({...current,exportDefaults:{format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop,motionInterpolation}}));
       if (selected.toLowerCase() === videoPath.toLowerCase()) throw new Error("Choose a different filename to preserve your source recording");
       const abortController = new AbortController();
       exportAbortRef.current = abortController;
@@ -607,15 +635,18 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         videoPath,
         inputLogPath,
         sharedKeyframes,
-        config,
+        compiled.config,
         sharedCaptionTracks,
-        (await prepareVoiceTracks(audioTracks)).map(track=>({...track,linked:false,clips:resolvedAudioClips(track,footageClips,audioDurations[track.id]??duration)})),
+        (await prepareVoiceTracks(compiled.audioTracks)).map(track=>({...track,linked:false,clips:resolvedAudioClips(track,compiled.clips,audioDurations[track.id]??duration)})),
         cameraMedia,
         settings,
         config.trimStart,
         config.trimEnd > 0 ? config.trimEnd : duration,
         (p) => {
-          if (p.phase === "recording") {
+          if (p.phase === "preparing") {
+            setExportStatus(`Exporting — ${p.message}`);
+            setExportProgress(p.progress);
+          } else if (p.phase === "recording") {
             setExportStatus("Exporting...");
             setExportProgress(p.progress);
           } else if (p.phase === "finalizing") {
@@ -635,11 +666,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           });
         } catch (error) {
           console.error("[Snap] Delivery package failed:", error);
-          setExportStatus("Done — video saved; delivery package could not be completed. Export again to retry.");
+          setExportStatus("Export Saved — delivery package incomplete. Export again to retry.");
           return;
         }
       }
-      setExportStatus("Done — export saved");
+      setExportStatus("Export Saved");
       void result;
     } catch (e) {
       setExportStatus(exportAbortRef.current?.signal.aborted || (e instanceof DOMException && e.name === "AbortError") ? "Export cancelled" : `Export failed: ${userError(e)}`);
@@ -774,7 +805,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if(config.lockedTracks?.includes("annotations"))return;
     const layer = config.layers.find((candidate) => candidate.id === id);
     if (!layer) return;
-    const timelineEnd = config.trimEnd || duration;
+    const timelineEnd = layer.timeSpace === "sequence" ? sequenceDuration(footageClips) : config.trimEnd || duration;
     const layerDuration = Math.max(0.2, layer.end - layer.start);
     const shiftedStart = Math.min(Math.max(config.trimStart, layer.end + 0.15), Math.max(config.trimStart, timelineEnd - layerDuration));
     const copy = {
@@ -786,11 +817,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       y: Math.min(0.92, layer.y + 0.025),
     } as Layer;
     setConfig((current) => ({ ...current, layers: [...current.layers, copy] }));
+    setAudioTracks(tracks => [...tracks, ...tracks.filter(track => track.mediaLayerId === id).map(track => ({ ...track, id: crypto.randomUUID(), label: `${track.label} copy`, mediaLayerId: copy.id }))]);
     setSelectedLayerId(copy.id);
     setActiveTool("annotations");
     pausePlayback();
-    seekTo(copy.start + 0.01);
-  }, [config.layers, config.lockedTracks, config.trimEnd, config.trimStart, duration, pausePlayback, seekTo]);
+    if (copy.timeSpace === "sequence") seekSequence(copy.start + 0.01); else seekTo(copy.start + 0.01);
+  }, [config.layers, config.lockedTracks, config.trimEnd, config.trimStart, footageClips, duration, pausePlayback, seekTo, seekSequence, setAudioTracks]);
 
   const deleteLayer = useCallback((id: string) => {
     setConfig((current) => current.lockedTracks?.includes("annotations") ? current : ({ ...current, layers: current.layers.filter((layer) => layer.id !== id) }));
@@ -950,6 +982,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
   return (
     <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} data-restore-ready={projectReady} onPointerMove={revealPreviewControls}>
+      {sequenceScope.length>0&&<nav className="sequence-breadcrumbs" aria-label="Sequence navigation"><button onClick={()=>{pausePlayback();setSequenceScope([]);}}>Main sequence</button>{sequenceScope.map((id,i)=><button key={id} onClick={()=>{pausePlayback();setSequenceScope(s=>s.slice(0,i+1));}}>{rootConfig.nestedSequences?.find(d=>d.id===id)?.name??"Sequence"}</button>)}</nav>}
       {!projectReady&&<div className="editor-opening" role="status">Opening editor…</div>}
       {/* ── Top Bar ────────────────────────────────────────────── */}
       <header className="ss-topbar" data-tauri-drag-region>
@@ -1129,6 +1162,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             <Captions size={20} /><span className="ss-tool-label">Captions</span>
           </button>
 
+          <button className={`ss-tool-icon-btn ${activeTool === "color" ? "active" : ""}`} onClick={() => setActiveTool("color")} onDoubleClick={() => setActiveTool(null)} aria-pressed={activeTool === "color"} title="Color & film" aria-label="Color and film looks"><Palette size={20}/><span className="ss-tool-label">Color</span></button>
         </aside>
 
         {/* Center Preview Workspace */}
@@ -1144,13 +1178,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             {previewFocusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
           </button>
           <Preview
+            colorComparison={colorComparison}
+            onColorComparisonChange={setColorComparison}
             videoPath={videoPath}
             sourceDuration={duration}
             readyToPaint={projectReady}
             inputLogPath={isBrowserPreview ? "" : inputLogPath}
             cameraMedia={cameraMedia}
             config={visualConfig}
-            transitionConfig={config}
+            transitionConfig={compiled.config}
             transitionKeyframes={sharedKeyframes}
             keyframes={compareZoom && zoomProposal ? zoomProposal : keyframes}
             onKeyframesChange={applyKeyframes}
@@ -1194,7 +1230,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             preserveProjectKeyframes={hasSavedProject && keyframes.length > 0}
             captionTracks={captionTracks}
             hasExternalAudio={audioTracks.length > 0}
-            activeClipId={activeClipId}
+            activeClipId={renderClipId}
             gapTime={inGap ? sequencePosition : undefined}
             originalOnly={false}
           />
@@ -1216,6 +1252,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
         {/* Right Tool Settings Panel Drawer */}
         {activeTool && <Panels
+          sequenceScopeId={scopeId} referencedSequenceIds={(rootConfig.videoClips??[]).flatMap(c=>c.sequenceId?[c.sequenceId]:[])} onSequenceInsert={insertSequenceAt} onSequenceEdit={openSequence}
+          onSequencesChange={nestedSequences=>setRootConfig(c=>({...c,nestedSequences:[...nestedSequences,...(c.nestedSequences??[]).filter(d=>!nestedSequences.some(s=>s.id===d.id)&&(c.videoClips?.some(clip=>clip.sequenceId===d.id)||nestedSequences.some(s=>s.editor.videoClips?.some(clip=>clip.sequenceId===d.id))))]}))}
+          colorConfig={config} colorClipId={colorClipId??activeClipId} sequencePosition={sequencePosition} sequenceLength={sequenceDuration(footageClips)} comparison={colorComparison} onComparison={setColorComparison}
+          onColorConfigChange={next=>setConfig(c=>({...c,colorGrade:c.lockedTracks?.includes("video")?c.colorGrade:next.colorGrade,colorLuts:next.colorLuts,videoClips:c.lockedTracks?.includes("video")?c.videoClips:next.videoClips,adjustmentLayers:c.lockedTracks?.includes("adjustments")?c.adjustmentLayers:next.adjustmentLayers}))}
+          projectColorGrade={config.colorGrade}
           config={visualConfig}
           frameRate={sourceFrameRate}
           inputLogPath={inputLogPath}
@@ -1263,6 +1304,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
       <Timeline
+        onGraphEdit={(kind,_id,clipId)=>setConfig(c=>{if(kind==="zoom"){const clip=c.videoClips?.find(c=>c.id===clipId);if(clip?.effects)return editClipEffects(c,clipId!,{config:{...clip.effects.config,zoomEnabled:true,zoomMovement:{...c.zoomMovement,curve:"keyframes"}}});return {...c,zoomEnabled:true,zoomMovement:{...c.zoomMovement,curve:"keyframes"}};}if(kind==="tilt"){const clip=c.videoClips?.find(c=>c.id===clipId),tilt=clip?.effects?.config.screenTilt??c.screenTilt;if(!tilt)return c;return clip?.effects?editClipEffects(c,clipId!,{config:{...clip.effects.config,screenTilt:{...tilt,enabled:true}}}):{...c,screenTilt:{...tilt,enabled:true}};}return c;})}
+        onNestSelection={ids=>{if(config.lockedTracks?.includes("video"))return;try{const result=nestSelection(config,sharedKeyframes,sharedCaptionTracks,audioTracks,ids,duration,`Sequence ${(rootConfig.nestedSequences?.length??0)+1}`);pausePlayback();setConfig(result.config);setAudioTracks(result.audioTracks);}catch(e){setFileActionStatus(userError(e));setShowFileMenu(true);}}}
+        onSequenceEdit={openSequence}
+        onUnnest={id=>{if(config.lockedTracks?.includes("video"))return;try{const result=unnestClip(config,sharedKeyframes,sharedCaptionTracks,audioTracks,id,duration);pausePlayback();setConfig(result.config);setAudioTracks(result.audioTracks);}catch(e){setFileActionStatus(userError(e));setShowFileMenu(true);}}}
+        onClipSelect={setColorClipId}
+        onAdjustmentsChange={adjustmentLayers=>setConfig(c=>c.lockedTracks?.includes("adjustments")?c:{...c,adjustmentLayers})}
         audioDurations={audioDurations}
         frameRate={sourceFrameRate}
         activeClipId={activeClipId}
@@ -1305,7 +1352,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         }}
         editorTheme={editorTheme}
         inputLogPath={isBrowserPreview ? "" : inputLogPath}
-        audioTracks={audioTracks}
+        audioTracks={timelineAudioTracks}
         duration={duration}
         currentTime={currentTime}
         keyframes={sharedKeyframes}
@@ -1313,7 +1360,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         playing={playing}
         playbackStatus={playbackStatus}
         onTogglePlay={togglePlay}
-        onSeek={seekTo}
+        onSeek={(t,id)=>{const clip=footageClips.find(c=>c.id===id);if(clip?.sequenceId)seekSequence(sequenceTime(footageClips,t,id));else seekTo(t,id);}}
         onTrimStartChange={handleTrimStart}
         onTrimEndChange={handleTrimEnd}
         onCutsChange={(newCuts: number[]) =>
@@ -1352,12 +1399,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           },
         }))}
         onAddAudio={handleAddAudio}
-        onLayerSplit={(layer,parts)=>setConfig(c=>c.lockedTracks?.includes("annotations")?c:{...c,layers:c.layers.flatMap(item=>item.id===layer.id?parts:[item])})}
+        onLayerSplit={(layer,parts)=>{if(config.lockedTracks?.includes("annotations"))return;setConfig(c=>({...c,layers:c.layers.flatMap(item=>item.id===layer.id?parts:[item])}));setAudioTracks(tracks=>[...tracks,...parts.filter(part=>part.id!==layer.id).flatMap(part=>tracks.filter(track=>track.mediaLayerId===layer.id).map(track=>({...track,id:crypto.randomUUID(),mediaLayerId:part.id})))]);}}
         onMediaDrop={addMediaToTimeline}
         onAddCaptionAtTime={addManualCaptionAt}
         onAudioTrackChange={(updated) => {
           if(config.lockedTracks?.includes(updated.id))return;
-          pausePlayback();setAudioTracks(tracks=>tracks.map(track=>track.id===updated.id?updated:track));
+          const previous=timelineAudioTracks.find(track=>track.id===updated.id);
+          const independent=previous?.mediaLayerId&&(updated.clips!==previous.clips||updated.start!==previous.start||updated.sourceStart!==previous.sourceStart||updated.sourceEnd!==previous.sourceEnd);
+          const next=independent?{...updated,mediaLayerId:undefined}:updated;
+          pausePlayback();setAudioTracks(tracks=>tracks.map(track=>track.id===updated.id?next:track));
           const end=resolvedAudioClips(updated,footageClips,audioDurations[updated.id]??duration).reduce((maximum,clip)=>Math.max(maximum,clip.end),0),length=sequenceDuration(footageClips);
           if(end>length+1e-6&&!config.lockedTracks?.includes("video"))setConfig(c=>({...c,videoClips:[...footageClips,{id:`gap-${crypto.randomUUID()}`,start:0,end:end-length,gap:true}]}));
         }}

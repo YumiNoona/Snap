@@ -11,7 +11,7 @@ it("redraws loaded audio waveforms when the editor theme changes", async () => {
   const waveform = vi.mocked(invoke).mockResolvedValue([0.2, 0.5]);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn(), querySelector: vi.fn(() => null) });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   let color = "#a1a1aa";
   vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: () => color }));
@@ -38,7 +38,7 @@ it("redraws loaded audio waveforms when the editor theme changes", async () => {
 it("splits with the toolbar and razor, selects footage and leaves a gap when deleting", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn(), querySelector: vi.fn(() => null) });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const warn = vi.spyOn(console, "error").mockImplementation(() => {});
   let current: VideoClip[] | null = null;
@@ -96,7 +96,7 @@ it("splits with the toolbar and razor, selects footage and leaves a gap when del
 it("reorders clips with pointer dragging, supports the final boundary and cancels safely", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
-  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn(), querySelector: vi.fn(() => null) });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   const warn=vi.spyOn(console,"error").mockImplementation(()=>{});
   let current: VideoClip[]=[];
@@ -133,7 +133,7 @@ it("shows added tilt keys in the timeline, including duplicated footage occurren
   const {DEFAULT_SCREEN_TILT}=await import("../../../lib/screenTilt");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
   vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
-  vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn(),querySelector:vi.fn(()=>null)});
   vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});
   const warn=vi.spyOn(console,"error").mockImplementation(()=>{}),seek=vi.fn(),retime=vi.fn();
   function Harness(){const [config,setConfig]=useState({...DEFAULT_EDITOR_CONFIG,trimEnd:5,screenTilt:{...DEFAULT_SCREEN_TILT,enabled:true},videoClips:[{id:"a",start:0,end:5},{id:"b",start:0,end:5}]});return createElement("div",null,createElement(ScreenTiltTools,{config,time:2,onChange:setConfig as never}),createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[],duration:5,currentTime:2,keyframes:[],config,playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:seek,onAnimationKeyChange:retime} as unknown as ComponentProps<typeof Timeline>));}
@@ -169,7 +169,7 @@ it("invalidates waveform cache when an existing media path changes", async () =>
   vi.mocked(invoke).mockImplementation(read as typeof invoke);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", {addEventListener:vi.fn(),removeEventListener:vi.fn()});
-  vi.stubGlobal("document", {addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("document", {addEventListener:vi.fn(),removeEventListener:vi.fn(),querySelector:vi.fn(()=>null)});
   vi.stubGlobal("ResizeObserver", class {observe(){} disconnect(){}});
   vi.stubGlobal("getComputedStyle", ()=>({getPropertyValue:()=>"#aaa"}));
   const warn=vi.spyOn(console,"error").mockImplementation(()=>{});
@@ -188,7 +188,7 @@ it("invalidates waveform cache when an existing media path changes", async () =>
 });
 
 it("cuts selected audio independently and respects its track lock",async()=>{
- vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});
+ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn(),querySelector:vi.fn(()=>null)});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});
  const warn=vi.spyOn(console,"error").mockImplementation(()=>{});let audio:AudioTrack|undefined,locked=false;const changeVideo=vi.fn();
  function Harness(){const [track,setTrack]=useState<AudioTrack>({id:"system",kind:"system",path:"cut-test.wav",label:"Desktop",muted:false,volume:1});audio=track;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[track],audioDurations:{system:4},duration:4,currentTime:2,activeClipId:"a",keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:4,videoClips:[{id:"a",start:0,end:4}],lockedTracks:locked?["system","video"]:["video"]},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onAudioTrackChange:setTrack,onVideoClipsChange:changeVideo} as unknown as ComponentProps<typeof Timeline>);}
  let renderer!:ReturnType<typeof create>;try{await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000,top:500}),style:{}})});});
@@ -202,7 +202,7 @@ it("cuts selected audio independently and respects its track lock",async()=>{
 });
 
 it("adds transitions at cuts and adjusts their duration without moving footage",async()=>{
- vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});const warn=vi.spyOn(console,"error").mockImplementation(()=>{});let current:VideoClip[]=[];
+ vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn(),querySelector:vi.fn(()=>null)});vi.stubGlobal("ResizeObserver",class{observe(){}disconnect(){}});const warn=vi.spyOn(console,"error").mockImplementation(()=>{});let current:VideoClip[]=[];
  function Harness(){const [clips,setClips]=useState<VideoClip[]>([{id:"a",start:0,end:1},{id:"b",start:1,end:2}]);current=clips;return createElement(Timeline,{editorTheme:"dark",inputLogPath:"",audioTracks:[],duration:2,currentTime:1.2,activeClipId:"b",frameRate:60,keyframes:[],config:{...DEFAULT_EDITOR_CONFIG,trimEnd:2,videoClips:clips},playing:false,playbackStatus:"paused",layers:[],captionTracks:[],selectedActionId:null,selectedLayerId:null,selectedCaption:null,selectedZoomRegion:null,onSeek:vi.fn(),onVideoClipsChange:setClips} as unknown as ComponentProps<typeof Timeline>);}
  let renderer!:ReturnType<typeof create>;try{await act(async()=>{renderer=create(createElement(Harness),{createNodeMock:()=>({clientWidth:1000,getBoundingClientRect:()=>({left:0,width:1000,top:500}),style:{}})});});await act(async()=>renderer.root.findByProps({"aria-label":"Add transition at this cut"}).props.onClick({stopPropagation:vi.fn()}));expect(current[1].transition).toEqual({effect:"dissolve",duration:.3});await act(async()=>renderer.root.findByProps({"aria-label":"Transition length"}).props.onKeyDown({key:"ArrowRight",shiftKey:true,preventDefault:vi.fn(),stopPropagation:vi.fn()}));expect(current[1].transition!.duration).toBeCloseTo(.3+10/60);expect(current.map(clip=>[clip.start,clip.end])).toEqual([[0,1],[1,2]]);await act(async()=>renderer.root.findByProps({"aria-label":"none transition"}).props.onClick());expect(current[1].transition).toBeUndefined();}finally{if(renderer)await act(async()=>renderer.unmount());warn.mockRestore();vi.unstubAllGlobals();}
 });
@@ -212,7 +212,7 @@ it("box-selects shared keys and edits them without changing independent clip key
   const { replaceAnimationKeyGroups, snapshotClipEffects } = await import("../../../lib/clipEffects");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
   vi.stubGlobal("window",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
-  vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("document",{addEventListener:vi.fn(),removeEventListener:vi.fn(),querySelector:vi.fn(()=>null)});
   vi.stubGlobal("HTMLElement",class {});
   vi.stubGlobal("ResizeObserver",class {observe(){}disconnect(){}});
   vi.stubGlobal("requestAnimationFrame",()=>0);

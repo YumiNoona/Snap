@@ -15,7 +15,7 @@ export function resolvedAudioClips(track:AudioTrack,clips:VideoClip[],duration:n
     if(linked&&!video)return [];
     const from=video?Math.max(video.start,segment.sourceStart):segment.sourceStart,to=video?Math.min(video.end,segment.sourceEnd):segment.sourceEnd;
     if(!Number.isFinite(from)||!Number.isFinite(to)||to<=from)return [];
-    const speed=video?clipSpeed(video):Math.max(.25,Math.min(4,segment.speed??1));
+    const speed=video?clipSpeed(video):Math.max(.001,Math.min(64,segment.speed??1));
     const start=video?sequenceTime(clips,from,video.id):Math.max(0,segment.start);
     return [{...segment,sourceStart:from,sourceEnd:to,start,speed,end:start+(to-from)/speed}];
   }).sort((a,b)=>a.start-b.start);

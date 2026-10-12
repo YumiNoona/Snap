@@ -577,6 +577,7 @@ export function createRecipe(
     aspectRatio,
     cameraOverlay,
     exportDefaults,
+    colorGrade,
   } = config;
   const { animation: _animation, ...camera } = cameraOverlay;
   void _animation;
@@ -601,6 +602,7 @@ export function createRecipe(
       aspectRatio,
       cameraOverlay: camera,
       exportDefaults,
+      colorGrade,
     },
     captionStyle: captions[0]?.style,
     voicePolish: tracks.find((t) => t.kind === "microphone")?.voicePolish,

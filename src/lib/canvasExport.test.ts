@@ -9,7 +9,7 @@ vi.mock("./exportCompositor", () => ({ createExportCompositor: mocks.compositor 
 const cleanups=new Set<()=>void>();
 afterEach(() => {for(const cleanup of cleanups)cleanup();cleanups.clear();vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
-async function exerciseExport(rate: number, cancelAtCut = false, supplied?: VideoClip[]) {
+async function exerciseExport(rate: number, cancelAtCut = false, supplied?: VideoClip[], opticalFlow = false) {
   const controller = new AbortController();
   const clips = supplied ?? [{ id: "a", start: 0, end: 1 }, { id: "b", start: 3, end: 4 }];
   const length=clips.reduce((sum,clip)=>sum+clipDuration(clip),0);
@@ -20,7 +20,7 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
   const video = Object.assign(target, {
     get currentTime() { return time; },
     play: async () => { paused = false; }, pause: () => { paused = true; },
-    ended: false, error: null, seeking: false, playbackRate: rate,
+    readyState: 2, duration: 4, ended: false, error: null, seeking: false, playbackRate: rate,
   });
   Object.defineProperty(video, "currentTime", { get: () => time, set: value => { time = value; if (cancelAtCut && value === 3) controller.abort(); queueMicrotask(() => target.dispatchEvent(new Event("seeked"))); } });
   const renderFrame = () => {
@@ -32,7 +32,7 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
   const destroy = vi.fn(()=>{for(const timer of timers)clearTimeout(timer);timers.clear();});
   const setClip = vi.fn((id:string)=>{activeIndex=clips.findIndex(clip=>clip.id===id);});
   mocks.compositor.mockResolvedValue({ video, canvas, clickTimesMs: [500, 2000, 3500], renderFrame, setClip, setFrameConsumer: (next: typeof consumer) => { consumer = next; }, destroy });
-  mocks.invoke.mockImplementation(async (command: string) => command === "finalize_canvas_export" ? "done.mp4" : undefined);
+  mocks.invoke.mockImplementation(async (command: string) => command === "finalize_canvas_export" ? "done.mp4" : command === "prepare_export_motion" ? "flow.mp4" : undefined);
   const frames: Array<{ source: number; timestamp: number; clipId:string;gap:boolean }> = [];
   vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {const timer=setTimeout(() => {
     timers.delete(timer);
@@ -55,7 +55,7 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
     }
     async flush() {} close() { this.state = "closed"; }
   });
-  const settings = { format: "mp4", fps: 30, width: 640, height: 360, quality: "medium", outputPath: "done.mp4", captions: "none" } as ExportSettings;
+  const settings = { format: "mp4", fps: 30, width: 640, height: 360, quality: "medium", outputPath: "done.mp4", captions: "none", motionInterpolation: opticalFlow ? "optical-flow" : "none" } as ExportSettings;
   const config = { ...DEFAULT_EDITOR_CONFIG, videoClips: clips, playbackRate: rate, cursorStyle: { ...DEFAULT_EDITOR_CONFIG.cursorStyle, clickSound: true } };
   const operation = runCanvasExport("source.mp4", "events.json", [], config, [], [], null, settings, 0, 4, vi.fn(), controller.signal);
   if (cancelAtCut) {
@@ -74,10 +74,16 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
   expect(request.sourceSegments).toEqual(clips.map(clip => ({start:clip.start,end:clip.end,speed:clipSpeed(clip),gap:!!clip.gap})));
   expect(request.exportDurationSeconds).toBe(length / rate);
   expect(request.clickTimesMs).toEqual(clips.filter(clip=>!clip.gap).flatMap(clip=>[500,2000,3500].filter(time=>time>=clip.start*1000&&time<clip.end*1000).map(time=>(sequenceTime(clips,clip.start,clip.id)*1000+(time-clip.start*1000)/clipSpeed(clip))/rate)));
-  frames.forEach((frame,index)=>{const position=sequenceClip(clips,Math.min(length-1e-6,index/30*rate));if(!position)return;expect(frame.clipId).toBe(position.clip.id);if(!position.clip.gap){expect(frame.source).toBeGreaterThanOrEqual(position.clip.start);expect(frame.source).toBeLessThan(position.clip.end);}});
+  frames.forEach((frame,index)=>{const position=sequenceClip(clips,Math.min(length-1e-6,index/30*rate));if(!position)return;expect(frame.clipId).toBe(position.clip.id);if(!position.clip.gap){expect(frame.source).toBeCloseTo(position.source, 6);expect(frame.source).toBeGreaterThanOrEqual(position.clip.start);expect(frame.source).toBeLessThan(position.clip.end);}});
   expect(destroy).toHaveBeenCalledOnce();
   expect(setClip.mock.calls.map(call=>call[0])).toEqual(clips.map(clip=>clip.id));
   expect(mocks.compositor.mock.calls[0][9]).toBe(false);
+  if (opticalFlow) {
+    expect(mocks.compositor.mock.calls[0][0]).toBe("flow.mp4");
+    expect(request.inputVideo).toBe("source.mp4");
+    expect(mocks.invoke.mock.calls.filter(call => call[0] === "prepare_export_motion")).toHaveLength(1);
+    expect(mocks.invoke.mock.calls.filter(call => call[0] === "discard_export_motion")).toHaveLength(1);
+  }
 }
 it.each([.5, 1, 2])("exports joined frames and audio/click timestamps at %sx without encoding deleted footage", async rate => { await exerciseExport(rate); },15000);
 it("cancels a cut-boundary seek and releases the compositor and staging output", async () => { await exerciseExport(1, true); },15000);
@@ -85,3 +91,5 @@ it("cancels a cut-boundary seek and releases the compositor and staging output",
 it("exports reordered and duplicated source ranges in the chosen order", async()=>{await exerciseExport(1,false,[{id:"b",start:3,end:4},{id:"a",start:0,end:1},{id:"repeat",start:3,end:4}]);},15000);
 
 it("exports clip speed changes and leading/internal/trailing gaps with continuous frame timestamps",async()=>{await exerciseExport(1,false,[{id:"lead",start:0,end:.1,gap:true},{id:"a",start:0,end:1,speed:2},{id:"space",start:0,end:.2,gap:true},{id:"b",start:3,end:4,speed:.5},{id:"tail",start:0,end:.1,gap:true}]);},15000);
+it("prepares motion once, composes source frames and keeps original audio media", async () => { await exerciseExport(.5, false, undefined, true); }, 15000);
+it("cleans optical flow media after cancellation at a cut", async () => { await exerciseExport(1, true, undefined, true); expect(mocks.invoke.mock.calls.some(call => call[0] === "discard_export_motion")).toBe(true); }, 15000);
