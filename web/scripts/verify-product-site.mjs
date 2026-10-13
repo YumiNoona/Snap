@@ -31,6 +31,12 @@ try {
   }
   assert.equal(await page.getByRole('heading', { name: 'Bring in what you have.', exact: true }).count(), 0);
   assert.equal(await page.getByRole('heading', { name: 'Stay on script.', exact: true }).count(), 0);
+  assert.equal(await page.locator('#workflow, .workflow-grid').count(), 0, 'Remove the entire four-card workflow section');
+  assert.equal(await page.getByRole('heading', { name: /From capture to a video/ }).count(), 0);
+  for (const name of ['Record lightly', 'Shape the focus', 'Finish the sound', 'Export with confidence']) {
+    assert.equal(await page.getByRole('heading', { name, exact: true }).count(), 0);
+  }
+  assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('a[href^="#"]')].map(link => link.getAttribute('href')).filter(href => !document.getElementById(href.slice(1)))), [], 'All remaining navigation anchors resolve');
   assert.equal(await page.getByText('Your screen, a smoother camera pass, and the finishing touches that make it yours.', { exact: true }).count(), 0);
   for (const [selector, animation] of [['.site-nav', 'intro-rise'], ['.hero-line > span', 'intro-line'], ['.showcase-carousel', 'intro-preview']]) {
     assert.equal(await page.locator(selector).first().evaluate(element => getComputedStyle(element).animationName), animation);

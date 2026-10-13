@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
-  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp, Play,
+  ArrowRight, Check, Copy, Download, Heart, Play,
   ShieldCheck, X,
 } from "lucide-react";
 import PromoFilm from "./PromoFilm";
@@ -64,7 +64,7 @@ export default function Home() {
       <header className="site-nav shell">
         <a className="brand" href="#top" aria-label="Snap home"><BrandMark /><strong>Snap</strong></a>
         <nav aria-label="Primary navigation">
-          <a href="#product">Product</a><a href="#workflow">Workflow</a>
+          <a href="#product">Product</a><a href="#film">Film</a>
         </nav>
         <div className="nav-actions">
           <button className="text-button" onClick={() => setDonateOpen(true)}><Heart size={15} /> Support</button>
@@ -99,16 +99,6 @@ export default function Home() {
               <div className="real-workflow-image"><Image src={screenshotSrc(shot.file)} alt={shot.alt} width={1180} height={shot.wide ? 340 : 600} unoptimized sizes="(max-width: 760px) 90vw, 650px" /></div>
               <div><h3>{shot.title}</h3><p>{shot.description}</p></div>
             </article>)}
-          </div>
-        </section>
-
-        <section className="workflow shell" id="workflow">
-          <div className="workflow-top"><h2>From capture to a video<br />that feels deliberately made.</h2></div>
-          <div className="workflow-grid">
-            <article><MonitorUp /><h3>Record lightly</h3><p>Native Windows capture stays out of the way while you work, play, or present.</p></article>
-            <article><Focus /><h3>Shape the focus</h3><p>Review the automatic camera pass and adjust any region directly on the timeline.</p></article>
-            <article><AudioLines /><h3>Finish the sound</h3><p>Balance desktop and microphone tracks independently, then add captions when needed.</p></article>
-            <article><Download /><h3>Export with confidence</h3><p>Render an MP4 with the canvas, motion, cursor, layers, and captions baked in.</p></article>
           </div>
         </section>
 
