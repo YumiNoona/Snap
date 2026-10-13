@@ -29,7 +29,8 @@ describe("editor playback transport", () => {
   });
 
   it("recovers only an actively requested decoder that stopped progressing", () => {
-    expect(shouldRecoverStalledPlayback({ wantsPlayback: true, paused: false, seeking: false, stalledForMs: 1_600 })).toBe(true);
+    expect(shouldRecoverStalledPlayback({ wantsPlayback: true, paused: false, seeking: false, stalledForMs: 1_600 })).toBe(false);
+    expect(shouldRecoverStalledPlayback({ wantsPlayback: true, paused: false, seeking: false, stalledForMs: 8_100 })).toBe(true);
     expect(shouldRecoverStalledPlayback({ wantsPlayback: false, paused: false, seeking: false, stalledForMs: 4_000 })).toBe(false);
     expect(shouldRecoverStalledPlayback({ wantsPlayback: true, paused: true, seeking: false, stalledForMs: 4_000 })).toBe(false);
     expect(shouldRecoverStalledPlayback({ wantsPlayback: true, paused: false, seeking: true, stalledForMs: 4_000 })).toBe(false);

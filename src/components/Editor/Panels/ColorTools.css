@@ -304,17 +304,7 @@
   border-right: 1px dashed #84baff88;
 }
 .sequence-library {
-  margin-top: 24px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-subtle);
-}
-.sequence-library h3 {
-  font-size: 12px;
-}
-.sequence-library p {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  line-height: 1.6;
+  margin-top: 12px;
 }
 .sequence-library-card {
   border: 1px solid var(--border-subtle);

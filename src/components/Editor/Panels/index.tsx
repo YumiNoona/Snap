@@ -3,6 +3,7 @@ import { Section, SelectRow, CheckRow } from "./PanelControls";
 import ScreenTiltTools from "./ScreenTiltTools";
 import CameraAnimation from "./CameraAnimation";
 import CustomCursorImport from "./CustomCursorImport";
+import SystemCursorThumbnail from "./SystemCursorThumbnail";
 import BackgroundImages from "./BackgroundImages";
 
 import ColorStudio from "./ColorStudio";
@@ -21,7 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { MousePointer, MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, Plus, X, Palette, WandSparkles, Captions, Images, Video, ExternalLink, FolderSearch, AlertTriangle, Copy, RefreshCw, type LucideIcon } from "lucide-react";
+import { MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, Plus, X, Palette, WandSparkles, Captions, Images, Video, ExternalLink, FolderSearch, AlertTriangle, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -826,7 +827,7 @@ export default function Panels({
 
             <div className="cursor-pack-grid">
               <button type="button" className={`cursor-pack-card icon-choice ${!config.cursorStyle.pack ? "active" : ""}`} onClick={clearPack} aria-label="Default cursor" data-tooltip="Default">
-                <div className="cursor-pack-thumb default-thumb"><MousePointer size={16} /></div>
+                <div className="cursor-pack-thumb default-thumb"><SystemCursorThumbnail /></div>
               </button>
               {cursorPacks.map((pack) => (
                 <button
@@ -849,9 +850,6 @@ export default function Panels({
             }} />
             {cursorPacksError && <p className="cursor-pack-error">{cursorPacksError}</p>}
 
-            {!config.cursorStyle.pack && (
-              <ColorInput label="Cursor Color" value={config.cursorStyle.color} onChange={(v) => updateCursor({ color: v })} />
-            )}
           </Section>
 
           <Section title="Click Effect">
@@ -869,6 +867,7 @@ export default function Panels({
                 </button>
               ))}
             </div>
+            {config.cursorStyle.showClickRipples && config.cursorStyle.clickEffect !== "none" && <ColorInput label="Click color" value={config.cursorStyle.color} onChange={(v) => updateCursor({ color: v })} />}
           </Section>
 
           <Section title="Cursor Behavior">

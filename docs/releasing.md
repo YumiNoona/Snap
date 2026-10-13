@@ -31,3 +31,17 @@ never copy the private key into the repository.
 The Tauri updater signature authenticates in-app updates, but it is not a
 Windows Authenticode signature. Until a code-signing certificate is configured,
 Windows SmartScreen may warn on a newly downloaded installer.
+
+## Replacing a release at the same version
+
+Only do this when explicitly requested. Preserve the original tag object,
+release metadata and signed artifacts locally before replacing anything. Push
+main normally and update only the requested tag with an exact expected-old-ref
+lease. Run the publishing workflow against the new commit, then verify the
+installer hash, updater signature and latest manifest. Do not delete the
+release or disturb unrelated tags. Update its target commit and release notes.
+
+A same-version replacement does **not** trigger the updater for users already
+on that version. Tell those users to download and reinstall the replacement;
+older versions can still update normally. Do not claim that every installation
+will receive a new update prompt.

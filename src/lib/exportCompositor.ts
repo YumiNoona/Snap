@@ -4,7 +4,7 @@ import { FootageTransitions } from "./transitions";
 import { drawGapLayers } from "./gapLayers";
 import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "./screenTilt";
 import { animatedLayer, anchoredLayer } from "./layerAnimation";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { mediaSrc } from "./mediaSource";
 import type { CaptionTrack, EditorConfig, Keyframe, MaskLayer, VideoLayer } from "./types";
 import { getMovementDuration } from "./types";
 import { getGradientPreset, getWallpaperPreset } from "./wallpapers";
@@ -13,10 +13,11 @@ import { applyCursorEdits, cursorVisible } from "./editorFinishing";
 import { buildDisplayActions, drawActionOverlay } from "./actionOverlay";
 import { retainedClips, sequenceTime } from "./videoEditing";
 import { resolveClipEffects } from "./clipEffects";
+import { drawSystemCursor, loadSystemCursor } from "./systemCursor";
 import { seekMediaFrame } from "./mediaSeek";
 import { gradedSource, releaseColorRenderer } from "./colorRenderer";
 import {
-  loadCachedImage, loadCachedVideo, preloadImageAsset, paintGradient, paintImageCover, drawCursor, drawCursorImage, roundRect,
+  loadCachedImage, loadCachedVideo, preloadImageAsset, readyImageAsset, paintGradient, paintImageCover, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
   cursorIdleOpacity, drawVisualLayer, drawMaskLayer, drawVideoWithMotionBlur, drawCaptionTrack,
   resolveMaskCameraFocus, resolveLayerFade,
@@ -91,6 +92,11 @@ export async function createExportCompositor(
   screenOnly = false,
   manualRender = false
 ): Promise<ExportCompositor> {
+  // Freeze the same decoded Windows pointer used by preview for this export.
+  const systemCursor = await loadSystemCursor();
+  const cursorPaths = new Set([config.cursorStyle.pack?.imageUrl, ...(config.videoClips ?? []).map(clip => clip.effects?.config.cursorStyle?.pack?.imageUrl)].filter((path): path is string => !!path));
+  await Promise.all([...cursorPaths].map(path => readyImageAsset(path, true).catch(() => null)));
+  if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
   await Promise.all(config.layers.filter((layer) => layer.type === "image").map(async (layer) => {
     const image = preloadImageAsset(layer.path);
     if (image.complete && image.naturalWidth > 0) return;
@@ -103,7 +109,7 @@ export async function createExportCompositor(
   })); } catch(error) { for(const media of layerVideoCache.values()){media.pause();media.removeAttribute("src");media.load();media.remove();} layerVideoCache.clear();throw error; }
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
-  video.src = convertFileSrc(videoPath);
+  video.src = mediaSrc(videoPath);
   video.muted = true; // audio is muxed from the original sidecar wav files, not captured here
   video.playsInline = true;
   video.preload = "auto";
@@ -123,7 +129,7 @@ export async function createExportCompositor(
   if (cameraMedia) {
     camera = document.createElement("video");
     camera.crossOrigin = "anonymous";
-    camera.src = convertFileSrc(cameraMedia.path);
+    camera.src = mediaSrc(cameraMedia.path);
     camera.muted = true;
     camera.playsInline = true;
     camera.preload = "auto";
@@ -465,7 +471,7 @@ export async function createExportCompositor(
                 if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
                   drawCursorImage(screenCtx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
                 } else {
-                  drawCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                  drawSystemCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle, systemCursor);
                 }
                 screenCtx.restore();
               }
@@ -483,10 +489,10 @@ export async function createExportCompositor(
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
               drawCursorImage(screenCtx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
-              drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+              drawSystemCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle, systemCursor);
             }
           } else {
-            drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+            drawSystemCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle, systemCursor);
           }
           screenCtx.restore();
         }

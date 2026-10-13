@@ -10,8 +10,10 @@ import { beginScreenTilt, finishScreenTilt, releaseScreenTilt } from "../../../l
 import { animatedLayer, anchoredLayer } from "../../../lib/layerAnimation";
 import { maskPose } from "../../../lib/maskEffects";
 import { userError } from "../../../lib/userError";
+import { drawSystemCursor, loadSystemCursor, type SystemCursorAsset } from "../../../lib/systemCursor";
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { mediaSrc } from "../../../lib/mediaSource";
 import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer, MaskLayer } from "../../../lib/types";
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
@@ -20,7 +22,7 @@ import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screen
 import { analyzeMobileVisualActivity } from "../../../lib/mobileAutoZoom";
 import { buildDisplayActions, drawActionOverlay, type DisplayAction } from "../../../lib/actionOverlay";
 import {
-  loadCachedImage, paintGradient, paintImageCover, drawCursor, drawCursorImage,
+  loadCachedImage, readyImageAsset, paintGradient, paintImageCover, drawCursorImage,
   roundRect, computeCoverRect, resolveZoom, smoothTowards, drawClickEffect,
   clickEffectDuration, cursorIdleOpacity, drawVisualLayer,
   drawMaskLayer, drawVideoWithMotionBlur, resolveMaskCameraFocus, resolveLayerFade,
@@ -166,6 +168,18 @@ export default function Preview({
   useEffect(()=>()=>transitionsRef.current.clear(),[videoPath]);
   const renderRef = useRef<() => void>(() => {});
   const cursorImages = useRef(new Map<string, HTMLImageElement>());
+  const systemCursor = useRef<SystemCursorAsset | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      void loadSystemCursor(true).then(asset => {
+        if (!cancelled) { systemCursor.current = asset; renderRef.current(); }
+      });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { cancelled = true; window.removeEventListener("focus", refresh); };
+  }, [videoPath]);
   const wallpaperImages = useRef(new Map<string, HTMLImageElement>());
   const cropDrag = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const zoomTargetDrag = useRef<{
@@ -802,7 +816,7 @@ export default function Preview({
                 if (trailImage && trailImage.complete && trailImage.naturalWidth > 0 && trailHotspot) {
                   drawCursorImage(screenCtx, trailImage, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle.size, trailHotspot);
                 } else {
-                  drawCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle);
+                  drawSystemCursor(screenCtx, zoomedCursorX - dx * ghost * 0.22, zoomedCursorY - dy * ghost * 0.22, config.cursorStyle, systemCursor.current);
                 }
                 screenCtx.restore();
               }
@@ -822,10 +836,10 @@ export default function Preview({
               const hs = config.cursorHotspots[pack.id] ?? { x: 10, y: 10 };
               drawCursorImage(screenCtx, prev, zoomedCursorX, zoomedCursorY, config.cursorStyle.size, hs);
             } else {
-              drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+              drawSystemCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle, systemCursor.current);
             }
           } else {
-            drawCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle);
+            drawSystemCursor(screenCtx, zoomedCursorX, zoomedCursorY, config.cursorStyle, systemCursor.current);
           }
           screenCtx.restore();
         }
@@ -1113,8 +1127,15 @@ export default function Preview({
   // Preload the selected pack image so the overlay swaps in on the next frame
   useEffect(() => {
     const pack = config.cursorStyle.pack;
-    if (pack) loadCursorImage(pack.imageUrl, cursorImages.current);
-  }, [config.cursorStyle.pack]);
+    let cancelled = false;
+    lastPackRef.current = null;
+    if (pack) void readyImageAsset(pack.imageUrl, true).then(image => {
+      if (cancelled) return;
+      cursorImages.current.set(pack.imageUrl, image);
+      renderRef.current();
+    }).catch(() => { if (!cancelled) renderRef.current(); });
+    return () => { cancelled = true; };
+  }, [config.cursorStyle.pack?.imageUrl]);
 
   // Preload the selected wallpaper image
   useEffect(() => {
@@ -1453,7 +1474,7 @@ export default function Preview({
     if (!element && cameraRef.current) releaseVideo(cameraRef.current);
     cameraRef.current = element;
   }, []);
-  const videoUrl = playbackPath.startsWith("/") || /^https?:\/\//i.test(playbackPath) ? playbackPath : convertFileSrc(playbackPath);
+  const videoUrl = mediaSrc(playbackPath);
 
   return (
     <div
@@ -1503,7 +1524,7 @@ export default function Preview({
       {cameraMedia && <video
         ref={assignCameraElement}
         crossOrigin="anonymous"
-        src={convertFileSrc(cameraMedia.path)}
+        src={mediaSrc(cameraMedia.path)}
         preload="auto"
         playsInline
         muted

@@ -6,6 +6,7 @@ mod caption_install;
 mod capture;
 mod export;
 mod editor_cache;
+mod media_protocol;
 mod recording_health;
 mod input_hook;
 mod mobile;
@@ -13,6 +14,7 @@ mod process;
 mod recording_session;
 mod transcription;
 mod cursor_library;
+mod system_cursor;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -1918,6 +1920,10 @@ fn organize_recording_data(show_support_files: bool) -> std::result::Result<usiz
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("snap-media", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || responder.respond(media_protocol::respond(&app, request)));
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2030,6 +2036,7 @@ pub fn run() {
             organize_recording_data,
             list_cursor_packs,
             cursor_library::import_custom_cursor,
+            system_cursor::get_system_cursor,
             list_wallpaper_images,
             open_explorer,
         ])

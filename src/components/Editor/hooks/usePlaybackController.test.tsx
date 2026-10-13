@@ -5,6 +5,34 @@ import { usePlaybackController } from "./usePlaybackController";
 import { DEFAULT_EDITOR_CONFIG } from "../../../lib/types";
 vi.mock("@tauri-apps/api/core",()=>({convertFileSrc:(p:string)=>p}));
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
+
+it("keeps long playback, short buffers, repeated seeks and rate changes on the same decoder",async()=>{
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.spyOn(console,"error").mockImplementation(()=>{});
+  const timers: Array<()=>void>=[];
+  vi.stubGlobal("window",{setTimeout:(fn:()=>void)=>{timers.push(fn);return timers.length;},clearTimeout:vi.fn(),setInterval:()=>1,clearInterval:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  vi.stubGlobal("HTMLMediaElement",{HAVE_METADATA:1,HAVE_CURRENT_DATA:2,HAVE_FUTURE_DATA:3});
+  let frame:(()=>void)|null=null,wall=100;vi.spyOn(performance,"now").mockImplementation(()=>wall);
+  vi.stubGlobal("requestAnimationFrame",(fn:()=>void)=>{frame=fn;return 1;});vi.stubGlobal("cancelAnimationFrame",()=>{frame=null;});
+  const events=new EventTarget(),load=vi.fn(),pause=vi.fn(()=>{video.paused=true;events.dispatchEvent(new Event("pause"));});
+  const video=Object.assign(events,{currentTime:0,duration:600,readyState:4,seeking:false,ended:false,error:null,paused:true,playbackRate:1,play:async()=>{video.paused=false;events.dispatchEvent(new Event("playing"));},pause,load}) as unknown as HTMLVideoElement & {paused:boolean};
+  let controller!:ReturnType<typeof usePlaybackController>,rate=1;
+  const clips=[{id:"a",start:0,end:300},{id:"b",start:300,end:600}];
+  function Harness(){controller=usePlaybackController({videoPath:"ten-minutes.mp4",duration:600,trimStart:0,trimEnd:600,playbackRate:rate,audioTracks:[],audioMix:DEFAULT_EDITOR_CONFIG.audio,videoClips:clips});return null;}
+  let renderer!:ReturnType<typeof create>;
+  try{
+    await act(async()=>{renderer=create(createElement(Harness));});await act(async()=>controller.setMediaElement(video));await act(async()=>controller.togglePlay());
+    await act(async()=>{events.dispatchEvent(new Event("stalled"));});expect(controller.playbackStatus).toBe("playing");
+    await act(async()=>{Object.assign(video,{readyState:2});events.dispatchEvent(new Event("waiting"));wall=2300;frame?.();});expect(load).not.toHaveBeenCalled();
+    await act(async()=>{Object.assign(video,{readyState:4});video.currentTime=2;events.dispatchEvent(new Event("playing"));frame?.();});expect(controller.playing).toBe(true);
+    const pauses=pause.mock.calls.length;
+    await act(async()=>{rate=1.5;renderer.update(createElement(Harness));});expect(video.paused).toBe(false);expect(pause).toHaveBeenCalledTimes(pauses);expect(video.playbackRate).toBe(1.5);
+    await act(async()=>{video.currentTime=300;wall=300_100;frame?.();});expect(controller.activeClipId).toBe("b");expect(pause).toHaveBeenCalledTimes(pauses);
+    for(let i=0;i<20;i++)await act(async()=>controller.seekTo(i%2?302:304,"b"));
+    expect(controller.playing).toBe(true);expect(load).not.toHaveBeenCalled();
+    await act(async()=>controller.pausePlayback());
+    await act(async()=>{timers.forEach(fn=>fn());});expect(video.paused).toBe(true);expect(load).not.toHaveBeenCalled();
+  }finally{if(renderer)await act(async()=>renderer.unmount());}
+});
 it("opens a reordered project at its first clip and plays repeated footage in sequence order",async()=>{
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);vi.spyOn(console,"error").mockImplementation(()=>{});
   vi.stubGlobal("window",{setTimeout,clearTimeout,setInterval,clearInterval,addEventListener:vi.fn(),removeEventListener:vi.fn()});

@@ -1,4 +1,4 @@
-import type { AutoZoomConfig, InputEvent, Keyframe } from "./types";
+import { AUTO_ZOOM_PRESETS, type AutoZoomConfig, type InputEvent, type Keyframe } from "./types";
 
 interface ActivityCluster {
   startTime: number;
@@ -6,19 +6,12 @@ interface ActivityCluster {
   events: { x: number; y: number; ts: number; type: string }[];
 }
 
-// ── Tuned AutoZoom Constants (Screen Studio / Natural Camera Pacing) ────────
+// Intent-aware camera pacing. All times are source-media milliseconds.
 
 const CLUSTER_WINDOW_MS = 900;
-const MERGE_GAP_MS = 520;
 const FAR_CLICK_SPLIT_MS = 80;
 const FAR_CLICK_DISTANCE = 0.3;
-const MIN_TYPING_BURST = 4;
-const LEAD_IN_MS = 260;
 const LEAD_OUT_MS = 700;
-const MIN_HOLD_MS = 720;
-const MIN_CAMERA_GAP_MS = 90;
-const MIN_SCALE = 1.15;
-const MAX_SCALE = 1.9;
 
 /**
  * Filter and group input events into activity clusters.
@@ -60,6 +53,7 @@ function findClusters(
 
   const rawClusters: ActivityCluster[] = [];
   let current: ActivityCluster | null = null;
+  let sumX = 0, sumY = 0, count = 0;
 
   for (const e of significant) {
     const posX = typeof e.x === "number" ? e.x : Number.NaN;
@@ -71,24 +65,22 @@ function findClusters(
         endTime: e.ts,
         events: [{ x: posX, y: posY, ts: e.ts, type: e.type }],
       };
+      sumX = Number.isFinite(posX) ? posX : 0;
+      sumY = Number.isFinite(posY) ? posY : 0;
+      count = Number.isFinite(posX) && Number.isFinite(posY) ? 1 : 0;
       continue;
     }
 
     const gap = e.ts - current.endTime;
-    const clicks = current.events.filter((event) => event.type === "mousedown");
-    const clickCenter = clicks.length > 0
-      ? {
-          x: clicks.reduce((sum, event) => sum + event.x, 0) / clicks.length,
-          y: clicks.reduce((sum, event) => sum + event.y, 0) / clicks.length,
-        }
-      : null;
-    const farClick = e.type === "mousedown" && clickCenter
-      ? Math.hypot((posX - clickCenter.x) / Math.max(1, videoWidth), (posY - clickCenter.y) / Math.max(1, videoHeight)) > FAR_CLICK_DISTANCE
+    // Running sums avoid quadratic rescanning during long typing bursts.
+    const farClick = count > 0 && Number.isFinite(posX) && Number.isFinite(posY)
+      ? Math.hypot((posX - sumX / count) / videoWidth, (posY - sumY / count) / videoHeight) > FAR_CLICK_DISTANCE
       : false;
 
     if (gap <= CLUSTER_WINDOW_MS && !(farClick && gap >= FAR_CLICK_SPLIT_MS)) {
       current.endTime = e.ts;
       current.events.push({ x: posX, y: posY, ts: e.ts, type: e.type });
+      if (Number.isFinite(posX) && Number.isFinite(posY)) { sumX += posX; sumY += posY; count++; }
     } else {
       if (isSignificantCluster(current, options)) {
         rawClusters.push(current);
@@ -98,6 +90,9 @@ function findClusters(
         endTime: e.ts,
         events: [{ x: posX, y: posY, ts: e.ts, type: e.type }],
       };
+      sumX = Number.isFinite(posX) ? posX : 0;
+      sumY = Number.isFinite(posY) ? posY : 0;
+      count = Number.isFinite(posX) && Number.isFinite(posY) ? 1 : 0;
     }
   }
 
@@ -118,10 +113,11 @@ function isSignificantCluster(cluster: ActivityCluster, options: AutoZoomConfig)
   const clickCount = cluster.events.filter((e) => e.type === "mousedown").length;
 
   if (clickCount >= 1) return true;
+  if (options.focusMode === "clicks") return false;
   if (keydownCount >= options.typingSensitivity) return true;
   const wheelCount = cluster.events.filter((e) => e.type === "wheel").length;
   const followCount = cluster.events.filter((e) => e.type === "follow").length;
-  return followCount > 0 || wheelCount >= options.scrollSensitivity || cluster.events.length >= 5;
+  return followCount > 0 || wheelCount >= options.scrollSensitivity;
 }
 
 /**
@@ -159,7 +155,7 @@ function mergeNearbyClusters(clusters: ActivityCluster[], videoWidth: number, vi
 }
 
 function clusterClickCenter(cluster: ActivityCluster): { x: number; y: number } | null {
-  const clicks = cluster.events.filter((event) => event.type === "mousedown" || event.type === "follow");
+  const clicks = cluster.events.filter((event) => Number.isFinite(event.x) && Number.isFinite(event.y));
   if (clicks.length === 0) return null;
   return {
     x: clicks.reduce((sum, event) => sum + event.x, 0) / clicks.length,
@@ -178,7 +174,7 @@ function transitionForDistance(
 ): number {
   const travel = Math.hypot(to.x - from.x, to.y - from.y);
   const scaleTravel = Math.abs(to.scale - from.scale);
-  return Math.round(clamp(baseMs * (0.72 + travel * 1.35 + scaleTravel * 0.42), 350, 1100));
+  return Math.round(clamp(baseMs * (0.9 + travel * 1.2 + scaleTravel * 0.35), 480, 1400));
 }
 
 /**
@@ -222,7 +218,8 @@ function clusterFocus(
   const medianY = sortedY.length % 2 === 0 ? (sortedY[middle - 1] + sortedY[middle]) / 2 : sortedY[middle];
   const inlierRadius = Math.max(90, Math.hypot(videoWidth, videoHeight) * 0.18);
   const inliers = clicks.filter((point) => Math.hypot(point.x - medianX, point.y - medianY) <= inlierRadius);
-  const focusClicks = inliers.length > 0 ? inliers : clicks;
+  // Two/few real actions at opposite edges need context, not outlier rejection.
+  const focusClicks = clicks.length >= 8 && inliers.length >= clicks.length * .8 ? inliers : clicks;
 
   let minX = Infinity, minY = Infinity;
   let maxX = -Infinity, maxY = -Infinity;
@@ -248,7 +245,7 @@ function clusterFocus(
   const fit = Math.min(videoWidth / activityW, videoHeight / activityH);
   const scale = focusClicks.length === 1
     ? Math.min(options.maxScale, Math.max(options.minScale, options.singleClickScale))
-    : clamp(fit * 0.76, options.minScale, options.maxScale);
+    : clamp(fit * 0.9, 1, options.maxScale);
 
   const safeEdge = Math.min(0.48, 0.5 / scale + options.edgePadding);
   const cx = clamp((weightedX / totalWeight) / videoWidth, safeEdge, 1 - safeEdge);
@@ -258,8 +255,8 @@ function clusterFocus(
 }
 
 /**
- * Generate camera keyframe trajectory with direct panning between nearby
- * clusters and unzooming only during long lulls (>= 3.5s).
+ * Plan shots with look-ahead: arrive near the action, frame rapid activity
+ * together, hold while useful, and return to context during genuine inactivity.
  */
 export function generateKeyframes(
   events: InputEvent[],
@@ -269,17 +266,16 @@ export function generateKeyframes(
   transitionDurationMs: number = 600,
   requestedOptions: Partial<AutoZoomConfig> = {}
 ): Keyframe[] {
-  const safeWidth = Math.max(1, videoWidth);
-  const safeHeight = Math.max(1, videoHeight);
-  const safeDuration = Math.max(0, videoDurationMs);
-  const baseTransitionMs = clamp(transitionDurationMs, 180, 1600);
+  const safeWidth = Number.isFinite(videoWidth) ? Math.max(1, videoWidth) : 1;
+  const safeHeight = Number.isFinite(videoHeight) ? Math.max(1, videoHeight) : 1;
+  const safeDuration = Number.isFinite(videoDurationMs) ? Math.max(0, videoDurationMs) : 0;
+  const baseTransitionMs = clamp(Number.isFinite(transitionDurationMs) ? transitionDurationMs : 800, 180, 1600);
   const options: AutoZoomConfig = {
-    preset: "balanced", minScale: MIN_SCALE, maxScale: MAX_SCALE, holdMs: MIN_HOLD_MS,
-    cooldownMs: MERGE_GAP_MS, typingSensitivity: MIN_TYPING_BURST,
-    scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out",
-    focusMode: "hybrid", deadZone: .11, idleResetMs: 3000, singleClickScale: 1.62,
-    typingScale: 1.3, minimumShotMs: 900, ...requestedOptions,
+    preset: "balanced", ...AUTO_ZOOM_PRESETS.balanced, ...requestedOptions,
   };
+  for (const key of ["minScale","maxScale","holdMs","cooldownMs","typingSensitivity","scrollSensitivity","edgePadding","deadZone","idleResetMs","singleClickScale","typingScale","minimumShotMs"] as const) {
+    if (!Number.isFinite(options[key])) options[key] = AUTO_ZOOM_PRESETS.balanced[key];
+  }
   options.minScale = clamp(options.minScale, 1.05, 3);
   options.maxScale = clamp(options.maxScale, options.minScale, 4);
   options.holdMs = clamp(options.holdMs, 300, 4000);
@@ -303,22 +299,24 @@ export function generateKeyframes(
     return defaultKfs;
   }
 
-  const keyframes: Keyframe[] = [];
-
-  // Start video at scale 1.0x
-  keyframes.push({
-    time: 0,
-    duration: 0,
-    x: 0.5,
-    y: 0.5,
-    scale: 1.0,
-    easing: "ease",
-  });
-
-  let lastHoldIndex = -1;
-
-  for (let i = 0; i < clusters.length; i++) {
-    const cluster = clusters[i];
+  // Chasing several distant clicks in a fraction of a second causes queued,
+  // late pans. Give them one wider establishing shot instead.
+  const shots: ActivityCluster[] = [];
+  for (const cluster of clusters) {
+    const previous = shots[shots.length - 1];
+    const crossesExclusion = previous && (options.excludedRanges ?? []).some(range => range.start <= cluster.startTime && range.end >= previous.endTime);
+    const a = previous && clusterFocus(previous, safeWidth, safeHeight, options);
+    const b = clusterFocus(cluster, safeWidth, safeHeight, options);
+    const sameFocus = a && Math.hypot(a.cx - b.cx, a.cy - b.cy) <= options.deadZone && Math.abs(a.scale - b.scale) < .18;
+    if (previous && !crossesExclusion && (
+      cluster.startTime - previous.startTime < Math.max(options.minimumShotMs, baseTransitionMs + 350)
+      || sameFocus && cluster.startTime - previous.endTime < options.idleResetMs
+    )) {
+      previous.endTime = cluster.endTime;
+      previous.events.push(...cluster.events);
+    } else shots.push({ ...cluster, events: [...cluster.events] });
+  }
+  const targets = shots.map(cluster => {
     const target = clusterFocus(cluster, safeWidth, safeHeight, options);
     // Keep protected rectangles visible by widening the camera crop around
     // the focus. Rectangles use normalized source coordinates.
@@ -332,99 +330,35 @@ export function generateKeyframes(
       target.cx = clamp((left+right)/2,.5/target.scale,1-.5/target.scale);
       target.cy = clamp((top+bottom)/2,.5/target.scale,1-.5/target.scale);
     }
-    const previousTarget = keyframes[keyframes.length - 1];
-    const targetDistance = Math.hypot(target.cx - previousTarget.x, target.cy - previousTarget.y);
-    const targetScaleDistance = Math.abs(target.scale - previousTarget.scale);
-
-    // Repeated activity in the same visual area extends the existing shot
-    // instead of adding tiny camera corrections that feel nervous.
-    if (
-      lastHoldIndex >= 0 &&
-      previousTarget.scale > 1.02 &&
-      targetDistance < 0.075 &&
-      targetScaleDistance < 0.14 &&
-      cluster.startTime - previousTarget.time < options.idleResetMs
-    ) {
-      keyframes[lastHoldIndex] = {
-        ...keyframes[lastHoldIndex],
-        time: Math.min(safeDuration, Math.max(keyframes[lastHoldIndex].time, cluster.endTime + LEAD_OUT_MS)),
-        x: (keyframes[lastHoldIndex].x + target.cx) / 2,
-        y: (keyframes[lastHoldIndex].y + target.cy) / 2,
-        scale: options.protectedAreas?.length ? Math.min(keyframes[lastHoldIndex].scale, target.scale) : Math.max(keyframes[lastHoldIndex].scale, target.scale),
-      };
-      continue;
+    return { x: target.cx, y: target.cy, scale: target.scale };
+  });
+  const full = { x: .5, y: .5, scale: 1 };
+  const keyframes: Keyframe[] = [{ time: 0, duration: 0, ...full, easing: options.curve }];
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i], target = targets[i];
+    const previous = keyframes[keyframes.length - 1];
+    const moveDuration = transitionForDistance(baseTransitionMs, previous, target);
+    const start = Math.max(previous.time, shot.startTime + 180 - moveDuration, 0);
+    const arrival = Math.min(safeDuration, start + moveDuration);
+    // Don't manufacture a tiny abrupt zoom at the final frame.
+    if (arrival - start < 350 || safeDuration - arrival < 250) continue;
+    keyframes.push({ time: arrival, duration: arrival - start, ...target, easing: options.curve });
+    const next = shots[i + 1];
+    const resetDuration = transitionForDistance(baseTransitionMs, target, full);
+    const nextStart = next ? next.startTime + 180 - transitionForDistance(baseTransitionMs, target, targets[i + 1]) : safeDuration;
+    const idle = !next || next.startTime - shot.endTime >= options.idleResetMs;
+    const typing = shot.events.some(event => event.type === "keydown");
+    const tail = Math.max(options.holdMs, typing ? 1100 : LEAD_OUT_MS);
+    const desiredHold = Math.max(arrival + options.holdMs, start + options.minimumShotMs, shot.endTime + tail);
+    const holdEnd = Math.min(safeDuration, Math.max(arrival, Math.min(desiredHold, nextStart)));
+    // Holds must have EXACTLY the arrival pose. Changing their x/y with a zero
+    // transition made the old merged shots jump at the hold endpoint.
+    if (holdEnd > arrival) keyframes.push({ time: holdEnd, duration: 0, ...target, easing: options.curve });
+    if (idle && nextStart - holdEnd >= resetDuration) {
+      keyframes.push({ time: holdEnd + resetDuration, duration: resetDuration, ...full, easing: options.curve });
     }
-
-    let prevKf = keyframes[keyframes.length - 1];
-    const desiredTransitionStart = clamp(cluster.startTime - LEAD_IN_MS, 0, safeDuration);
-
-    // Long idle gaps return to the full view before the next action. The reset
-    // is fitted entirely inside the lull so it cannot overlap the next zoom.
-    if (prevKf.scale > 1.02 && desiredTransitionStart - prevKf.time >= options.idleResetMs) {
-      const resetTarget = { x: 0.5, y: 0.5, scale: 1.0 };
-      const resetDuration = transitionForDistance(baseTransitionMs, prevKf, resetTarget);
-      const resetTime = Math.min(desiredTransitionStart - 120, prevKf.time + 420 + resetDuration);
-      keyframes.push({
-        time: Math.round(resetTime),
-        duration: Math.max(120, Math.min(resetDuration, resetTime - prevKf.time)),
-        x: 0.5,
-        y: 0.5,
-        scale: 1.0,
-        easing: options.curve,
-      });
-      prevKf = keyframes[keyframes.length - 1];
-      lastHoldIndex = -1;
-    }
-
-    const moveTarget = { x: target.cx, y: target.cy, scale: target.scale };
-    const requestedMoveDuration = transitionForDistance(baseTransitionMs, prevKf, moveTarget);
-    const transitionStart = Math.max(desiredTransitionStart, prevKf.time + MIN_CAMERA_GAP_MS);
-    if (transitionStart >= safeDuration - 80) break;
-    const moveDuration = Math.max(80, Math.min(requestedMoveDuration, safeDuration - transitionStart));
-    const zoomInTime = Math.round(transitionStart + moveDuration);
-    const holdEndTime = Math.round(Math.min(
-      safeDuration,
-      Math.max(zoomInTime + Math.max(options.holdMs, options.minimumShotMs), cluster.endTime + LEAD_OUT_MS)
-    ));
-
-    keyframes.push({
-      time: zoomInTime,
-      duration: moveDuration,
-      x: target.cx,
-      y: target.cy,
-      scale: target.scale,
-      easing: options.curve,
-    });
-
-    keyframes.push({
-      time: holdEndTime,
-      duration: 0,
-      x: target.cx,
-      y: target.cy,
-      scale: target.scale,
-      easing: options.curve,
-    });
-    lastHoldIndex = keyframes.length - 1;
   }
-
-  // Finish naturally: reset only when enough time remains for a visible move.
-  let lastKf = keyframes[keyframes.length - 1];
-  if (lastKf.scale > 1.02 && safeDuration - lastKf.time >= 950) {
-    const resetTarget = { x: 0.5, y: 0.5, scale: 1.0 };
-    const resetDuration = transitionForDistance(baseTransitionMs, lastKf, resetTarget);
-    const resetStart = lastKf.time + 360;
-    const resetTime = Math.min(safeDuration, resetStart + resetDuration);
-    keyframes.push({
-      time: Math.round(resetTime),
-      duration: Math.max(120, Math.min(resetDuration, resetTime - lastKf.time)),
-      x: 0.5,
-      y: 0.5,
-      scale: 1.0,
-      easing: options.curve,
-    });
-    lastKf = keyframes[keyframes.length - 1];
-  }
-
+  const lastKf = keyframes[keyframes.length - 1];
   if (lastKf.time < safeDuration) {
     keyframes.push({
       time: safeDuration,

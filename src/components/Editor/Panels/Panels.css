@@ -395,6 +395,9 @@
 .cursor-pack-thumb.default-thumb {
   color: var(--text-secondary);
 }
+.system-cursor-thumbnail { position: relative; display: block; width: 22px; height: 22px; }
+.system-cursor-thumbnail > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.system-cursor-thumbnail > .system-cursor-inverse { mix-blend-mode: difference; }
 
 .cursor-pack-thumb img {
   max-width: 100%;

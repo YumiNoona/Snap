@@ -65,7 +65,7 @@ export function shouldRecoverStalledPlayback(options: {
   stalledForMs: number;
   thresholdMs?: number;
 }): boolean {
-  const { wantsPlayback, paused, seeking, stalledForMs, thresholdMs = 1_500 } = options;
+  const { wantsPlayback, paused, seeking, stalledForMs, thresholdMs = 8_000 } = options;
   return wantsPlayback && !paused && !seeking && stalledForMs >= thresholdMs;
 }
 

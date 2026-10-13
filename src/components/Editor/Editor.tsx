@@ -193,7 +193,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const editablePosition=sequenceClip(footageClips,sequencePosition);
   const activeClipId=editablePosition?.clip.id,currentTime=editablePosition?.clip.sequenceId?editablePosition.source:renderTime;
   const activeEffectsClip = compiled.clips.find(clip=>clip.id===renderClipId);
-  const effects = resolveClipEffects(activeEffectsClip, compiled.config, sharedKeyframes, sharedCaptionTracks);
+  const effects = useMemo(() => resolveClipEffects(activeEffectsClip, compiled.config, sharedKeyframes, sharedCaptionTracks), [activeEffectsClip, compiled.config, sharedKeyframes, sharedCaptionTracks]);
   const visualConfig = effects.config;
   const keyframes = effects.keyframes;
   const captionTracks = effects.captions;

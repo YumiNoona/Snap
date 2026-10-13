@@ -8,7 +8,39 @@ the preview, media processing and export do not run during capture.
 The editor opens maximized for new recordings, imported media, existing projects
 and tray reopening. Users can still restore the window while editing.
 
+Editor video/audio use a scoped, seekable media protocol with up to 32 MiB of
+read-ahead per request. Disk reads run outside the UI thread; big videos are not
+copied wholesale into JavaScript memory. Brief buffering and fetch-only stalls
+do not rebuild the decoder. Recovery first reuses the existing buffer, with a
+bounded reload only after a genuine stall. Adjacent footage cuts and playback
+speed changes keep the same decoder running. Proxy preview remains available
+for footage whose decoding/composition exceeds the machine's capacity.
+
+## Automatic camera motion
+
+Auto Zoom looks ahead to arrive near the action instead of queuing pans behind
+previous holds. Rapid distant clicks share a wider contextual shot, sustained
+typing uses a gentler framing, nearby repeated activity stays stable, and real
+idle gaps return to the full view. Holds keep exactly the arrival pose, avoiding
+endpoint jumps. The Balanced preset uses a cinematic smooth curve and more
+readable minimum holds. Intent thresholds, focus modes, protected areas and
+manual editing remain available; preview and export share the same trajectory.
+
+Saved projects retain their existing keyframes. To use the new planner in an
+older edit, open Motion, select Balanced if desired, **Regenerate Auto-Zoom**,
+preview the suggestion and **Apply suggestion**. This never silently replaces
+your saved manual camera edits.
+
 ## Custom cursors
+
+**Default** uses your current Windows Normal Select pointer, including its
+appearance and hotspot, in preview and export. The picker shows the same pointer;
+returning to the editor refreshes it if your Windows cursor scheme changed.
+Cursor Size still controls the displayed size. Click color affects click effects,
+not the system pointer. Inverted pointer pixels invert the actual footage rather
+than being flattened against black. Animated Windows pointer schemes use their
+first frame. Native pointer loading happens only in the editor/export, never the
+recording loop; unavailable native APIs use a neutral white arrow as a fallback.
 
 Choose **Add custom cursor**, select a static PNG, enter a name and save. Snap
 copies it into `%LOCALAPPDATA%/com.ringale.snap/cursors/<name-id>/`, alongside a
@@ -16,6 +48,10 @@ small `cursor.json` containing the display name. Cursor images survive moving
 or deleting the original download. PNGs are decoded before import and limited
 to 512 × 512 pixels and 2 MB. Imported names must be unique within the custom
 library. Horizontal/vertical tip controls align the image with recorded clicks.
+One selection applies a cursor immediately and repaints even a paused preview
+when decoding finishes. Export warms selected cursor images before its first
+frame. Already-converted asset URLs are preserved; a failed image is retried on
+explicit selection, not repeatedly from the frame loop.
 
 ## Masks and preview player
 

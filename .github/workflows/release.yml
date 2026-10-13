@@ -50,7 +50,15 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.5.0 adds optional export donations and refines the recorder and media-import interface.
+            Snap 9.5.0 now includes smoother Auto Zoom, responsive cursor switching and improved editor playback, alongside the export donations and recorder/import refinements.
+
+            This is a rebuilt replacement of v9.5.0. If you already installed 9.5.0, download and reinstall the new setup file; a same-version replacement does not trigger an in-app update prompt. Saved edits retain their camera keys: use Motion → Balanced → Regenerate Auto-Zoom → Apply suggestion to adopt the new planner.
+
+            - Auto Zoom plans ahead so long holds cannot queue late pans. Rapid distant clicks share a wider contextual shot, nearby repeated activity stays stable, typing uses gentler framing and real inactivity returns to the full view. Identical hold poses remove endpoint jumps; Balanced uses cinematic easing and more readable shot pacing. Manual camera edits remain preserved.
+            - Custom cursor selection repaints a paused preview as soon as the image decodes, without repeated clicks. Failed cached images retry on explicit selection, existing asset URLs are not double-converted and export warms cursor images before the first frame.
+            - Default cursor uses your actual Windows Normal Select pointer and hotspot in preview, the picker and export, rather than an orange replacement. Inverted pixels are supported; animated pointer schemes use the first frame. Click color controls click effects only.
+            - Editor-only seekable media read-ahead increases to a bounded 32 MiB per request. Brief buffering no longer triggers a 1.5-second reload loop; recovery preserves buffered media first. Adjacent cuts and playback-speed changes do not pause/rebuild the decoder. Large videos are not copied entirely into RAM; export still uses the original footage.
+            - Removed the unused Sequences heading, explanatory text and divider from the empty media/tools section while retaining populated saved-sequence controls.
 
             - Every successfully saved MP4, WebM or GIF export shows an optional donation screen with the existing UPI QR code. Not now, Escape, the close icon and backdrop dismiss it. Your video is already saved; no payment or account is required. Failed/cancelled exports do not show it, and repeat successful exports do.
             - Donation dialogs keep keyboard focus contained, restore focus when closed, respect reduced motion, fit smaller windows and handle clipboard failures without reporting false success. Saved-file actions and optional delivery-package warnings remain available.
@@ -58,11 +66,11 @@ jobs:
             - Open media now has a centered upload icon and a single Drag and drop label at 60% opacity, inside a dashed drop zone. The separate Choose file button and format list are removed; the whole area can still be clicked or activated with the keyboard to select a file.
             - Supported native file drags highlight the drop zone without covering the library. Invalid drops show a useful message, failed imports can be retried and pending imports block duplicate file pickers and competing drops.
 
-            Validation includes frontend/native regression tests, real-browser donation and import interaction checks, source checks and production builds. Existing masks, custom cursors, media compatibility, preview-player and microphone-meter improvements are retained. Recording remains native and lightweight; software recording fallback is explicit opt-in.
+            Validation includes frontend/native regression tests, real-browser playback and one-click cursor checks using a ten-minute video, Windows-pointer raster checks, source checks and production builds. Existing masks, media compatibility, preview-player and microphone-meter improvements are retained. Recording remains native and lightweight; software recording fallback is explicit opt-in.
 
             Known capture limitation: the tested Apex Legends window reports WDA_EXCLUDEFROMCAPTURE (0x11). Snap respects Windows capture exclusion; this release does not bypass protection or guarantee Apex capture. The flag does not identify which program applied it or imply a user-facing toggle. See docs/capture.md.
 
-            Install the Windows setup file below, or update directly inside Snap.
+            Install the Windows setup file below. Versions older than 9.5.0 can also update directly inside Snap.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

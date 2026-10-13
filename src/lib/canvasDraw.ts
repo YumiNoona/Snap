@@ -3,6 +3,7 @@ import { motionEase } from "./easing";
 export { motionEase } from "./easing";
 import { animatedLayer } from "./layerAnimation";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { mediaSrc } from "./mediaSource";
 import type { CameraOverlayConfig, CaptionTrack, ClickEffect, CursorStyle, ImageLayer, Layer, MaskLayer, MotionBlurConfig, ShapeLayer, TextLayer, VideoLayer } from "./types";
 import { captionAnimationFrame, captionRenderText, effectiveCaptionEntrance } from "./captionAnimation";
 
@@ -106,7 +107,7 @@ export function assetSrc(path: string): string {
   // Web-root-relative paths (/Wallpapers/.., /Cursors/..) are served by Vite /
   // the bundled frontend — no asset protocol needed. Absolute filesystem paths
   // (e.g. recorded video) go through the Tauri asset protocol.
-  return path.startsWith("/") ? path : convertFileSrc(path);
+  return path.startsWith("/") && !path.startsWith("//") || /^(https?:|asset:|snap-media:|data:|blob:)/i.test(path) ? path : convertFileSrc(path);
 }
 
 const sharedImageCache = new Map<string, HTMLImageElement>();
@@ -116,10 +117,10 @@ export function clearImageAssets(): void {
   sharedImageCache.clear();
 }
 
-export function preloadImageAsset(path: string): HTMLImageElement {
+export function preloadImageAsset(path: string, retryFailed = false): HTMLImageElement {
   const src = assetSrc(path);
   const cached = sharedImageCache.get(src);
-  if (cached) return cached;
+  if (cached && !(retryFailed && cached.complete && cached.naturalWidth === 0)) return cached;
 
   if (sharedImageCache.size > 48) {
     const first = sharedImageCache.keys().next().value;
@@ -132,6 +133,30 @@ export function preloadImageAsset(path: string): HTMLImageElement {
   img.src = src;
   sharedImageCache.set(src, img);
   return img;
+}
+
+/** Await decoding once, then invalidate the paused canvas, not just its config.
+ * Explicit selection retries a failed cached request; frame draws never retry.
+ */
+export async function readyImageAsset(path: string, retryFailed = false): Promise<HTMLImageElement> {
+  const image = preloadImageAsset(path, retryFailed);
+  if (image.complete && image.naturalWidth > 0) return image;
+  await new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      image.removeEventListener("load", loaded);
+      image.removeEventListener("error", failed);
+      if (error) reject(error); else resolve();
+    };
+    const loaded = () => finish();
+    const failed = () => finish(new Error("Image could not be loaded"));
+    const timer = setTimeout(() => finish(new Error("Image loading timed out")), 8000);
+    image.addEventListener("load", loaded, { once: true });
+    image.addEventListener("error", failed, { once: true });
+    if (image.complete) { if (image.naturalWidth > 0) loaded(); else failed(); }
+  });
+  if (typeof image.decode === "function") await image.decode();
+  return image;
 }
 
 export function loadCachedImage(path: string, cache: Map<string, HTMLImageElement>): HTMLImageElement {
@@ -211,15 +236,15 @@ export function reconcileVideoLayers(layers: Layer[], time: number, playing: boo
   for (const [id, media] of cache) {
     const layer = videos.get(id);
     const active = layer && time >= layer.start - .02 && time <= layer.end + .02;
-    if (!layer || (videoSources.get(media)?.source ?? media.getAttribute("src")) !== assetSrc(layer.path) || (!active && cache.size > 8)) {
+    if (!layer || (videoSources.get(media)?.source ?? media.getAttribute("src")) !== mediaSrc(layer.path) || (!active && cache.size > 8)) {
       releaseVideo(media);
       cache.delete(id);
     } else if (!active || !playing) media.pause();
   }
 }
 
-export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>, key = assetSrc(path)): HTMLVideoElement {
-  const src = assetSrc(path);
+export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElement>, key = mediaSrc(path)): HTMLVideoElement {
+  const src = mediaSrc(path);
   const cached = cache.get(key);
   if (cached) return cached;
   const video = document.createElement("video");
@@ -230,7 +255,7 @@ export function loadCachedVideo(path: string, cache: Map<string, HTMLVideoElemen
     state.attempted = true;
     state.repair = invoke<string>("editor_cached_media", { path, kind: "compatible" }).then(file => {
       if (state.disposed) return;
-      video.src = assetSrc(file); video.load();
+      video.src = mediaSrc(file); video.load();
     }).finally(() => { state.repair = undefined; });
     // Preview reports failure visually; export also awaits/rejects this promise.
     void state.repair.catch(() => {});

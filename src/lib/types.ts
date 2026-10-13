@@ -240,7 +240,7 @@ export interface AutoZoomConfig {
 
 export const AUTO_ZOOM_PRESETS: Record<Exclude<AutoZoomPreset, "custom">, Omit<AutoZoomConfig, "preset">> = {
   gentle: { minScale: 1.08, maxScale: 1.55, holdMs: 1100, cooldownMs: 850, typingSensitivity: 6, scrollSensitivity: 4, edgePadding: 0.025, curve: "sine", focusMode: "clicks", deadZone: .16, idleResetMs: 4200, singleClickScale: 1.42, typingScale: 1.22, minimumShotMs: 1250 },
-  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 720, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015, curve: "ease-in-out", focusMode: "hybrid", deadZone: .11, idleResetMs: 3000, singleClickScale: 1.62, typingScale: 1.3, minimumShotMs: 900 },
+  balanced: { minScale: 1.15, maxScale: 1.9, holdMs: 1000, cooldownMs: 520, typingSensitivity: 4, scrollSensitivity: 2, edgePadding: 0.015, curve: "smoother", focusMode: "hybrid", deadZone: .11, idleResetMs: 3000, singleClickScale: 1.62, typingScale: 1.3, minimumShotMs: 1200 },
   dynamic: { minScale: 1.22, maxScale: 2.35, holdMs: 520, cooldownMs: 260, typingSensitivity: 3, scrollSensitivity: 2, edgePadding: 0.01, curve: "smoother", focusMode: "follow", deadZone: .07, idleResetMs: 2200, singleClickScale: 1.95, typingScale: 1.42, minimumShotMs: 620 },
 };
 
@@ -518,18 +518,18 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
     preset: "balanced",
     minScale: 1.15,
     maxScale: 1.9,
-    holdMs: 720,
+    holdMs: 1000,
     cooldownMs: 520,
     typingSensitivity: 4,
     scrollSensitivity: 2,
     edgePadding: 0.015,
-    curve: "ease-in-out",
+    curve: "smoother",
     focusMode: "hybrid",
     deadZone: .11,
     idleResetMs: 3000,
     singleClickScale: 1.62,
     typingScale: 1.3,
-    minimumShotMs: 900,
+    minimumShotMs: 1200,
   },
   actionOverlay: {
     enabled: false,

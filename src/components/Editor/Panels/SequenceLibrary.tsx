@@ -19,14 +19,10 @@ export default function SequenceLibrary({
   onEdit: (id: string) => void;
   onChange: (sequences: NestedSequence[]) => void;
 }) {
+  if (!sequences.length) return null;
+
   return (
-    <section className="sequence-library">
-      <h3>Sequences</h3>
-      {!sequences.length && (
-        <p>
-          Select adjacent footage clips, then choose Nest in their context menu.
-        </p>
-      )}
+    <section className="sequence-library" aria-label="Saved sequences">
       {sequences.map((s) => {
         const length = sequenceDuration(
             retainedClips(

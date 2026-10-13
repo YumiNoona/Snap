@@ -1,6 +1,6 @@
 import { audioPosition, audioEnvelope, audioClipEnvelope } from "../../../lib/audioEditing";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { mediaSrc } from "../../../lib/mediaSource";
 import type { AudioMixConfig, AudioTrack, VideoClip } from "../../../lib/types";
 import { retainedClips, sequenceTime, sequenceClip, clipSpeed } from "../../../lib/videoEditing";
 import {
@@ -24,8 +24,8 @@ interface Options {
 }
 
 export type TransportStatus = "idle" | "paused" | "starting" | "playing" | "buffering" | "seeking" | "recovering" | "failed";
-const MEDIA_OPERATION_TIMEOUT_MS = 2_500;
-const PLAY_PROGRESS_TIMEOUT_MS = 1_500;
+const MEDIA_OPERATION_TIMEOUT_MS = 8_000;
+const PLAY_PROGRESS_TIMEOUT_MS = 8_000;
 const PLAYBACK_UI_INTERVAL_MS = 32;
 const SIDECAR_SYNC_INTERVAL_MS = 50;
 
@@ -63,6 +63,8 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   const clockFrameRef = useRef(0);
   const recoveryTimerRef = useRef(0);
   const recoveryActiveRef = useRef(false);
+  const recoveryAttemptsRef = useRef(0);
+  const lastRecoveryRef = useRef(0);
   const lastProgressRef = useRef({ mediaTime: 0, wallTime: performance.now() });
   const lastUiUpdateRef = useRef(0);
   const lastSidecarSyncRef = useRef(0);
@@ -240,7 +242,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
   ) => {
     if (!commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) return;
     setStatus("starting");
-    const rate = Math.max(0.5, Math.min(2, playbackRate || 1)) * clipSpeed(clipsRef.current.find(c=>c.id===activeIdRef.current)??{id:"",start:0,end:0});
+    const rate = Math.max(0.5, Math.min(2, rateRef.current || 1)) * clipSpeed(clipsRef.current.find(c=>c.id===activeIdRef.current)??{id:"",start:0,end:0});
     video.defaultPlaybackRate = rate;
     video.playbackRate = rate;
     const initialTime = video.currentTime;
@@ -258,7 +260,6 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     const confirmed = await Promise.race([
       confirmPlay(video, signal, initialTime),
       playFailure,
-      new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), PLAY_PROGRESS_TIMEOUT_MS)),
     ]);
     if (!commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) return;
     if (!confirmed) {
@@ -275,27 +276,40 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     setCurrentTime(video.currentTime);
     setStatus("playing");
     playSidecars(video, generation);
-  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, playbackRate, setStatus]);
+  }, [commandIsCurrent, confirmPlay, pauseSidecars, playSidecars, setStatus]);
 
   const recover = useCallback((time: number) => {
     const video = videoRef.current;
     if (!video || recoveryActiveRef.current || !wantsPlaybackRef.current) return;
     recoveryActiveRef.current = true;
+    const attempt = ++recoveryAttemptsRef.current;
+    if (attempt > 2) { recoveryActiveRef.current = false; wantsPlaybackRef.current = false; video.pause(); pauseSidecars(); setStatus("failed"); return; }
+    lastRecoveryRef.current = performance.now();
     const { generation, signal } = beginCommand();
     setStatus("recovering");
-    void reloadMediaAt(video, time, signal).then((ready) => {
+    // Preserve read-ahead on the first stall. Rebuilding the decoder is a
+    // bounded last resort, not a reaction to every brief chunk boundary.
+    const recovery = attempt === 1 ? (async () => {
+      video.pause(); pauseSidecars();
+      const ready = await waitForMedia(video, signal, ["canplay", "loadeddata", "progress"], () => video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA);
+      if (!ready) return false;
+      return seekMedia(video, time, signal);
+    })() : reloadMediaAt(video, time, signal);
+    void recovery.then((ready) => {
+      if (!commandIsCurrent(generation, signal)) return;
       recoveryActiveRef.current = false;
       if (!ready || !commandIsCurrent(generation, signal) || !wantsPlaybackRef.current) {
         if (commandIsCurrent(generation, signal) && wantsPlaybackRef.current) {
+          if (attempt === 1) { recoverRef.current(time); return; }
           wantsPlaybackRef.current = false;
           setStatus("failed");
         }
         return;
       }
       syncSidecars(video, true);
-      void requestPlay(video, generation, signal, false);
+      void requestPlay(video, generation, signal, attempt === 1);
     });
-  }, [beginCommand, commandIsCurrent, reloadMediaAt, requestPlay, setStatus, syncSidecars]);
+  }, [beginCommand, commandIsCurrent, reloadMediaAt, requestPlay, setStatus, syncSidecars, pauseSidecars, seekMedia, waitForMedia]);
   recoverRef.current = recover;
 
   const scheduleRecovery = useCallback((video: HTMLVideoElement) => {
@@ -323,6 +337,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     const { generation, signal } = beginCommand();
     wantsPlaybackRef.current = true;
     recoveryActiveRef.current = false;
+    recoveryAttemptsRef.current = 0;
     const current = clipsRef.current.find(c => c.id === activeIdRef.current) ?? clipsRef.current[0];
     if (current?.gap && gapClockRef.current.time < current.end) { gapClockRef.current.wall=performance.now(); setStatus("playing"); syncSidecars(video,true); playSidecars(video,generation); return; }
     const startAt = current ? Math.max(current.start, Math.min(current.end, video.currentTime)) : 0;
@@ -404,7 +419,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     const metadataHandlers=new Map<string,()=>void>();
     setAudioDurations({});
     for (const track of audioTracks) {
-      const element = new Audio(); element.crossOrigin="anonymous"; element.src=convertFileSrc(track.path);
+      const element = new Audio(); element.crossOrigin="anonymous"; element.src=mediaSrc(track.path);
       const metadata=()=>{
         if(Number.isFinite(element.duration))setAudioDurations(current=>({...current,[track.id]:element.duration}));
         const video=videoRef.current;
@@ -474,6 +489,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     if (!video) return;
     videoRef.current = video;
     wantsPlaybackRef.current = false;
+    recoveryAttemptsRef.current = 0;
     setCurrentTime(video.currentTime || 0);
     setStatus("paused");
     const mountedAt = performance.now();
@@ -490,12 +506,20 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       const clip = clipsRef.current[index];
       const next = clipsRef.current[index + 1];
       if (wantsPlaybackRef.current && (activeGap()||!video.seeking) && clip && mediaTime >= clip.end - .001 && next) {
+        if (!clip.gap && !next.gap && Math.abs(next.start - clip.end) < .001) {
+          activeIdRef.current = next.id; setActiveClipId(next.id);
+          video.playbackRate = Math.max(.5,Math.min(2,rateRef.current || 1)) * clipSpeed(next);
+          syncSidecars(video, true);
+          clockFrameRef.current = requestAnimationFrame(clock);
+          return;
+        }
         seek(next.start, next.id);
         clockFrameRef.current = requestAnimationFrame(clock);
         return;
       }
       const last = lastProgressRef.current;
       if (Math.abs(mediaTime - last.mediaTime) >= .002) {
+        if (now - lastRecoveryRef.current > 15_000) recoveryAttemptsRef.current = 0;
         lastProgressRef.current = { mediaTime, wallTime: now };
         if (now - lastUiUpdateRef.current >= PLAYBACK_UI_INTERVAL_MS) {
           lastUiUpdateRef.current = now;
@@ -551,6 +575,11 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       pauseSidecars();
       if (wantsPlaybackRef.current) setStatus("seeking");
     };
+    const onStalled = () => {
+      // `stalled` concerns fetching, not presentation. Buffered local media
+      // may emit it while its decoded frames continue to advance normally.
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && performance.now() - lastProgressRef.current.wallTime > 300) onWaiting();
+    };
     const onSeeked = () => {
       if(activeGap())return;
       setCurrentTime(video.currentTime);
@@ -574,7 +603,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
     video.addEventListener("playing", onPlaying);
     video.addEventListener("pause", onPause);
     video.addEventListener("waiting", onWaiting);
-    video.addEventListener("stalled", onWaiting);
+    video.addEventListener("stalled", onStalled);
     video.addEventListener("seeking", onSeeking);
     video.addEventListener("seeked", onSeeked);
     video.addEventListener("ended", onEnded);
@@ -593,7 +622,7 @@ export function usePlaybackController({ videoPath, trimStart, trimEnd, duration,
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("waiting", onWaiting);
-      video.removeEventListener("stalled", onWaiting);
+      video.removeEventListener("stalled", onStalled);
       video.removeEventListener("seeking", onSeeking);
       video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("ended", onEnded);
