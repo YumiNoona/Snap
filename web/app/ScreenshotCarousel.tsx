@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { productShots, screenshotSrc } from "../lib/screenshots";
 
 const wrap = (index: number) => (index + productShots.length) % productShots.length;
@@ -156,7 +155,10 @@ export default function ScreenshotCarousel() {
   };
 
   return (
-    <div className="showcase-carousel" id="product" role="region" aria-roledescription="carousel" aria-label="Snap screenshots" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <div className="showcase-carousel" id="product" role="region" aria-roledescription="carousel" aria-label="Snap screenshots" aria-describedby="showcase-help" tabIndex={0}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      onKeyDown={event => { if (event.target === event.currentTarget && event.key === " ") { event.preventDefault(); setPaused(value => !value); } }}>
+      <p className="visually-hidden" id="showcase-help">Swipe or use the dots to browse screenshots. Hovering or focusing pauses rotation. Press Space while this carousel is focused to pause or resume automatic rotation.</p>
       <div ref={stage} className={`showcase-stage${animating ? " is-transitioning" : ""}${dragging ? " is-dragging" : ""}`} data-phase={animating ? "moving" : dragging ? "dragging" : "idle"}
         role="tabpanel" id="product-preview" aria-labelledby={`feature-${productShots[selected].id}`}
         onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}
@@ -169,7 +171,6 @@ export default function ScreenshotCarousel() {
           style={{ transform: `translate3d(${index === active ? offset : direction * width + offset}px,0,0)` }} />)}
       </div>
       <div className="showcase-navigation">
-        <button className="showcase-control" aria-label="Previous screenshot" onClick={() => void show(activeRef.current - 1, -1)}><ChevronLeft size={17} /></button>
         <div ref={dots} className="showcase-dots" role="tablist" aria-label="Choose a screenshot" onKeyDown={event => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
@@ -180,8 +181,6 @@ export default function ScreenshotCarousel() {
             aria-label={`Show screenshot ${index + 1}: ${shot.label}`} aria-controls="product-preview" aria-selected={index === selected}
             tabIndex={index === selected ? 0 : -1} className={index === selected ? "is-active" : ""} onClick={() => void show(index)}><span aria-hidden="true" /></button>)}
         </div>
-        <button className="showcase-control" aria-label="Next screenshot" onClick={() => void show(activeRef.current + 1, 1)}><ChevronRight size={17} /></button>
-        <button className="showcase-control" aria-label={paused ? "Resume screenshot rotation" : "Pause screenshot rotation"} onClick={() => setPaused(value => !value)}>{paused ? <Play size={14} /> : <Pause size={14} />}</button>
       </div>
       {error && <p className="showcase-error" role="status">{error}</p>}
     </div>

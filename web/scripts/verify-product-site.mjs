@@ -7,8 +7,12 @@ const { chromium } = await import(process.env.SNAP_PLAYWRIGHT_MODULE ? pathToFil
 const browser = await chromium.launch({ headless: true, channel: process.env.SNAP_TEST_BROWSER || 'msedge' });
 const url = process.env.SNAP_TEST_URL || 'http://127.0.0.1:3000';
 const output = 'test-results/product-site'; await mkdir(output, { recursive: true });
-const labels = ['Editor', 'Camera', 'Cursor', 'Layers', 'Looks', 'Audio', 'Captions', '3D tilt', 'Light mode', 'Voice polish', 'Layouts', 'Clip settings', 'Fullscreen preview', 'Recorder', 'Media library', 'Teleprompter'];
+const labels = ['Editor', 'Camera', 'Layers', 'Looks', 'Audio', 'Captions', '3D tilt', 'Light mode', 'Voice polish', 'Layouts', 'Fullscreen preview'];
 const tab = (page, index) => page.getByRole('tab', { name: `Show screenshot ${index + 1}: ${labels[index]}`, exact: true });
+const pauseRotation = async page => {
+  await page.locator('.showcase-carousel').focus(); await page.locator('.showcase-carousel').press('Space');
+  await page.waitForFunction(() => { const stage = document.querySelector('.showcase-stage'); return stage?.dataset.phase === 'idle' && stage.querySelectorAll('img').length === 1; });
+};
 const settled = async (page, index) => {
   await page.waitForFunction(index => {
     const stage = document.querySelector('.showcase-stage'), image = stage?.querySelector('.showcase-slide.is-active');
@@ -40,8 +44,10 @@ try {
   assert.equal((await page.request.get(`${url}/media/snap-promo.vtt`)).status(), 200);
   console.log('PASS gesture-free muted 30-second autoplay, controls, seek, pause and looping');
 
-  await page.getByRole('button', { name: 'Pause screenshot rotation', exact: true }).click();
-  assert.equal(await page.getByRole('tab').count(), 16);
+  await pauseRotation(page);
+  assert.equal(await page.getByRole('tab').count(), 11);
+  assert.equal(await page.locator('.showcase-control').count(), 0, 'Remove pause and arrow buttons');
+  assert.equal(await page.locator('.showcase-carousel button').count(), 11, 'Only navigation dots remain');
   assert.equal((await page.locator('.showcase-navigation').innerText()).trim(), '', 'No visible feature labels');
   assert.equal(await page.locator('.showcase-drag-hint').count(), 0);
   assert.equal(await page.locator('.real-workflow-grid article').count(), 3, 'Keep the lower website cards');
@@ -50,10 +56,13 @@ try {
     await tab(page, index).click(); await settled(page, index);
     sources.add(await page.locator('.showcase-slide.is-active').getAttribute('src'));
   }
-  assert.equal(sources.size, 16, 'Use 16 unique current images, not repeated placeholders');
-  await tab(page, 15).press('Home'); await settled(page, 0);
+  assert.equal(sources.size, 11, 'Use the 11 remaining unique screenshots');
+  for (const removed of ['cursor-detail.webp', 'clip-settings.webp', 'recorder.webp', 'media-import.webp', 'teleprompter.webp']) {
+    assert.ok(![...sources].some(source => source.endsWith(removed)), `Remove ${removed} from the swipe gallery`);
+  }
+  await tab(page, 10).press('Home'); await settled(page, 0);
   await tab(page, 0).press('ArrowRight'); await settled(page, 1);
-  await page.getByRole('button', { name: 'Previous screenshot', exact: true }).click(); await settled(page, 0);
+  await tab(page, 1).press('ArrowLeft'); await settled(page, 0);
 
   const box = await page.locator('.showcase-stage').boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x - 170, y, { steps: 12 });
@@ -69,41 +78,41 @@ try {
   await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({ path: `${output}/desktop.png`, fullPage: true });
   await page.locator('#film').screenshot({ path: `${output}/film.png` });
-  console.log('PASS 16 decoded screenshots, label-free dots, keyboard, arrows, swipe, cancellation and short-drag recovery');
+  console.log('PASS 11 decoded screenshots, five excluded shots, dots-only controls, keyboard, swipe, cancellation and short-drag recovery');
 
   // Slow-network preparation keeps the current shot until the next is decoded.
   const delayed = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await delayed.route('**/screenshots/layouts.webp', async route => { await new Promise(resolve => setTimeout(resolve, 900)); await route.continue(); });
   await delayed.goto(url, { waitUntil: 'networkidle' });
-  await delayed.getByRole('button', { name: 'Pause screenshot rotation', exact: true }).click();
+  await pauseRotation(delayed);
   await tab(delayed, 0).click(); await settled(delayed, 0);
-  await tab(delayed, 10).click(); await delayed.waitForTimeout(250);
+  await tab(delayed, 9).click(); await delayed.waitForTimeout(250);
   assert.ok((await delayed.locator('.showcase-slide.is-active').getAttribute('src')).endsWith('editor-dark.webp'));
   await delayed.emulateMedia({ reducedMotion: 'reduce' }); await delayed.waitForTimeout(1200); await settled(delayed, 0);
-  await tab(delayed, 10).click();
-  await settled(delayed, 10);
-  await delayed.setViewportSize({ width: 1100, height: 900 }); await settled(delayed, 10);
+  await tab(delayed, 9).click();
+  await settled(delayed, 9);
+  await delayed.setViewportSize({ width: 1100, height: 900 }); await settled(delayed, 9);
   await delayed.close();
 
   const failed = await browser.newPage();
-  await failed.route('**/screenshots/clip-settings.webp', route => route.abort());
+  await failed.route('**/screenshots/voice.webp', route => route.abort());
   await failed.goto(url, { waitUntil: 'networkidle' });
-  await failed.getByRole('button', { name: 'Pause screenshot rotation', exact: true }).click();
+  await pauseRotation(failed);
   await tab(failed, 0).click(); await settled(failed, 0);
-  await tab(failed, 11).click(); await failed.getByRole('status').waitFor(); await settled(failed, 0);
-  await failed.unroute('**/screenshots/clip-settings.webp');
-  await tab(failed, 11).click(); await settled(failed, 11); await failed.close();
+  await tab(failed, 8).click(); await failed.getByRole('status').waitFor(); await settled(failed, 0);
+  await failed.unroute('**/screenshots/voice.webp');
+  await tab(failed, 8).click(); await settled(failed, 8); await failed.close();
   console.log('PASS slow image decode, failed-image recovery and resize without blank frames');
 
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(url, { waitUntil: 'networkidle' });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'No horizontal overflow on mobile');
-  await tab(page, 6).click(); await settled(page, 6);
+  await tab(page, 5).click(); await settled(page, 5);
   await page.screenshot({ path: `${output}/mobile.png`, fullPage: true });
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.reload({ waitUntil: 'networkidle' });
   await settled(page, 0);
   assert.equal(await page.locator('video').evaluate(video => video.paused), true, 'Reduced motion disables video autoplay');
   await page.waitForTimeout(6500); await settled(page, 0);
-  await tab(page, 10).click(); await settled(page, 10);
+  await tab(page, 9).click(); await settled(page, 9);
   await page.getByRole('button', { name: 'Play Snap product film', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('video').currentTime > .5);
   assert.equal(errors.length, 0, errors.join('\n')); assert.equal(broken.length, 0, broken.join('\n'));
