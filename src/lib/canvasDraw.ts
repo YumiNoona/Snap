@@ -720,7 +720,12 @@ export function drawMaskLayer(
     // No feather, alpha or entrance/exit fade that could expose covered pixels.
     ctx.save(); ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; ctx.filter = "none";
     ctx.fillStyle = /^#[0-9a-f]{6}$/i.test(layer.coverColor ?? "") ? layer.coverColor! : "#151515";
-    ctx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(x + w) - Math.floor(x), Math.ceil(y + h) - Math.floor(y));
+    const rotation = (layer.rotation ?? 0) * Math.PI / 180;
+    if (rotation) { ctx.translate(x + w / 2, y + h / 2); ctx.rotate(rotation); ctx.translate(-x - w / 2, -y - h / 2); }
+    // Expand a rotated cover outward by one pixel so antialiased boundary
+    // pixels cannot reveal the selected region. Unrotated covers remain exact.
+    const edge = rotation ? 1 : 0;
+    ctx.fillRect(Math.floor(x - edge), Math.floor(y - edge), Math.ceil(x + w + edge) - Math.floor(x - edge), Math.ceil(y + h + edge) - Math.floor(y - edge));
     ctx.restore(); return;
   }
   let buffer = maskBuffers.get(ctx);
@@ -734,9 +739,12 @@ export function drawMaskLayer(
   g.clearRect(0, 0, buffer.width, buffer.height);
   const feather = Math.max(0, Math.min(layer.feather ?? 8, Math.min(w, h) / 4));
   const path = (target: CanvasRenderingContext2D) => {
+    target.save();
+    target.translate(x + w / 2, y + h / 2); target.rotate((layer.rotation ?? 0) * Math.PI / 180); target.translate(-x - w / 2, -y - h / 2);
     target.beginPath();
     if (layer.shape === "rectangle") target.rect(x, y, w, h);
     else target.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    target.restore();
   };
   // A real alpha matte, rather than clipping first, gives ALL effects the same
   // feather and inversion semantics. Sampling remains at the marked location.
@@ -773,8 +781,11 @@ export function drawMaskLayer(
     g.drawImage(video, source.x, source.y, source.w, source.h, dest.x, dest.y, dest.w, dest.h);
   } else {
     // A lens must not blur or replace anything outside its own area.
-    const sample = resolveMagnifierSample(source, dest, { x, y, w, h }, layer.intensity);
-    g.drawImage(video, sample.x, sample.y, sample.w, sample.h, x, y, w, h);
+    // Sample the whole frame under a centered zoom, then apply the matte.
+    // Drawing only the axis-aligned box left empty corners on rotated lenses.
+    const zoom = Math.max(1.25, Math.min(8, layer.intensity));
+    const cx = x + w / 2, cy = y + h / 2;
+    g.drawImage(video, source.x, source.y, source.w, source.h, cx + (dest.x - cx) * zoom, cy + (dest.y - cy) * zoom, dest.w * zoom, dest.h * zoom);
   }
   g.filter = "none";
   g.globalCompositeOperation = outside ? "destination-out" : "destination-in";

@@ -967,9 +967,8 @@ export default function Preview({
           ctx.beginPath(); ctx.ellipse(cx, cy, lw / 2, lh / 2, 0, 0, Math.PI * 2); ctx.stroke();
         }
 
-        // Rotation is available for visual objects; masks stay axis-aligned so
-        // their sampled pixels remain exact.
-        if (layer.type !== "mask") {
+        // Masks and visual objects share the same rotated handles and pose.
+        {
           ctx.beginPath(); ctx.moveTo(cx, ly); ctx.lineTo(cx, ly - 26); ctx.stroke();
           ctx.fillStyle = "#0b1220";
           ctx.beginPath(); ctx.arc(cx, ly - 31, 8, 0, Math.PI * 2); ctx.fill();
@@ -1185,7 +1184,7 @@ export default function Preview({
           const rect = layerCanvasRect(selected, g);
           const rotation = selected.rotation ?? 0;
           const rotationPoint = rotatePoint(rect.cx, rect.y - 31, rect.cx, rect.cy, rotation);
-          if (selected.type !== "mask" && Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14) {
+          if (Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14) {
             mode = "rotate";
           } else {
             const hit = gizmoHandlePoints(rect).find((candidate) => {
@@ -1251,7 +1250,7 @@ export default function Preview({
           const angle = Math.atan2(p.y - d.centerY, p.x - d.centerX) * 180 / Math.PI;
           const raw = (d.layer.rotation ?? 0) + angle - d.startAngle;
           const snapped = e.shiftKey ? Math.round(raw / 15) * 15 : raw;
-          onLayerChange({ ...d.layer, rotation: ((snapped % 360) + 360) % 360 });
+          emitLayerChange({ ...d.layer, rotation: ((snapped % 360) + 360) % 360 });
         } else if (d.handle) {
           const rect = layerCanvasRect(d.layer, g);
           const local = rotatePoint(p.x, p.y, rect.cx, rect.cy, -(d.layer.rotation ?? 0));
@@ -1288,7 +1287,7 @@ export default function Preview({
             return Math.hypot(p.x - point.x, p.y - point.y) <= 12;
           });
           const cursors: Record<GizmoHandle, string> = { nw: "nwse-resize", n: "ns-resize", ne: "nesw-resize", e: "ew-resize", se: "nwse-resize", s: "ns-resize", sw: "nesw-resize", w: "ew-resize" };
-          canvasRef.current.style.cursor = selected.type !== "mask" && Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14
+          canvasRef.current.style.cursor = Math.hypot(p.x - rotationPoint.x, p.y - rotationPoint.y) <= 14
             ? "grab"
             : hit ? cursors[hit.handle]
             : pointInLayer(p, selected, g) ? "move" : "default";

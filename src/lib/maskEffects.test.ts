@@ -31,7 +31,7 @@ it("keeps redaction opaque and covers whole pixels without filtering or fades", 
 it("renders mosaic with nearest-neighbor blocks and color focus with a grayscale surround", () => {
   const contexts: Record<string, unknown>[] = [];
   vi.stubGlobal("document", { createElement: () => {
-    const context = { setTransform: vi.fn(), rect: vi.fn(), clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), arcTo: vi.fn(), closePath: vi.fn(), ellipse: vi.fn(), clip: vi.fn(), fill: vi.fn(), drawImage: vi.fn() };
+    const context = { translate: vi.fn(), rotate: vi.fn(), setTransform: vi.fn(), rect: vi.fn(), clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), arcTo: vi.fn(), closePath: vi.fn(), ellipse: vi.fn(), clip: vi.fn(), fill: vi.fn(), drawImage: vi.fn() };
     contexts.push(context);
     return { width: 0, height: 0, getContext: () => context };
   } });

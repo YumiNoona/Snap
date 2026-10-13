@@ -27,6 +27,11 @@ try {
       results.push({ name: `${mask}: correct marked region`, pass: mask === 'spotlight' || mask === 'colorFocus' ? same(inside, pixel(s,160,85)) : !same(inside, pixel(s,160,85)) });
       results.push({ name: `${mask}: outside behavior`, pass: mask === 'spotlight' || mask === 'colorFocus' ? !same(outside, pixel(s,40,40)) : same(outside,pixel(s,40,40)) });
       results.push({ name: `${mask}: opaque output`, pass: inside[3] === 255 && outside[3] === 255 });
+      g.clearRect(0,0,256,144); g.drawImage(source,0,0);
+      drawMaskLayer(g,{...layer,rotation:90},source,whole,whole,{x:130,y:65,w:80,h:20});
+      const rotatedInside=pixel(g,170,45),rotatedOutside=pixel(g,145,75),outsideEffect=['spotlight','colorFocus'].includes(mask);
+      results.push({name:`${mask}: rotated area follows outline`,pass:outsideEffect ? same(rotatedInside,pixel(s,170,45)) && !same(rotatedOutside,pixel(s,145,75)) : !same(rotatedInside,pixel(s,170,45)) && same(rotatedOutside,pixel(s,145,75))});
+      g.clearRect(0,0,256,144); g.drawImage(source,0,0); drawMaskLayer(g,layer,source,whole,whole,rect);
       const card = document.createElement('div'), label = document.createElement('p'); label.textContent = mask; card.append(label, canvas); document.body.append(card);
       if (['blur','pixelate'].includes(mask)) {
         g.clearRect(0,0,256,144); g.drawImage(source,0,0); drawMaskLayer(g,{...layer,inverted:true},source,whole,whole,rect);

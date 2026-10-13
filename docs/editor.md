@@ -25,6 +25,9 @@ desaturate the surrounding picture while retaining the selected area's color.
 They use the shared preview/export renderer and retain timeline positioning.
 Mask rendering, cursor following, selection handles and hit testing share the
 same source-space pose. New masks pin to footage through crop and pan/zoom;
+Rotation, including animated poses, transforms the real mask matte as well as
+its selection outline. Rotated lenses sample the complete frame so corners do
+not go blank; rotated redaction covers expand one pixel for safe edge coverage.
 turn off **Pin to footage** for a fixed frame-space area. Camera focus is an
 explicit choice, not an automatic relocation of the mask. The lens affects
 only its own area. Feather, expansion and applicable inversion use real alpha
