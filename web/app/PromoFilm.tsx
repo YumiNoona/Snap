@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownToLine, Play } from "lucide-react";
+import { Play } from "lucide-react";
 
 export default function PromoFilm() {
   const video = useRef<HTMLVideoElement>(null);
@@ -40,11 +40,11 @@ export default function PromoFilm() {
         <video ref={video} poster="/media/snap-promo-poster.webp" preload="auto" autoPlay={autoplayAllowed} loop playsInline controls muted aria-label="Snap product film, 30 seconds" onPlay={() => { setStarted(true); setError(false); }} onError={() => { setError(true); setStarted(false); }}>
           <source src="/media/snap-promo.mp4" type="video/mp4" />
           <track kind="captions" src="/media/snap-promo.vtt" srcLang="en" label="English feature titles" />
-          Your browser does not support this video. <a href="/media/snap-promo.mp4">Download the film.</a>
+          Your browser does not support this video.
         </video>
         {!started && <button className="film-play" onClick={() => void start()} aria-label="Play Snap product film"><Play size={25} fill="currentColor" /><span>Play the film <small>0:30</small></span></button>}
       </div>
-      <div className="film-meta"><span>{error ? "Video unavailable. You can retry or download the film." : "1080p · 60 fps · Autoplays muted"}</span><a href="/media/snap-promo.mp4" download="Snap-product-film.mp4"><ArrowDownToLine size={15} /> Download film</a></div>
+      {error && <p className="film-error" role="status">Video unavailable. Please try playing it again.</p>}
     </section>
   );
 }

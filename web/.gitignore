@@ -17,6 +17,9 @@ coverage/
 *.tsbuildinfo
 *.log
 
+# User-provided soundtrack source stays local; deploy its embedded 30-second mix.
+/public/media/OST.mp3
+
 # Editor and operating-system files
 .DS_Store
 Thumbs.db

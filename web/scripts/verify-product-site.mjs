@@ -28,6 +28,8 @@ try {
   assert.deepEqual([metadata.width, metadata.height], [1920, 1080]);
   for (const flag of ['muted', 'controls', 'autoplay', 'loop']) assert.equal(metadata[flag], true, flag);
   assert.equal(await page.getByRole('button', { name: 'Play Snap product film', exact: true }).count(), 0);
+  assert.equal(await page.locator('.film-meta').count(), 0, 'Remove the entire metadata row');
+  assert.equal(await page.getByRole('link', { name: /Download (the )?film/i }).count(), 0, 'No download-film action');
   await page.locator('video').evaluate(video => { video.pause(); video.currentTime = 29.65; });
   await page.waitForFunction(() => !document.querySelector('video').seeking);
   await page.waitForTimeout(800);

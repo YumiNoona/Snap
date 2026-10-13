@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint .",
     "assets:prepare": "node scripts/prepare-product-assets.mjs",
-    "promo:render": "node scripts/render-product-film.mjs"
+    "promo:render": "node scripts/render-product-film.mjs",
+    "promo:music": "node scripts/render-product-film.mjs --audio-only"
   },
   "dependencies": {
     "lucide-react": "^1.31.0",

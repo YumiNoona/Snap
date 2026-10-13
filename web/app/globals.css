@@ -559,9 +559,7 @@ h1, h2, h3, p { margin-top: 0; }
 .film-play:hover { background: #223042de; transform: scale(1.035); }
 .film-play span { font-size: .9375rem; font-weight: 600; }
 .film-play small { margin-left: 13px; font-family: var(--font-mono); font-size: .7rem; color: #ffffff9c; }
-.film-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; font-size: .7rem; color: var(--muted); }
-.film-meta a { display: inline-flex; gap: 6px; align-items: center; color: var(--ink); white-space: nowrap; }
-.film-meta a:hover { text-decoration: underline; text-underline-offset: 4px; }
+.film-error { margin: 16px 0 0; font-size: .75rem; color: var(--muted); }
 .real-workflow { padding-block: 0 95px; }
 .real-workflow-heading { margin-bottom: 36px; }
 .real-workflow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -582,8 +580,6 @@ h1, h2, h3, p { margin-top: 0; }
   .film-play { padding: 13px 18px; gap: 10px; }
   .film-play span { font-size: .8rem; }
   .film-play > svg { width: 18px; }
-  .film-meta { align-items: start; font-size: .65rem; }
-  .film-meta > span { max-width: 190px; line-height: 1.7; }
   .real-workflow-grid { grid-template-columns: 1fr; gap: 14px; }
   .real-workflow-image { height: 310px; }
   .real-workflow { padding-bottom: 65px; }

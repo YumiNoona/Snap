@@ -1,20 +1,27 @@
 // Deterministic 30-second, 1920×1080/60fps screenshot-based product film.
 // npm --prefix web run promo:render (requires FFmpeg on PATH).
 // --stills renders review frames only; --fps=30 offers a smaller variant.
+// --audio-only updates the music without re-encoding any video frames.
 // Screenshot pixels are preserved. All added type uses bundled JetBrains Mono.
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 import sharp from 'sharp';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { productMusic, productAudioFilter, replaceProductSoundtrack } from './product-film-soundtrack.mjs';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 const output = join(publicDir, 'media');
 const qa = fileURLToPath(new URL('../test-results/product-film/', import.meta.url));
 await mkdir(output, { recursive: true });
 await mkdir(qa, { recursive: true });
+if (!process.argv.includes('--stills')) await access(productMusic);
+if (process.argv.includes('--audio-only')) {
+  await replaceProductSoundtrack(join(output, 'snap-promo.mp4'), qa);
+  process.exit(0);
+}
 for (const weight of ['Regular', 'Bold']) {
   const font = fileURLToPath(new URL(`./fonts/JetBrainsMono-${weight}.ttf`, import.meta.url));
   if (!GlobalFonts.registerFromPath(font, 'Snap JetBrains Mono')) throw new Error(`Could not register ${font}`);
@@ -247,39 +254,13 @@ await writeFile(join(output, 'snap-promo.vtt'), 'WEBVTT\n\n' + captions.map((cap
 console.log('Rendered eight feature frames, transition frames, poster and timed titles.');
 if (process.argv.includes('--stills')) process.exit(0);
 
-// Original ambient score synthesized here; no external music or narration.
-const sampleRate = 48000, samples = sampleRate * duration, audio = Buffer.alloc(44 + samples * 4);
-audio.write('RIFF', 0); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVEfmt ', 8);
-audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(2, 22);
-audio.writeUInt32LE(sampleRate, 24); audio.writeUInt32LE(sampleRate * 4, 28);
-audio.writeUInt16LE(4, 32); audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(samples * 4, 40);
-const notes = [261.626, 329.628, 391.995, 493.883, 440, 391.995, 329.628, 293.665], beat = 60 / 88;
-let seed = 7;
-for (let n = 0; n < samples; n++) {
-  const t = n / sampleRate, fade = ease(t / 1.4) * (1 - ease((t - 28.1) / 1.9));
-  const b = t % beat, k = Math.floor(t / beat), env = Math.min(1, b / .025) * Math.exp(-b * 5);
-  const pad = [130.813, 164.814, 195.998, 246.942].reduce((sum, f, i) => sum + Math.sin(2 * Math.PI * f * t + i) * .015, 0);
-  const ping = (Math.sin(2 * Math.PI * notes[k % 8] * t) + .2 * Math.sin(4 * Math.PI * notes[k % 8] * t)) * env * .035;
-  const kick = Math.sin(2 * Math.PI * (47 * b + 9 * (1 - Math.exp(-b * 14)))) * Math.exp(-b * 17) * .035;
-  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; const noise = seed / 2147483648 - 1;
-  let sweep = 0;
-  for (const boundary of times.slice(1, -1)) {
-    const d = t - boundary;
-    if (d > -.6 && d < .6) sweep += Math.sin(Math.PI * (d + .6) / 1.2) ** 2 * .009;
-  }
-  for (let ch = 0; ch < 2; ch++) {
-    const shimmer = Math.sin(2 * Math.PI * (ch ? 523.5 : 523.25) * t) * .008;
-    const value = clamp((pad + ping + kick + shimmer + noise * sweep) * fade, -1, 1);
-    audio.writeInt16LE(Math.round(value * 32767), 44 + n * 4 + ch * 2);
-  }
-}
-const soundtrack = join(qa, 'original-ambient-score.wav'); await writeFile(soundtrack, audio);
+// Supplied OST, trimmed and volume-balanced with fades at both loop edges.
 const film = join(output, 'snap-promo.mp4');
 const ffmpeg = spawn(process.env.SNAP_FFMPEG || 'ffmpeg', [
   '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'rgba',
-  '-video_size', `${width}x${height}`, '-framerate', String(fps), '-i', 'pipe:0', '-i', soundtrack,
+  '-video_size', `${width}x${height}`, '-framerate', String(fps), '-i', 'pipe:0', '-i', productMusic,
   '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-preset', 'medium', '-crf', '20',
-  '-threads', '4', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-t', String(duration),
+  '-threads', '4', '-pix_fmt', 'yuv420p', '-af', productAudioFilter, '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-t', String(duration),
   '-movflags', '+faststart', film,
 ], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
 let stderr = '', pipeError;
@@ -296,4 +277,4 @@ for (let frame = 0; frame < duration * fps; frame++) {
   if (frame % (fps * 5) === 0) console.log(`Rendered ${frame / fps}/${duration} seconds`);
 }
 ffmpeg.stdin.end(); await completion;
-console.log(`Created ${film} (${duration}s, ${width}×${height}, ${fps}fps, JetBrains Mono, original ambient audio).`);
+console.log(`Created ${film} (${duration}s, ${width}×${height}, ${fps}fps, JetBrains Mono, supplied OST soundtrack).`);
