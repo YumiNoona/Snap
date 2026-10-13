@@ -38,8 +38,8 @@ function findClusters(
       lastPointer.x >= 0 && lastPointer.x <= videoWidth && lastPointer.y >= 0 && lastPointer.y <= videoHeight
     );
     if (event.type === "mousedown" && hasPoint && pointerInside) significant.push(event);
-    else if (event.type === "keydown" && pointerInside) significant.push(lastPointer ? { ...event, ...lastPointer } : event);
-    else if (event.type === "wheel" && pointerInside) significant.push(lastPointer ? { ...event, ...lastPointer } : event);
+    else if (event.type === "keydown" && pointerInside && options.focusMode !== "clicks") significant.push(lastPointer ? { ...event, ...lastPointer } : event);
+    else if (event.type === "wheel" && pointerInside && options.focusMode !== "clicks") significant.push(lastPointer ? { ...event, ...lastPointer } : event);
     else if (event.type === "mousemove" && hasPoint && pointerInside && options.focusMode === "follow") {
       const distance = lastFollow ? Math.hypot((event.x! - lastFollow.x) / videoWidth, (event.y! - lastFollow.y) / videoHeight) : 1;
       if (!lastFollow || (event.ts - lastFollow.ts >= 500 && distance >= options.deadZone)) {
@@ -243,9 +243,10 @@ function clusterFocus(
   // Single deliberate clicks get a confident but comfortable zoom. Multiple
   // clicks use their robust bounding box so toolbars/forms remain in frame.
   const fit = Math.min(videoWidth / activityW, videoHeight / activityH);
-  const scale = focusClicks.length === 1
+  const typingIntent = cluster.events.filter(event => event.type === "keydown").length >= options.typingSensitivity;
+  const scale = Math.min(typingIntent ? options.typingScale : options.maxScale, focusClicks.length === 1
     ? Math.min(options.maxScale, Math.max(options.minScale, options.singleClickScale))
-    : clamp(fit * 0.9, 1, options.maxScale);
+    : clamp(fit * 0.9, 1, options.maxScale));
 
   const safeEdge = Math.min(0.48, 0.5 / scale + options.edgePadding);
   const cx = clamp((weightedX / totalWeight) / videoWidth, safeEdge, 1 - safeEdge);

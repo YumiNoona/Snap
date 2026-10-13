@@ -117,6 +117,14 @@ describe("Auto Zoom", () => {
     expect(generateKeyframes(keys,1920,1080,6000).some(frame=>frame.scale>1)).toBe(true);
   });
 
+  it("recognizes typing intent even when the user clicks the field before typing", () => {
+    const input=[event(1000,"mousedown",800,500),...Array.from({length:12},(_,i)=>event(1200+i*100,"keydown",800,500))];
+    const frames=generateKeyframes(input,1920,1080,6000,700,{typingScale:1.3,singleClickScale:1.9});
+    expect(Math.max(...frames.map(frame=>frame.scale))).toBeCloseTo(1.3);
+    const clicksOnly=generateKeyframes(input,1920,1080,6000,700,{typingScale:1.3,singleClickScale:1.9,focusMode:"clicks"});
+    expect(Math.max(...clicksOnly.map(frame=>frame.scale))).toBeCloseTo(1.9);
+  });
+
   it("bounds ten-minute dense activity, timeline IDs and final-frame moves", () => {
     const events=Array.from({length:36_000},(_,i)=>event(i*16,"keydown",800,500));
     const frames=generateKeyframes(events,1920,1080,600_000);
