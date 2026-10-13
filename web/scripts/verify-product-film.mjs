@@ -11,7 +11,9 @@ const filmOption = process.argv.find(value => value.startsWith('--film='))?.slic
 const film = filmOption ? resolve(filmOption) : fileURLToPath(new URL('../public/media/snap-promo.mp4', import.meta.url));
 const duration = Number(process.argv.find(value => value.startsWith('--duration='))?.slice(11) || 30);
 assert.ok(Number.isInteger(duration) && duration > 0 && duration <= 120, 'Expected duration must be 1–120 whole seconds');
-const productAudioFilter = createProductAudioFilter(duration);
+const audioStart = Number(process.argv.find(value => value.startsWith('--audio-start='))?.slice(14) ?? 0);
+assert.ok(Number.isFinite(audioStart) && audioStart >= 0, 'Expected audio start must be a non-negative number of seconds');
+const productAudioFilter = createProductAudioFilter(duration, audioStart);
 const probe = spawnSync(process.env.SNAP_FFPROBE || 'ffprobe', [
   '-v', 'error', '-show_streams', '-show_format', '-of', 'json', film,
 ], { encoding: 'utf8', windowsHide: true });

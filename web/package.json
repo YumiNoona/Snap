@@ -13,7 +13,8 @@
     "assets:prepare": "node scripts/prepare-product-assets.mjs",
     "promo:render": "node scripts/render-product-film.mjs",
     "promo:music": "node scripts/render-product-film.mjs --audio-only",
-    "promo:studio": "node scripts/render-studio-film.mjs"
+    "promo:studio": "node scripts/render-studio-film.mjs",
+    "promo:flow": "node scripts/render-flow-film.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.31.0",
