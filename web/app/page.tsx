@@ -1,14 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useState } from "react";
 import {
-  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp, Pause, Play,
+  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp, Play,
   ShieldCheck, X,
 } from "lucide-react";
 import PromoFilm from "./PromoFilm";
-import { productShots, screenshotSrc } from "../lib/screenshots";
+import ScreenshotCarousel from "./ScreenshotCarousel";
+import { screenshotSrc } from "../lib/screenshots";
 
 const UPI_ID = "rushikeshingale2001@okicici";
 
@@ -24,104 +24,15 @@ function DownloadButton({ light = false }: { light?: boolean }) {
   );
 }
 
-const showcaseSlides = productShots.map(shot => ({ ...shot, image: screenshotSrc(shot.file) }));
 const workflowShots = [
   { title: "Record your way.", file: "recorder.webp", alt: "Snap recorder showing Full Screen, Custom, Window and Device capture options", description: "A screen, a window, a region, or a connected device.", wide: true },
   { title: "Bring in what you have.", file: "media-import.webp", alt: "Snap's dashed drag-and-drop media import area and recent recordings", description: "Drop in a video and pick up from there.", wide: false },
   { title: "Stay on script.", file: "teleprompter.webp", alt: "Snap teleprompter with highlighted script text and speaking speed controls", description: "Your talking points, right where you need them.", wide: false },
 ] as const;
 
-const showcaseTransitions = ["horizontal", "diagonal", "zoom", "reveal"] as const;
-type ShowcaseTransition = (typeof showcaseTransitions)[number] | "drag";
-
-function nextShowcaseTransition(current: ShowcaseTransition) {
-  const options = showcaseTransitions.filter((transition) => transition !== current);
-  return options[Math.floor(Math.random() * options.length)];
-}
-
 export default function Home() {
   const [donateOpen, setDonateOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeSlide, setActiveSlide] = useState(0);
-  const [previousSlide, setPreviousSlide] = useState<number | null>(null);
-  const [slideDirection, setSlideDirection] = useState<"next" | "previous">("next");
-  const [slideTransition, setSlideTransition] = useState<ShowcaseTransition>("horizontal");
-  const [dragOffset, setDragOffset] = useState(0);
-  const [releaseOffset, setReleaseOffset] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const [carouselPaused, setCarouselPaused] = useState(false);
-  const [carouselHovered, setCarouselHovered] = useState(false);
-  const activeSlideRef = useRef(0);
-  const dragStartRef = useRef<number | null>(null);
-  const dragOffsetRef = useRef(0);
-
-  useEffect(() => {
-    if (carouselPaused || carouselHovered || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const timer = window.setInterval(() => {
-      if (dragStartRef.current !== null || document.hidden || document.activeElement?.closest(".showcase-carousel")) return;
-      const current = activeSlideRef.current;
-      const next = (current + 1) % showcaseSlides.length;
-      setPreviousSlide(current);
-      setSlideDirection("next");
-      setSlideTransition((transition) => nextShowcaseTransition(transition));
-      activeSlideRef.current = next;
-      setActiveSlide(next);
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [carouselPaused, carouselHovered]);
-
-  const showSlide = (requestedIndex: number, requestedDirection?: "next" | "previous", transitionOverride?: ShowcaseTransition) => {
-    const current = activeSlideRef.current;
-    const next = (requestedIndex + showcaseSlides.length) % showcaseSlides.length;
-    if (next === current) return;
-    setPreviousSlide(current);
-    setSlideDirection(requestedDirection ?? (next > current ? "next" : "previous"));
-    setSlideTransition((transition) => transitionOverride ?? nextShowcaseTransition(transition));
-    activeSlideRef.current = next;
-    setActiveSlide(next);
-    dragOffsetRef.current = 0;
-    setDragOffset(0);
-  };
-
-  const startShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!event.isPrimary || event.button > 0) return;
-    dragStartRef.current = event.clientX;
-    dragOffsetRef.current = 0;
-    setDragOffset(0);
-    setIsDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const moveShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (dragStartRef.current === null) return;
-    const offset = event.clientX - dragStartRef.current;
-    dragOffsetRef.current = offset;
-    setDragOffset(offset);
-    if (Math.abs(offset) > 2) {
-      const adjacent = (activeSlideRef.current + (offset < 0 ? 1 : -1) + showcaseSlides.length) % showcaseSlides.length;
-      setPreviousSlide(adjacent);
-    }
-  };
-
-  const finishShowcaseDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (dragStartRef.current === null) return;
-    const offset = dragOffsetRef.current;
-    const threshold = Math.min(110, event.currentTarget.clientWidth * .1);
-    dragStartRef.current = null;
-    setIsDragging(false);
-    if (Math.abs(offset) >= threshold) {
-      const direction = offset < 0 ? "next" : "previous";
-      setReleaseOffset(offset);
-      showSlide(activeSlideRef.current + (direction === "next" ? 1 : -1), direction, "drag");
-    } else {
-      dragOffsetRef.current = 0;
-      setDragOffset(0);
-    }
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
   useEffect(() => {
     if (!donateOpen) return;
     const close = (event: KeyboardEvent) => event.key === "Escape" && setDonateOpen(false);
@@ -177,64 +88,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="showcase-carousel" id="product" aria-label="Snap editor features" onMouseEnter={() => setCarouselHovered(true)} onMouseLeave={() => setCarouselHovered(false)}>
-            <div
-              className={isDragging ? "showcase-stage is-dragging" : "showcase-stage"}
-              data-direction={slideDirection}
-              data-transition={slideTransition}
-              style={{ "--release-offset": `${releaseOffset}px` } as CSSProperties}
-              role="tabpanel"
-              id="product-preview"
-              aria-labelledby={`feature-${showcaseSlides[activeSlide].id}`}
-              onPointerDown={startShowcaseDrag}
-              onPointerMove={moveShowcaseDrag}
-              onPointerUp={finishShowcaseDrag}
-              onPointerCancel={finishShowcaseDrag}
-            >
-              {showcaseSlides.map((slide, index) => index !== activeSlide && index !== previousSlide ? null : (
-                <Image
-                  className={index === activeSlide ? "showcase-slide is-active" : index === previousSlide ? "showcase-slide is-previous" : "showcase-slide"}
-                  src={slide.image}
-                  alt={index === activeSlide ? slide.alt : ""}
-                  aria-hidden={index !== activeSlide}
-                  width={1920}
-                  height={1032}
-                  priority={index === 0}
-                  unoptimized
-                  sizes="(max-width: 900px) 96vw, 1280px"
-                  draggable={false}
-                  style={index === activeSlide && isDragging ? { transform: `translate3d(${dragOffset}px, 0, 0)` } : undefined}
-                  key={slide.image}
-                />
-              ))}
-              <span className="showcase-drag-hint" aria-hidden="true">Drag to explore</span>
-            </div>
-            <div className="showcase-navigation">
-            <div className="showcase-tabs" role="tablist" aria-label="Choose a Snap feature" onKeyDown={event => {
-              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-              event.preventDefault();
-              const next = event.key === "Home" ? 0 : event.key === "End" ? showcaseSlides.length - 1 : (activeSlideRef.current + (event.key === "ArrowRight" ? 1 : -1) + showcaseSlides.length) % showcaseSlides.length;
-              showSlide(next); document.getElementById(`feature-${showcaseSlides[next].id}`)?.focus();
-            }}>
-              {showcaseSlides.map((slide, index) => (
-                <button
-                  className={index === activeSlide ? "is-active" : ""}
-                  type="button"
-                  role="tab"
-                  id={`feature-${slide.id}`}
-                  aria-controls="product-preview"
-                  tabIndex={index === activeSlide ? 0 : -1}
-                  aria-selected={index === activeSlide}
-                  onClick={() => showSlide(index)}
-                  key={slide.label}
-                >
-                  {slide.label}
-                </button>
-              ))}
-            </div>
-            <button className="showcase-pause" aria-label={carouselPaused ? "Resume screenshot rotation" : "Pause screenshot rotation"} onClick={() => setCarouselPaused(value => !value)}>{carouselPaused ? <Play size={14} /> : <Pause size={14} />}</button>
-            </div>
-          </div>
+          <ScreenshotCarousel />
         </section>
 
         <PromoFilm />
