@@ -9,7 +9,6 @@ export const productShots = [
   { id: "tilt", label: "3D tilt", file: "tilt.webp", alt: "Snap screen perspective and 3D tilt controls" },
   { id: "light", label: "Light mode", file: "editor-light.webp", alt: "The same Snap editing workspace in its light theme" },
   { id: "voice", label: "Voice polish", file: "voice.webp", alt: "Snap's local voice polish, hum filter, room-tail reduction and leveling controls" },
-  { id: "layouts", label: "Layouts", file: "layouts.webp", alt: "Landscape, vertical, square, portrait, classic and ultrawide format choices in Snap" },
   { id: "player", label: "Fullscreen preview", file: "player.webp", alt: "The latest full-screen Snap preview with a floating transparent playback dock" },
 ] as const;
 

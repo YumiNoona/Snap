@@ -17,6 +17,7 @@ export default function ScreenshotCarousel() {
   const [direction, setDirection] = useState(1);
   const [width, setWidth] = useState(0);
   const [animating, setAnimating] = useState(false);
+  const [committing, setCommitting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [paused, setPaused] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -53,7 +54,7 @@ export default function ScreenshotCarousel() {
     const state = motion.current;
     if (state.commit && state.to !== null) { activeRef.current = state.to; setActive(state.to); }
     motion.current = { busy: false, to: null, commit: false, offset: 0, direction: 1 };
-    setIncoming(null); setOffset(0); setAnimating(false); setDragging(false);
+    setIncoming(null); setOffset(0); setAnimating(false); setCommitting(false); setDragging(false);
   }, []);
 
   const settle = useCallback((commit: boolean) => {
@@ -61,7 +62,7 @@ export default function ScreenshotCarousel() {
     state.busy = true; state.commit = commit;
     if (reducedRef.current || (!commit && Math.abs(state.offset) < 1)) { finish(); return; }
     const end = commit ? -state.direction * (stage.current?.clientWidth ?? 0) : 0;
-    setAnimating(true); state.offset = end; setOffset(end);
+    setAnimating(true); setCommitting(commit); state.offset = end; setOffset(end);
     // Covers background tabs, interrupted transitions and browsers omitting transitionend.
     timer.current = setTimeout(finish, motionDuration + 120);
   }, [finish]);
@@ -117,7 +118,7 @@ export default function ScreenshotCarousel() {
     return () => clearInterval(rotation);
   }, [active, hovered, paused, reduced, show]);
 
-  const selected = animating && motion.current.commit && incoming !== null ? incoming : active;
+  const selected = animating && committing && incoming !== null ? incoming : active;
   useEffect(() => {
     const strip = dots.current, button = strip?.children[selected] as HTMLElement | undefined;
     if (!strip || !button) return;

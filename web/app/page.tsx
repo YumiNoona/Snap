@@ -26,8 +26,6 @@ function DownloadButton({ light = false }: { light?: boolean }) {
 
 const workflowShots = [
   { title: "Record your way.", file: "recorder.webp", alt: "Snap recorder showing Full Screen, Custom, Window and Device capture options", description: "A screen, a window, a region, or a connected device.", wide: true },
-  { title: "Bring in what you have.", file: "media-import.webp", alt: "Snap's dashed drag-and-drop media import area and recent recordings", description: "Drop in a video and pick up from there.", wide: false },
-  { title: "Stay on script.", file: "teleprompter.webp", alt: "Snap teleprompter with highlighted script text and speaking speed controls", description: "Your talking points, right where you need them.", wide: false },
 ] as const;
 
 export default function Home() {
@@ -62,7 +60,7 @@ export default function Home() {
   };
 
   return (
-    <div className="site-frame" id="top">
+    <div className="site-frame site-intro" id="top">
       <header className="site-nav shell">
         <a className="brand" href="#top" aria-label="Snap home"><BrandMark /><strong>Snap</strong></a>
         <nav aria-label="Primary navigation">
@@ -77,9 +75,10 @@ export default function Home() {
       <main>
         <section className="hero shell">
           <div className="hero-sky">
-            <span className="cloud cloud-one" /><span className="cloud cloud-two" />
+            <span className="cloud cloud-one" aria-hidden="true" /><span className="cloud cloud-two" aria-hidden="true" />
+            <span className="hero-focus-frame" aria-hidden="true"><i /><i /><i /><i /></span>
             <div className="hero-copy">
-              <h1>Record the screen.<br /><span className="accent-line">Direct the attention.</span></h1>
+              <h1><span className="hero-line"><span>Record the screen.</span></span>{" "}<span className="hero-line"><span className="accent-line">Direct the attention.</span></span></h1>
               <p>A lightweight Windows recorder with an editor that adds camera movement, cursor clarity, captions, and polish—without sending your work to the cloud.</p>
               <div className="hero-actions">
                 <DownloadButton />

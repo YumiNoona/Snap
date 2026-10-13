@@ -34,7 +34,6 @@ export default function PromoFilm() {
     <section className="product-film shell" id="film" aria-labelledby="film-title">
       <div className="film-heading">
         <div><span className="section-kicker">A little tour</span><h2 id="film-title">Meet Snap.<br /><span>In 30 seconds.</span></h2></div>
-        <p>Your screen, a smoother camera pass, and the finishing touches that make it yours.</p>
       </div>
       <div className={`film-player${started ? " is-started" : ""}`}>
         <video ref={video} poster="/media/snap-promo-poster.webp" preload="auto" autoPlay={autoplayAllowed} loop playsInline controls muted aria-label="Snap product film, 30 seconds" onPlay={() => { setStarted(true); setError(false); }} onError={() => { setError(true); setStarted(false); }}>
