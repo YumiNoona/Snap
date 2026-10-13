@@ -50,16 +50,15 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            Snap 9.4.1 improves masks, media handling, custom cursors and preview playback.
+            Snap 9.5.0 adds optional export donations and refines the recorder and media-import interface.
 
-            - Six masks: Spotlight, Blur, Magnifier, Mosaic, Redaction and Color focus. Shared source-space positions align effects and handles through crop/zoom and cursor following. Feathered alpha mattes, expansion and applicable inversion controls improve area selection; the lens no longer blurs the whole picture. Redaction stays opaque without fades.
-            - Masks have individual timeline rows. Split masks no longer fade at the internal cut, and animated poses survive start trimming. Rotation transforms the actual matte; rotated lenses retain corner coverage and redaction covers expand one pixel for safe edges. Stacked effects sample the previous result. Sequence-timed masks also work over media in gaps.
-            - Uploads & Media uses cached video posters rather than blank video tags, with graceful loading/error states and retry. Unsupported imported-video codecs get on-demand full-resolution H.264 compatibility media shared by preview/export, without replacing originals. Pointer dragging has a preview ghost, Escape/cancel cleanup, matching timeline snapping and preview drop-at-playhead support.
-            - The transparent maximized-preview player has icon-only skip controls, a preview-only CC toggle and a movable, bounded dock. Preview expansion/restoration uses smooth view transitions where supported and respects reduced motion.
-            - Add named custom PNG cursors to a local library, with image/name validation and adjustable tips. Every editor-open flow maximizes the window; Color & Film sits above Audio.
-            - Recorder setup shows a microphone-level-driven liquid animation. Its lightweight native meter saves no audio and stops while recording, hidden/unfocused or idle.
+            - Every successfully saved MP4, WebM or GIF export shows an optional donation screen with the existing UPI QR code. Not now, Escape, the close icon and backdrop dismiss it. Your video is already saved; no payment or account is required. Failed/cancelled exports do not show it, and repeat successful exports do.
+            - Donation dialogs keep keyboard focus contained, restore focus when closed, respect reduced motion, fit smaller windows and handle clipboard failures without reporting false success. Saved-file actions and optional delivery-package warnings remain available.
+            - Full Screen, Custom, Window and Device card wallpapers are brighter and more colorful. Image-only filters preserve the surrounding dark UI.
+            - Open media now has a centered upload icon and a single Drag and drop label at 60% opacity, inside a dashed drop zone. The separate Choose file button and format list are removed; the whole area can still be clicked or activated with the keyboard to select a file.
+            - Supported native file drags highlight the drop zone without covering the library. Invalid drops show a useful message, failed imports can be retried and pending imports block duplicate file pickers and competing drops.
 
-            Validation includes frontend/native regression tests, real Chromium mask pixels and dock dragging, source checks, production builds and strict Rust linting. Recording remains native and lightweight; software recording fallback is explicit opt-in. These are rectangle/ellipse effects with cursor following and manual pose animation, not After Effects/Premiere object tracking or arbitrary path masks.
+            Validation includes frontend/native regression tests, real-browser donation and import interaction checks, source checks and production builds. Existing masks, custom cursors, media compatibility, preview-player and microphone-meter improvements are retained. Recording remains native and lightweight; software recording fallback is explicit opt-in.
 
             Known capture limitation: the tested Apex Legends window reports WDA_EXCLUDEFROMCAPTURE (0x11). Snap respects Windows capture exclusion; this release does not bypass protection or guarantee Apex capture. The flag does not identify which program applied it or imply a user-facing toggle. See docs/capture.md.
 

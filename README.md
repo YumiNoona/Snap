@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.4.1-10b981?style=flat-square" alt="Version 9.4.1" />
+    <img src="https://img.shields.io/badge/version-9.5.0-10b981?style=flat-square" alt="Version 9.5.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -50,6 +50,7 @@ exports without uploading recordings to a cloud service.
 - Versioned projects, autosave, backup recovery, and missing-sidecar handling
 - Disconnect-safe mobile recording recovery and automatic mobile zoom analysis
 - Signed in-app updates delivered through GitHub Releases
+- Optional, dismissible donation screen after each successfully saved export
 
 The editor's **Refine** tools offer local voice polish with A/B playback,
 format layouts, cropping, click-aware reframing and reusable style presets.
@@ -183,6 +184,11 @@ Official installers, checksums, updater signatures, and release notes are
 published on the [GitHub Releases page](https://github.com/YumiNoona/Snap/releases).
 
 ## Recording library
+
+The **Open media** window has a centered, dashed **Drag and drop** area.
+Drop a supported video anywhere in the window, or click the area (Enter/Space
+also works) to choose a file. Invalid drops show an explanation; pending imports
+cannot open duplicate file pickers or competing videos.
 
 Snap stores recordings in a dedicated `Videos\Snap` library. The main folder
 stays friendly for everyday use while technical project data lives beside each

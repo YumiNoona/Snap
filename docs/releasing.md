@@ -20,7 +20,7 @@ Run all commands from the repository root.
    and workflow release notes too.
 2. Run the validation commands from [the project README](../README.md#validation).
 3. Commit and push the changes.
-4. Create and push a matching tag, for example `v9.4.0`.
+4. Create and push a matching tag, for example `v9.5.0`.
 
 The `Publish Snap update` GitHub workflow builds the Windows installers, signs the updater artifacts, publishes the release, and uploads `latest.json`. Existing Snap installations will then show the in-app update prompt and can download and install the release without opening a browser.
 

@@ -105,6 +105,13 @@ timestamps and offers optional optical-flow frame interpolation. This can help
 slow motion or low-FPS footage, but takes longer and can distort moving text;
 Original frames is the default.
 
+After a video is successfully saved, Snap shows an optional donation screen
+using the existing UPI QR code. Close it with **Not now**, the close icon,
+Escape or the backdrop to return to the saved file's actions. Failed/cancelled
+exports and cancelled save dialogs do not show it; each successful repeat export
+does. A missing optional delivery package does not invalidate the saved video,
+and its warning remains available after dismissing the donation screen.
+
 All tool drawers use consistent outer spacing and scroll without visible
 scrollbar chrome. Removing helper text does not remove processing controls or
 important error/status feedback.

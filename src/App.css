@@ -425,20 +425,33 @@ button:active:not(:disabled),
 
 .donate-modal {
   width: min(590px, calc(100vw - 32px));
-  overflow: hidden;
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  scrollbar-width: none;
   color: var(--text-primary);
-  background: linear-gradient(150deg, rgba(27, 31, 42, .99), rgba(12, 15, 22, .99));
-  border: 1px solid rgba(244, 114, 182, .22);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: 18px;
   box-shadow: 0 30px 90px rgba(0,0,0,.58), 0 0 45px rgba(190,24,93,.08);
   animation: donate-modal-in 220ms var(--ease-out-back) both;
 }
+.donate-modal::-webkit-scrollbar { display: none; }
+.donate-modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-top: 1px solid var(--border-subtle); }
+.donate-modal-footer > span { color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
+.donate-modal-footer > button { flex-shrink: 0; padding: 9px 15px; color: var(--text-primary); background: var(--bg-surface-raised); border: 1px solid var(--border-default); border-radius: 9px; cursor: pointer; }
+.donate-modal-footer > button:hover { border-color: var(--border-strong); background: var(--bg-surface-sunken); }
+.donate-copy .donate-copy-error { color: var(--danger); font-size: 10px; }
+.donate-modal .donate-copy > p, .donate-modal .donate-modal-header p, .donate-modal .donate-trust-note { color: var(--text-secondary); }
+.donate-modal button:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 3px; }
 
 .donate-modal-header { display: flex; align-items: center; gap: 11px; padding: 15px 16px; border-bottom: 1px solid var(--border-subtle); }.donate-modal-mark { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; color: #fb7185; background: rgba(244,63,94,.12); border-radius: 10px; }.donate-modal-header > div { min-width: 0; flex: 1; }.donate-modal-header h2 { margin: 0; font-size: 16px; }.donate-modal-header p { margin: 3px 0 0; color: var(--text-tertiary); font-size: 10px; }.donate-modal-header > button { width: 32px; height: 32px; display: grid; place-items: center; color: var(--text-tertiary); background: transparent; border: 0; border-radius: 8px; cursor: pointer; }.donate-modal-header > button:hover { color: var(--text-primary); background: var(--bg-surface-raised); }
 .donate-modal-body { display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 20px; align-items: center; padding: 20px; }.donate-qr-frame { overflow: hidden; padding: 8px; background: #fff; border-radius: 14px; box-shadow: 0 14px 30px rgba(0,0,0,.28); }.donate-qr-frame img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; }.donate-copy h3 { margin: 0; font-size: 21px; letter-spacing: -.4px; }.donate-copy > p { margin: 8px 0 14px; color: var(--text-tertiary); font-size: 11px; line-height: 1.55; }.donate-upi-copy { width: 100%; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 10px; color: var(--text-secondary); text-align: left; background: rgba(5,8,14,.55); border: 1px solid var(--border-default); border-radius: 10px; cursor: pointer; }.donate-upi-copy:hover { color: var(--text-primary); border-color: rgba(244,114,182,.4); }.donate-upi-copy > span { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }.donate-upi-copy small { color: var(--text-tertiary); font-size: 8px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }.donate-upi-copy strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.donate-upi-copy svg { flex: 0 0 auto; color: #f9a8d4; }.donate-trust-note { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; color: var(--text-tertiary); font-size: 9px; line-height: 1.4; }.donate-trust-note svg { flex: 0 0 auto; color: #86efac; }
 
 @keyframes donate-backdrop-in { from { opacity: 0; } }
 @keyframes donate-modal-in { from { opacity: 0; transform: translateY(8px) scale(.975); } }
+@media (prefers-reduced-motion: reduce) {
+  .donate-modal, .donate-modal-backdrop { animation: none; }
+}
 
 @media (max-width: 560px) {
   .donate-modal-body { grid-template-columns: 1fr; }.donate-qr-frame { width: 190px; margin: 0 auto; }

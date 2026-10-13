@@ -9,6 +9,7 @@ import { outputDuration } from "../../lib/exportTiming";
 import { retainedClips, sequenceDuration } from "../../lib/videoEditing";
 import { layoutExportSize } from "../../lib/editorFinishing";
 import Dropdown from "../shared/Dropdown";
+import DonationDialog from "../shared/DonationDialog";
 
 interface Props {
   videoPath: string;
@@ -21,7 +22,8 @@ interface Props {
   onClose: () => void;
   onCancel: () => void;
   onOpenFile: () => Promise<void>;
-  onExport: (settings: ExportSettings) => Promise<void>;
+  /** True only after the video is saved, including an optional package warning. */
+  onExport: (settings: ExportSettings) => Promise<boolean>;
 }
 
 const PRESETS = [
@@ -79,6 +81,30 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   const exporting = status.startsWith("Exporting") || status === "Finalizing..." || status.startsWith("Cancelling");
   const cancellable = status.startsWith("Exporting");
   const done = status.startsWith("Export Saved") || status.startsWith("Done");
+  const [showDonation, setShowDonation] = useState(false);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const requestRef = useRef(false);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const startExport = async () => {
+    if (requestRef.current) return;
+    requestRef.current = true;
+    setRequestBusy(true);
+    try {
+      // Trigger per completed attempt, not from progress, a filename, or reopening this dialog.
+      if (await onExport(settings)) {
+        if (mountedRef.current) setShowDonation(true);
+      }
+    } catch (error) {
+      console.error("[Snap] Export request failed:", error);
+    } finally {
+      requestRef.current = false;
+      if (mountedRef.current) setRequestBusy(false);
+    }
+  };
   const [fileActionError, setFileActionError] = useState("");
   const [fileActionBusy, setFileActionBusy] = useState(false);
   const fileActionRef = useRef({ busy: false, generation: 0 });
@@ -113,7 +139,7 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   };
   const modalRef = useRef<HTMLElement>(null);
   const actionsRef = useRef({ onClose, exporting });
-  actionsRef.current = { onClose, exporting };
+  actionsRef.current = { onClose, exporting: exporting || requestBusy };
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const focusables = () => Array.from(modalRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']") ?? []).filter((element) => element.offsetParent !== null);
@@ -146,15 +172,15 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
   };
 
   return (
-    <div className="export-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !exporting && onClose()}>
+    <div className="export-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !exporting && !requestBusy && onClose()}>
       <section ref={modalRef} className="export-modal" role="dialog" aria-modal="true" aria-label="Export video">
         <header className="export-modal-header">
           <div><span className="export-eyebrow">READY TO SHARE</span><h2>Export video</h2></div>
-          <button className="export-close" onClick={onClose} disabled={exporting} aria-label="Close export dialog"><X size={18} /></button>
+          <button className="export-close" onClick={onClose} disabled={exporting || requestBusy} aria-label="Close export dialog"><X size={18} /></button>
         </header>
 
         <div className="export-modal-body">
-          <fieldset className="export-main-column" disabled={exporting}>
+          <fieldset className="export-main-column" disabled={exporting || requestBusy}>
             <legend hidden>Export options</legend>
             <div className="export-section-title">Resolution</div>
             <div className="export-preset-grid">
@@ -214,11 +240,12 @@ export default function ExportModal({ videoPath, duration, config, captionTrackC
               <button type="button" className="export-open-button" disabled={fileActionBusy} onClick={() => void runFileAction("open")}><ExternalLink size={17} /> Open file</button>
             </>}
             {done
-              ? <button type="button" className="export-secondary-button export-again-button" disabled={!settings.outputPath.trim()} onClick={() => onExport(settings)}><RefreshCw size={16} /> Export again</button>
-              : <button className="export-start-button" disabled={exporting || !settings.outputPath.trim()} onClick={() => onExport(settings)}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>}
+              ? <button type="button" className="export-secondary-button export-again-button" disabled={requestBusy || !settings.outputPath.trim()} onClick={() => void startExport()}><RefreshCw size={16} /> Export again</button>
+              : <button className="export-start-button" disabled={exporting || requestBusy || !settings.outputPath.trim()} onClick={() => void startExport()}><Download size={17} />{exporting ? "Exporting…" : "Start export"}</button>}
           </div>
         </footer>
       </section>
+      {showDonation && <DonationDialog afterExport onClose={() => setShowDonation(false)} />}
     </div>
   );
 }

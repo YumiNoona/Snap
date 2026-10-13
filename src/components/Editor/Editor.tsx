@@ -654,11 +654,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     if (currentTime > t) seekTo(t);
   };
 
-  const handleExport = async (settings: ExportSettings) => {
-    if (exportAbortRef.current) return;
+  const handleExport = async (settings: ExportSettings): Promise<boolean> => {
+    if (exportAbortRef.current) return false;
     try {
       const selected = await saveDialog({ title: "Export video", defaultPath: settings.outputPath, filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }] });
-      if (!selected) return;
+      if (!selected) return false;
       settings = { ...settings, outputPath: selected };
       const {format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop,motionInterpolation}=settings;
       setConfig(current=>({...current,exportDefaults:{format,fps,quality,captions,normalizeAudio,audioMode,deliveryPackage,loop,motionInterpolation}}));
@@ -704,13 +704,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         } catch (error) {
           console.error("[Snap] Delivery package failed:", error);
           setExportStatus("Export Saved — delivery package incomplete. Export again to retry.");
-          return;
+          return true;
         }
       }
       setExportStatus("Export Saved");
       void result;
+      return true;
     } catch (e) {
       setExportStatus(exportAbortRef.current?.signal.aborted || (e instanceof DOMException && e.name === "AbortError") ? "Export cancelled" : `Export failed: ${userError(e)}`);
+      return false;
     } finally {
       exportAbortRef.current = null;
     }

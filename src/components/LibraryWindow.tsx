@@ -1,18 +1,23 @@
 import { userError } from "../lib/userError";
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowUpRight, CloudUpload, Film, FolderOpen, Play, Search, X } from "lucide-react";
+import { ArrowUpRight, CloudUpload, Film, FolderOpen, LoaderCircle, Play, Search, X } from "lucide-react";
 import "./ModuleWindows.css";
 
 interface MediaFile { name: string; path: string; is_dir: boolean; size: number }
 
-export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log: string) => void }) {
+const VIDEO_EXTENSIONS = ["mp4", "mov", "mkv", "webm", "avi"];
+const isVideo = (path: string) => VIDEO_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
+
+export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log: string) => void | Promise<void> }) {
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
 
   const refresh = async () => {
     try {
@@ -22,40 +27,49 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
   };
   useEffect(() => { void refresh(); }, []);
   const shown = useMemo(() => files.filter((file) => file.name.toLowerCase().includes(search.toLowerCase())), [files, search]);
-  const open = useCallback(async (path: string) => {
-    const log = await invoke<string>("resolve_recording_log_path", { videoPath: path });
-    onOpen(path, log);
+  const open = useCallback(async (path?: string) => {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    setOpening(true);
+    setDragOver(false);
+    setError("");
+    try {
+      const selected = path ?? await openDialog({ multiple: false, directory: false, filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }] });
+      if (!selected) return;
+      const log = await invoke<string>("resolve_recording_log_path", { videoPath: selected });
+      await onOpen(selected, log);
+    } catch (cause) {
+      setError(userError(cause));
+    } finally {
+      openingRef.current = false;
+      setOpening(false);
+    }
   }, [onOpen]);
   useEffect(() => {
     const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter" || payload.type === "over") setDragOver(true);
+      if (openingRef.current) return;
+      if (payload.type === "enter") setDragOver(payload.paths.some(isVideo));
       if (payload.type === "leave") setDragOver(false);
       if (payload.type === "drop") {
         setDragOver(false);
-        const video = payload.paths.find((path) => /\.(mp4|mov|mkv|webm|avi)$/i.test(path));
+        const video = payload.paths.find(isVideo);
         if (video) void open(video);
+        else setError("Choose an MP4, MOV, MKV, WebM or AVI video.");
       }
     });
-    return () => { void unlisten.then((stop) => stop()); };
+    return () => { void unlisten.then((stop) => stop()).catch(() => undefined); };
   }, [open]);
-  const browse = async () => {
-    try {
-      const selected = await openDialog({ multiple: false, directory: false, filters: [{ name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi"] }] });
-      if (selected) await open(selected);
-    } catch (cause) { setError(userError(cause)); }
-  };
 
-  return <div className={`module-window ${dragOver ? "is-drag-over" : ""}`}>
+  return <div className={`module-window library-window ${dragOver ? "is-drag-over" : ""}`}>
     <header className="module-titlebar" data-tauri-drag-region>
       <span className="module-mark"><FolderOpen size={17} /></span><div data-tauri-drag-region><strong data-tauri-drag-region>Open media</strong></div>
-      <button onClick={() => getCurrentWindow().close()}><X size={16} /></button>
+      <button type="button" onClick={() => getCurrentWindow().close()} aria-label="Close media library"><X size={16} /></button>
     </header>
     <main className="library-body">
-      <section className="import-card">
-        <div className="import-card-icon"><CloudUpload size={18} strokeWidth={2.1} /></div>
-        <div className="import-card-copy"><strong>Bring in a video</strong><small>Drop into your next edit</small></div>
-        <button onClick={() => void browse()}>Choose file <ArrowUpRight size={15} /></button>
-      </section>
+      <button type="button" className={`import-card ${dragOver ? "is-drag-over" : ""} ${opening ? "is-opening" : ""}`} aria-label="Import video" aria-busy={opening} disabled={opening} onClick={() => void open()}>
+        <span className="import-card-icon" aria-hidden="true">{opening ? <LoaderCircle size={22} /> : <CloudUpload size={22} strokeWidth={1.8} />}</span>
+        <span className="import-card-label">Drag and drop</span>
+      </button>
       <label className="module-search"><Search size={16} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search recent recordings" /></label>
       <div className="media-list">{shown.map((file, index) => <article className="library-media-card" key={file.path} style={{ "--media-index": index } as CSSProperties}>
         <button className="library-media-preview" onClick={() => void open(file.path)} aria-label={`Open ${file.name}`}>
@@ -73,7 +87,7 @@ export default function LibraryWindow({ onOpen }: { onOpen: (video: string, log:
         </button>
         <div className="library-media-info"><span className="media-icon"><Film size={15} /></span><span><strong>{file.name.replace(/\.[^.]+$/, "")}</strong><small>{Math.max(.1, file.size / 1048576).toFixed(1)} MB · {file.name.split(".").pop()?.toUpperCase()}</small></span></div>
       </article>)}{shown.length === 0 && <div className="module-empty"><Film size={28} /><strong>No recordings found</strong></div>}</div>
-      {error && <p className="module-error">{error}</p>}
+      {error && <p className="module-error" role="alert">{error}</p>}
     </main>
   </div>;
 }
