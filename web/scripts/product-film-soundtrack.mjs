@@ -1,16 +1,17 @@
-// The source MP3 stays local; only its 30-second mix is embedded in the film.
+// The source MP3 stays local; only a balanced excerpt is embedded in each film.
 import { spawn } from 'node:child_process';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 export const productMusic = fileURLToPath(new URL('../public/media/OST.mp3', import.meta.url));
-export const productAudioFilter = [
-  'atrim=start=0:end=30', 'asetpts=PTS-STARTPTS',
+export const createProductAudioFilter = (duration = 30) => [
+  `atrim=start=0:end=${duration}`, 'asetpts=PTS-STARTPTS',
   'loudnorm=I=-18:TP=-1.5:LRA=11',
-  'afade=t=in:st=0:d=0.8', 'afade=t=out:st=28.5:d=1.5',
-  'apad', 'atrim=duration=30', 'aresample=48000',
+  'afade=t=in:st=0:d=0.8', `afade=t=out:st=${duration - 1.5}:d=1.5`,
+  'apad', `atrim=duration=${duration}`, 'aresample=48000',
 ].join(',');
+export const productAudioFilter = createProductAudioFilter();
 
 const run = args => new Promise((resolve, reject) => {
   const child = spawn(process.env.SNAP_FFMPEG || 'ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
