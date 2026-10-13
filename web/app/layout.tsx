@@ -8,7 +8,7 @@ const jetBrainsMono = JetBrains_Mono({ variable: "--font-jetbrains-mono", subset
 export function generateMetadata(): Metadata {
   const host = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "snap-screen-recorder.vercel.app";
   const siteUrl = new URL(`https://${host}`);
-  const ogImage = new URL("/EditorPreview.png", siteUrl).toString();
+  const ogImage = new URL("/screenshots/editor-dark.webp", siteUrl).toString();
   const title = "Snap — Your screen recording, already directed";
   const description = "A native Windows screen recorder and editor with editable Auto Zoom, separate audio tracks, cursor motion, mobile capture, and polished exports.";
 
@@ -17,7 +17,7 @@ export function generateMetadata(): Metadata {
     description,
     metadataBase: siteUrl,
     icons: { icon: "/snap-logo.png", shortcut: "/snap-logo.png", apple: "/snap-logo.png" },
-    openGraph: { title, description, type: "website", images: [{ url: ogImage, width: 1920, height: 1032, alt: "Snap screen recorder and editor" }] },
+    openGraph: { title, description, type: "website", images: [{ url: ogImage, width: 1914, height: 1022, alt: "The actual Snap editor with cursor controls and a multi-track timeline" }] },
     twitter: { card: "summary_large_image", title, description, images: [ogImage] },
   };
 }

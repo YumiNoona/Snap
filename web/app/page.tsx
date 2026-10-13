@@ -4,9 +4,11 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
-  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp,
+  ArrowRight, AudioLines, Check, Copy, Download, Focus, Heart, MonitorUp, Pause, Play,
   ShieldCheck, X,
 } from "lucide-react";
+import PromoFilm from "./PromoFilm";
+import { productShots, screenshotSrc } from "../lib/screenshots";
 
 const UPI_ID = "rushikeshingale2001@okicici";
 
@@ -22,26 +24,11 @@ function DownloadButton({ light = false }: { light?: boolean }) {
   );
 }
 
-const showcaseSlides = [
-  {
-    label: "Editor", image: "/EditorPreview.png",
-    alt: "Snap editor showing canvas controls, video preview, audio waveforms, zoom regions, and captions",
-  },
-  {
-    label: "Motion", image: "/Motion.png", alt: "Motion and camera movement controls in Snap",
-  },
-  {
-    label: "Cursor", image: "/Cursor.png", alt: "Cursor styling controls in Snap",
-  },
-  {
-    label: "Captions", image: "/Caption.png", alt: "Caption styling controls in Snap",
-  },
-  {
-    label: "Effects", image: "/Effects.png", alt: "Layer and visual effect controls in Snap",
-  },
-  {
-    label: "Audio", image: "/Audio.png", alt: "Audio and automatic caption controls in Snap",
-  },
+const showcaseSlides = productShots.map(shot => ({ ...shot, image: screenshotSrc(shot.file) }));
+const workflowShots = [
+  { title: "Record your way.", file: "recorder.webp", alt: "Snap recorder showing Full Screen, Custom, Window and Device capture options", description: "A screen, a window, a region, or a connected device.", wide: true },
+  { title: "Bring in what you have.", file: "media-import.webp", alt: "Snap's dashed drag-and-drop media import area and recent recordings", description: "Drop in a video and pick up from there.", wide: false },
+  { title: "Stay on script.", file: "teleprompter.webp", alt: "Snap teleprompter with highlighted script text and speaking speed controls", description: "Your talking points, right where you need them.", wide: false },
 ] as const;
 
 const showcaseTransitions = ["horizontal", "diagonal", "zoom", "reveal"] as const;
@@ -62,13 +49,16 @@ export default function Home() {
   const [dragOffset, setDragOffset] = useState(0);
   const [releaseOffset, setReleaseOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [carouselPaused, setCarouselPaused] = useState(false);
+  const [carouselHovered, setCarouselHovered] = useState(false);
   const activeSlideRef = useRef(0);
   const dragStartRef = useRef<number | null>(null);
   const dragOffsetRef = useRef(0);
 
   useEffect(() => {
+    if (carouselPaused || carouselHovered || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => {
-      if (dragStartRef.current !== null) return;
+      if (dragStartRef.current !== null || document.hidden || document.activeElement?.closest(".showcase-carousel")) return;
       const current = activeSlideRef.current;
       const next = (current + 1) % showcaseSlides.length;
       setPreviousSlide(current);
@@ -78,7 +68,7 @@ export default function Home() {
       setActiveSlide(next);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [carouselPaused, carouselHovered]);
 
   const showSlide = (requestedIndex: number, requestedDirection?: "next" | "previous", transitionOverride?: ShowcaseTransition) => {
     const current = activeSlideRef.current;
@@ -182,31 +172,35 @@ export default function Home() {
               <p>A lightweight Windows recorder with an editor that adds camera movement, cursor clarity, captions, and polish—without sending your work to the cloud.</p>
               <div className="hero-actions">
                 <DownloadButton />
-                <a className="button button-secondary" href="#product">See how it works <ArrowRight size={15} /></a>
+                <a className="button button-secondary" href="#film">Watch the film <Play size={15} /></a>
               </div>
             </div>
           </div>
 
-          <div className="showcase-carousel" id="product" aria-label="Snap editor features">
+          <div className="showcase-carousel" id="product" aria-label="Snap editor features" onMouseEnter={() => setCarouselHovered(true)} onMouseLeave={() => setCarouselHovered(false)}>
             <div
               className={isDragging ? "showcase-stage is-dragging" : "showcase-stage"}
               data-direction={slideDirection}
               data-transition={slideTransition}
               style={{ "--release-offset": `${releaseOffset}px` } as CSSProperties}
-              aria-live="polite"
+              role="tabpanel"
+              id="product-preview"
+              aria-labelledby={`feature-${showcaseSlides[activeSlide].id}`}
               onPointerDown={startShowcaseDrag}
               onPointerMove={moveShowcaseDrag}
               onPointerUp={finishShowcaseDrag}
               onPointerCancel={finishShowcaseDrag}
             >
-              {showcaseSlides.map((slide, index) => (
+              {showcaseSlides.map((slide, index) => index !== activeSlide && index !== previousSlide ? null : (
                 <Image
                   className={index === activeSlide ? "showcase-slide is-active" : index === previousSlide ? "showcase-slide is-previous" : "showcase-slide"}
                   src={slide.image}
-                  alt={slide.alt}
+                  alt={index === activeSlide ? slide.alt : ""}
+                  aria-hidden={index !== activeSlide}
                   width={1920}
                   height={1032}
                   priority={index === 0}
+                  unoptimized
                   sizes="(max-width: 900px) 96vw, 1280px"
                   draggable={false}
                   style={index === activeSlide && isDragging ? { transform: `translate3d(${dragOffset}px, 0, 0)` } : undefined}
@@ -215,20 +209,43 @@ export default function Home() {
               ))}
               <span className="showcase-drag-hint" aria-hidden="true">Drag to explore</span>
             </div>
-            <div className="showcase-tabs" role="tablist" aria-label="Choose a Snap feature">
+            <div className="showcase-navigation">
+            <div className="showcase-tabs" role="tablist" aria-label="Choose a Snap feature" onKeyDown={event => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const next = event.key === "Home" ? 0 : event.key === "End" ? showcaseSlides.length - 1 : (activeSlideRef.current + (event.key === "ArrowRight" ? 1 : -1) + showcaseSlides.length) % showcaseSlides.length;
+              showSlide(next); document.getElementById(`feature-${showcaseSlides[next].id}`)?.focus();
+            }}>
               {showcaseSlides.map((slide, index) => (
                 <button
                   className={index === activeSlide ? "is-active" : ""}
                   type="button"
                   role="tab"
+                  id={`feature-${slide.id}`}
+                  aria-controls="product-preview"
+                  tabIndex={index === activeSlide ? 0 : -1}
                   aria-selected={index === activeSlide}
                   onClick={() => showSlide(index)}
                   key={slide.label}
                 >
-                  <span>{String(index + 1).padStart(2, "0")}</span>{slide.label}
+                  {slide.label}
                 </button>
               ))}
             </div>
+            <button className="showcase-pause" aria-label={carouselPaused ? "Resume screenshot rotation" : "Pause screenshot rotation"} onClick={() => setCarouselPaused(value => !value)}>{carouselPaused ? <Play size={14} /> : <Pause size={14} />}</button>
+            </div>
+          </div>
+        </section>
+
+        <PromoFilm />
+
+        <section className="real-workflow shell" aria-labelledby="real-workflow-title">
+          <div className="real-workflow-heading"><span className="section-kicker">The actual app</span><h2 id="real-workflow-title">A small studio.<br />Right on your desktop.</h2></div>
+          <div className="real-workflow-grid">
+            {workflowShots.map(shot => <article className={shot.wide ? "is-wide" : ""} key={shot.file}>
+              <div className="real-workflow-image"><Image src={screenshotSrc(shot.file)} alt={shot.alt} width={1180} height={shot.wide ? 340 : 600} unoptimized sizes="(max-width: 760px) 90vw, 650px" /></div>
+              <div><h3>{shot.title}</h3><p>{shot.description}</p></div>
+            </article>)}
           </div>
         </section>
 
