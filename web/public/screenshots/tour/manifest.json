@@ -1,0 +1,115 @@
+{
+  "source": "Real Snap React components with demo state; no native operations performed.",
+  "deviceScaleFactor": 2,
+  "assets": {
+    "canvas-gradients": {
+      "file": "canvas-gradients.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Canvas styling with built-in gradients and custom gradient stops."
+    },
+    "canvas-colors": {
+      "file": "canvas-colors.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Canvas background colors and custom color picker."
+    },
+    "canvas-images": {
+      "file": "canvas-images.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Wallpaper library and Add image import control."
+    },
+    "cursor": {
+      "file": "cursor.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Default pointer, five real cursor packs, and click effects."
+    },
+    "motion-blur": {
+      "file": "motion-blur.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Enabled motion blur and cursor movement controls."
+    },
+    "auto-zoom": {
+      "file": "auto-zoom.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Automatic camera style, intent, and shot timing controls."
+    },
+    "camera-curves": {
+      "file": "camera-curves.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Camera curve, transition, and duration controls."
+    },
+    "tilt": {
+      "file": "tilt.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Isometric 3D tilt with animation keyframe controls."
+    },
+    "layers": {
+      "file": "layers.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Text, shapes, and masks."
+    },
+    "actions": {
+      "file": "actions.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Keys, clicks, and action overlay styling."
+    },
+    "audio": {
+      "file": "audio.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Independent system and microphone mixing."
+    },
+    "captions": {
+      "file": "captions.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Model-ready automatic captions controls; demo environment, no transcription executed."
+    },
+    "color-looks": {
+      "file": "color-looks.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Film looks and basic color correction."
+    },
+    "color-correction": {
+      "file": "color-correction.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Exposure, contrast, saturation, warmth, grading scope, and LUT controls."
+    },
+    "rgb-curves": {
+      "file": "rgb-curves.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Real RGB curve editor with a gentle S curve."
+    },
+    "uploads": {
+      "file": "uploads.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Real media library with sample app wallpaper assets."
+    },
+    "media-drop": {
+      "file": "media-drop.webp",
+      "width": 840,
+      "height": 1640,
+      "description": "Active drag-and-drop media target."
+    },
+    "keyframe-graph": {
+      "file": "keyframe-graph.webp",
+      "width": 1900,
+      "height": 1208,
+      "description": "Camera zoom keyframes and animation curves."
+    }
+  },
+  "errors": []
+}
