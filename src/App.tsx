@@ -4,19 +4,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { userError } from "./lib/userError";
-import RecorderLauncher from "./components/RecorderLauncher/RecorderLauncher";
-import DeviceView from "./components/RecorderLauncher/DeviceView";
-import RecordingDock from "./components/RecorderLauncher/RecordingDock";
-import RecordingOverlay from "./components/RecorderLauncher/RecordingOverlay";
-const Editor = React.lazy(() => import("./components/Editor/Editor"));
-import TeleprompterWindow from "./components/Teleprompter/TeleprompterWindow";
-import SettingsWindow from "./components/Settings/SettingsWindow";
-import LibraryWindow from "./components/LibraryWindow";
-import DonateWindow from "./components/DonateWindow";
-import WindowPickerWindow from "./components/RecorderLauncher/WindowPickerWindow";
 import "./App.css";
 import "./GlassSurfaces.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
+
+const RecorderLauncher = React.lazy(() => import("./components/RecorderLauncher/RecorderLauncher"));
+const DeviceView = React.lazy(() => import("./components/RecorderLauncher/DeviceView"));
+const RecordingDock = React.lazy(() => import("./components/RecorderLauncher/RecordingDock"));
+const RecordingOverlay = React.lazy(() => import("./components/RecorderLauncher/RecordingOverlay"));
+const Editor = React.lazy(() => import("./components/Editor/Editor"));
+const TeleprompterWindow = React.lazy(() => import("./components/Teleprompter/TeleprompterWindow"));
+const SettingsWindow = React.lazy(() => import("./components/Settings/SettingsWindow"));
+const LibraryWindow = React.lazy(() => import("./components/LibraryWindow"));
+const DonateWindow = React.lazy(() => import("./components/DonateWindow"));
+const WindowPickerWindow = React.lazy(() => import("./components/RecorderLauncher/WindowPickerWindow"));
 
 interface ErrorBoundaryState {
   hasError: boolean;

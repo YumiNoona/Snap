@@ -176,6 +176,10 @@ export default function Timeline({
 }: Props) {
   const [editTool, setEditTool] = useState<"select" | "razor">("select");
   const [timeView, setTimeView] = useState<"sequence" | "source">("sequence");
+  const selectedSequenceLayer = layers.find((layer) => layer.id === selectedLayerId && layer.timeSpace === "sequence")?.id;
+  useEffect(() => {
+    if (selectedSequenceLayer) setTimeView("sequence");
+  }, [selectedSequenceLayer]);
   const [showGraph,setShowGraph]=useState(false);
   const [cutGuide,setCutGuide]=useState<{id:string;time:number;left:number}|null>(null);
   useEffect(()=>{setCutGuide(null);if(editTool==="razor")setTimeView("sequence");},[editTool]);
@@ -237,6 +241,24 @@ export default function Timeline({
   }, [clips, selectedClip, selectedClipIds, onVideoClipsChange, videoLocked,selectedAudio,audioTracks,audioDurations,config.lockedTracks,onAudioTrackChange,duration,selectedMedia,onLayerDelete]);
   const [thumbnailStrip,setThumbnailStrip]=useState<string|null>(null);
   useEffect(()=>{let cancelled=false;setThumbnailStrip(null);if(videoPath)void invoke<string>("editor_cached_media",{path:videoPath,kind:"thumbnails"}).then(path=>{if(!cancelled)setThumbnailStrip(convertFileSrc(path));}).catch(()=>{});return ()=>{cancelled=true;};},[videoPath]);
+  const videoLayerKey = JSON.stringify([...new Set(layers.flatMap(layer => layer.type === "video" ? [layer.path] : []))].sort());
+  const [layerFilmstrips, setLayerFilmstrips] = useState<Record<string, string>>({});
+  const filmstripRequests = useRef(new Map<string, Promise<string>>());
+  useEffect(() => {
+    let cancelled = false;
+    const paths = JSON.parse(videoLayerKey) as string[];
+    for (const path of paths) {
+      let request = filmstripRequests.current.get(path);
+      if (!request) {
+        request = invoke<string>("editor_cached_media", { path, kind: "thumbnails" }).then(path => convertFileSrc(path));
+        filmstripRequests.current.set(path, request);
+      }
+      void request.then(atlas => {
+        if (!cancelled) setLayerFilmstrips(current => ({ ...current, [path]: atlas }));
+      }).catch(() => filmstripRequests.current.delete(path));
+    }
+    return () => { cancelled = true; };
+  }, [videoLayerKey]);
   const [actionEvents, setActionEvents] = useState<DisplayAction[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -1131,6 +1153,56 @@ export default function Timeline({
   {id:"tilt",name:"3D tilt",keys:(graphClip?.effects?.config.screenTilt?.keys??config.screenTilt?.keys??[]).map(k=>({...k})),maximum:duration,channels:[{id:"tiltX",name:"Tilt X",min:-45,max:45,step:1},{id:"tiltY",name:"Tilt Y",min:-45,max:45,step:1},{id:"rotation",name:"Rotation",min:-180,max:180,step:1},{id:"scale",name:"Scale",min:.05,max:3,step:.01},{id:"perspective",name:"Perspective",min:1.5,max:6,step:.1}],base:{...DEFAULT_SCREEN_TILT,time:0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("tilt"),seek:t=>onSeek(t,graphClip?.id),onChange:next=>{onGraphEdit?.("tilt","tilt",graphClip?.id);onAnimationKeysChange?.("tilt","tilt",next as unknown as ScreenTiltKey[],graphClip?.id);}},
   {id:"camera",name:"Webcam",keys:(config.cameraOverlay.animation??[]).map(k=>({...k})),maximum:duration,channels:poseChannels,base:{time:0,x:config.cameraOverlay.x,y:config.cameraOverlay.y,scale:1,opacity:1,rotation:0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("camera"),seek:t=>onSeek(t,graphClip?.id),onChange:next=>onAnimationKeysChange?.("camera","camera",next as unknown as LayerAnimationKey[])},
   ...layers.map((l):GraphTrack=>({id:l.id,name:mediaLayerName(l),keys:(l.animation??[]).map(k=>({...k})),maximum:l.end-l.start,channels:poseChannels,base:{time:0,x:l.x,y:l.y,scale:1,opacity:l.opacity??1,rotation:l.rotation??0,easing:"ease-in-out"},locked:config.lockedTracks?.includes("annotations"),seek:t=>seekKeyTime(t+l.start,l.timeSpace==="sequence"?"sequence-media":activeClipId),onChange:next=>onAnimationKeysChange?.("layer",l.id,next as unknown as LayerAnimationKey[])}))];
+  const renderLayerLabel = ({ id, type, name }: (typeof layerRows)[number]) => (
+    <div key={id} className={`track-label layer-label ${type}-label`} onContextMenu={e=>trackHeaderMenu(e,name,"annotations","layer",id)} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : type === "video" ? `Video layer: ${name}` : "Text"}>
+      {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : type === "image" ? <ImageIcon size={14} /> : type === "video" ? <Film size={14} /> : <Type size={14} />}<span className="rail-track-name">{name}</span>{trackLock("annotations","annotations")}
+    </div>
+  );
+
+  const renderLayerTrack = ({ id, type, items }: (typeof layerRows)[number]) => (
+    <div key={id} className={`ss-track-row layer-track ${type}-track`}>
+      <div className="layer-connecting-line" />
+      {layerInstances(items).map(({item:layer,clipId,start:visibleStart,end:visibleEnd}) => {
+        const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : mediaLayerName(layer);
+        const width = Math.max(2, w(visibleEnd-visibleStart,visibleStart,clipId));
+        const atlas = layer.type === "video" ? layerFilmstrips[layer.path] : undefined;
+        const frames = layer.type === "video" && atlas ? filmstripFrames(
+          (layer.sourceOffset ?? 0) + Math.max(0, visibleStart - layer.start) * (layer.sourceSpeed ?? 1),
+          (layer.sourceOffset ?? 0) + (visibleEnd - layer.start) * (layer.sourceSpeed ?? 1),
+          layer.sourceDuration ?? (layer.sourceOffset ?? 0) + (layer.end - layer.start) * (layer.sourceSpeed ?? 1),
+          width,
+        ) : [];
+        return (
+          <div
+            key={`${layer.id}-${clipId}`}
+            className={`layer-clip-bar ${type} ${editTool === "razor" ? "razor" : ""} ${selectedLayerId === layer.id ? "selected" : ""}`}
+            data-mask={layer.type === "mask" ? layer.mask : undefined}
+            style={{ left: x(visibleStart,clipId), width }}
+            onPointerDown={(event) => beginLayerEdit(event, layer, "move",clipId)}
+            onClick={(event) => { event.stopPropagation(); if(editTool==="razor" && onLayerSplit && !config.lockedTracks?.includes("annotations")){const rect=event.currentTarget.getBoundingClientRect();const at=visibleStart+(event.clientX-rect.left)/rect.width*(visibleEnd-visibleStart);const parts=splitMediaLayer(layer,at,frameRate);if(parts.length>1)onLayerSplit(layer,parts);} }}
+            onPointerMove={event=>{if(editTool!=="razor"||config.lockedTracks?.includes("annotations"))return;const rect=event.currentTarget.getBoundingClientRect();const time=Math.round((visibleStart+(event.clientX-rect.left)/rect.width*(visibleEnd-visibleStart))*frameRate)/frameRate;setCutGuide(time-layer.start>=1/frameRate-1e-7&&layer.end-time>=1/frameRate-1e-7?{id:layer.id,time,left:(time-visibleStart)/(visibleEnd-visibleStart)*rect.width}:null);}}
+            onPointerLeave={()=>setCutGuide(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ kind: "layer", ...menuPosition(event), layer });
+            }}
+            title={`${name} · drag to move, trim either edge`}
+          >
+            <button className="layer-bar-handle left" onPointerDown={(event) => beginLayerEdit(event, layer, "start",clipId)} aria-label={`Change ${type} start`} />
+            {cutGuide?.id===layer.id&&<span className="timeline-cut-guide" style={{left:cutGuide.left}}><Scissors size={14}/></span>}
+            {atlas && frames.length > 0 && <div className="footage-filmstrip layer-filmstrip" aria-hidden="true">
+              {frames.map((frame, index) => <span key={index} style={{ backgroundImage: `url("${atlas}")`, backgroundPosition: `${frame / 9 * 100}% center` }} />)}
+            </div>}
+            <span className={type === "video" ? "video-layer-title" : undefined}>{name}</span>
+            <button className="layer-bar-handle right" onPointerDown={(event) => beginLayerEdit(event, layer, "end",clipId)} aria-label={`Change ${type} end`} />
+          </div>
+        );
+      })}
+      {items.map(layer=>renderAnimationKeys(layer.animation??[],"layer",layer.id,layer.start,layer.end))}
+    </div>
+  );
+
   return (
     <div
       ref={timelineRootRef}
@@ -1348,7 +1420,8 @@ export default function Timeline({
         <div className="ss-labels-col">
           <div className="timeline-ruler-label" title="Time"><Clock3 size={13} /></div>
           {timeView==="sequence"&&(config.adjustmentLayers??[]).slice().reverse().map(a=><div key={a.id} className="track-label animation-label" title={a.name}><SlidersHorizontal size={14}/><span className="rail-track-name">{a.name}</span>{trackLock("adjustments","adjustments")}</div>)}
-          <div className="track-label video-label" title="Video" onContextMenu={e=>trackHeaderMenu(e,"Video","video","video")}><Film size={15} /><span className="rail-track-name">Video</span><button className="track-lock" aria-label={videoLocked ? "Unlock footage track" : "Lock footage track"} title={videoLocked ? "Unlock footage track" : "Lock footage track"} aria-pressed={videoLocked} onClick={() => onTrackLocksChange?.(videoLocked ? (config.lockedTracks ?? []).filter(id => id !== "video") : [...config.lockedTracks ?? [], "video"])}>{videoLocked ? <Lock size={12}/> : <LockOpen size={12}/>}</button></div>
+          {layerRows.filter((row) => row.type === "video").map(renderLayerLabel)}
+          <div className="track-label video-label" title="Recording footage" onContextMenu={e=>trackHeaderMenu(e,"Recording","video","video")}><Film size={15} /><span className="rail-track-name">Recording</span><button className="track-lock" aria-label={videoLocked ? "Unlock footage track" : "Lock footage track"} title={videoLocked ? "Unlock footage track" : "Lock footage track"} aria-pressed={videoLocked} onClick={() => onTrackLocksChange?.(videoLocked ? (config.lockedTracks ?? []).filter(id => id !== "video") : [...config.lockedTracks ?? [], "video"])}>{videoLocked ? <Lock size={12}/> : <LockOpen size={12}/>}</button></div>
           {timelineAudioTracks.map((track) => {
             const muted = audioTrackMuted(track);
             const label = audioTrackLabel(track);
@@ -1364,11 +1437,7 @@ export default function Timeline({
           {zoomInstances.length > 0 && <div className="track-label zoom-label" title="Zoom" onContextMenu={e=>trackHeaderMenu(e,"Zoom","zoom","zoom")}><Sparkles size={14} /><span className="rail-track-name">Zoom</span>{trackLock("zoom","zoom")}</div>}
           {showActionTrack && <div className="track-label action-label" title="Keys & Clicks" onContextMenu={e=>trackHeaderMenu(e,"Actions","action","action")}><Keyboard size={14} /><span className="rail-track-name">Actions</span>{trackLock("action","actions")}</div>}
           {visibleCaptionTracks.map((track) => <div className="track-label caption-label" title="Captions" key={track.id} onContextMenu={e=>trackHeaderMenu(e,track.name || "Captions","caption","caption",track.id)}><Captions size={14} /><span className="rail-track-name">Captions</span>{trackLock("caption","captions")}</div>)}
-          {layerRows.map(({id, type, name}) => (
-            <div key={id} className={`track-label layer-label ${type}-label`} onContextMenu={e=>trackHeaderMenu(e,name,"annotations","layer",id)} title={type === "shape" ? "Shapes" : type === "mask" ? "Masks" : type === "image" ? "Images" : type === "video" ? "Video overlays" : "Text"}>
-              {type === "shape" ? <Shapes size={14} /> : type === "mask" ? <ScanSearch size={14} /> : type === "image" ? <ImageIcon size={14} /> : type === "video" ? <Film size={14} /> : <Type size={14} />}<span className="rail-track-name">{name}</span>{trackLock("annotations","annotations")}
-            </div>
-          ))}
+          {layerRows.filter((row) => row.type !== "video").map(renderLayerLabel)}
         </div>
 
         {/* Shared timeline columns */}
@@ -1383,6 +1452,7 @@ export default function Timeline({
           </div>
           {/* Video layer */}
           {timeView==="sequence"&&(config.adjustmentLayers??[]).slice().reverse().map(a=><div key={a.id} className="ss-track-row animation-track"><div className={`timeline-adjustment ${a.enabled?"":"bypassed"}`} style={{left:a.start/Math.max(.001,timelineDuration)*effectiveWidth,width:(a.end-a.start)/Math.max(.001,timelineDuration)*effectiveWidth}} onClick={e=>e.stopPropagation()} onPointerDown={e=>{if(e.button!==0||config.lockedTracks?.includes("adjustments"))return;e.stopPropagation();e.preventDefault();const x=e.clientX,edge=(e.target as HTMLElement).dataset.edge;let next=a;const move=(ev:PointerEvent)=>{const delta=Math.round((ev.clientX-x)/effectiveWidth*timelineDuration*frameRate)/frameRate;next=edge==="start"?{...a,start:Math.max(0,Math.min(a.end-1/frameRate,a.start+delta))}:edge==="end"?{...a,end:Math.max(a.start+1/frameRate,a.end+delta)}:{...a,start:Math.max(0,a.start+delta),end:Math.max(0,a.start+delta)+a.end-a.start};bar.style.left=`${next.start/timelineDuration*effectiveWidth}px`;bar.style.width=`${(next.end-next.start)/timelineDuration*effectiveWidth}px`;};const bar=e.currentTarget;const original={left:bar.style.left,width:bar.style.width};const up=()=>{window.removeEventListener("pointermove",move);bar.style.left=original.left;bar.style.width=original.width;onAdjustmentsChange?.((config.adjustmentLayers??[]).map(l=>l.id===a.id?next:l));};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up,{once:true});}}><i data-edge="start"/><span>{a.name}</span><i data-edge="end"/></div></div>)}
+          {layerRows.filter((row) => row.type === "video").map(renderLayerTrack)}
           <div className="ss-track-row video-track">
             {(trimDraft ?? clips).flatMap((clip,index)=>timeView==="sequence"||!clip.gap?[{clip,index}]:[]).map(({clip,index}) => <div
               key={clip.id}
@@ -1566,38 +1636,7 @@ export default function Timeline({
             </div>
           ))}
 
-          {layerRows.map(({id, type, items}) => (
-            <div key={id} className={`ss-track-row layer-track ${type}-track`}>
-              <div className="layer-connecting-line" />
-              {layerInstances(items).map(({item:layer,clipId,start:visibleStart,end:visibleEnd}) => {
-                const name = layer.type === "text" ? layer.content || "Text" : layer.type === "shape" ? layer.shape : mediaLayerName(layer);
-                return (
-                  <div
-                    key={`${layer.id}-${clipId}`}
-                    className={`layer-clip-bar ${type} ${editTool === "razor" ? "razor" : ""} ${selectedLayerId === layer.id ? "selected" : ""}`}
-                    data-mask={layer.type === "mask" ? layer.mask : undefined}
-                    style={{ left: x(visibleStart,clipId), width: Math.max(2, w(visibleEnd-visibleStart,visibleStart,clipId)) }}
-                    onPointerDown={(event) => beginLayerEdit(event, layer, "move",clipId)}
-                    onClick={(event) => { event.stopPropagation(); if(editTool==="razor" && onLayerSplit && !config.lockedTracks?.includes("annotations")){const rect=event.currentTarget.getBoundingClientRect();const at=visibleStart+(event.clientX-rect.left)/rect.width*(visibleEnd-visibleStart);const parts=splitMediaLayer(layer,at,frameRate);if(parts.length>1)onLayerSplit(layer,parts);} }}
-                    onPointerMove={event=>{if(editTool!=="razor"||config.lockedTracks?.includes("annotations"))return;const rect=event.currentTarget.getBoundingClientRect();const time=Math.round((visibleStart+(event.clientX-rect.left)/rect.width*(visibleEnd-visibleStart))*frameRate)/frameRate;setCutGuide(time-layer.start>=1/frameRate-1e-7&&layer.end-time>=1/frameRate-1e-7?{id:layer.id,time,left:(time-visibleStart)/(visibleEnd-visibleStart)*rect.width}:null);}}
-                    onPointerLeave={()=>setCutGuide(null)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setContextMenu({ kind: "layer", ...menuPosition(event), layer });
-                    }}
-                    title={`${name} · drag to move, trim either edge`}
-                  >
-                    <button className="layer-bar-handle left" onPointerDown={(event) => beginLayerEdit(event, layer, "start",clipId)} aria-label={`Change ${type} start`} />
-                    {cutGuide?.id===layer.id&&<span className="timeline-cut-guide" style={{left:cutGuide.left}}><Scissors size={14}/></span>}
-                    <span>{name}</span>
-                    <button className="layer-bar-handle right" onPointerDown={(event) => beginLayerEdit(event, layer, "end",clipId)} aria-label={`Change ${type} end`} />
-                  </div>
-                );
-              })}
-              {items.map(layer=>renderAnimationKeys(layer.animation??[],"layer",layer.id,layer.start,layer.end))}
-            </div>
-          ))}
+          {layerRows.filter((row) => row.type !== "video").map(renderLayerTrack)}
 
           {/* Trim controls belong to the clip, not the audio/zoom tracks. */}
           {duration > 0 && <>

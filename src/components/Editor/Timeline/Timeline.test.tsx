@@ -2,9 +2,43 @@ import { createElement, useState, type ComponentProps } from "react";
 import { act, create } from "react-test-renderer";
 import { expect, it, vi } from "vitest";
 import Timeline from "./index";
-import { DEFAULT_EDITOR_CONFIG, type VideoClip, type AudioTrack } from "../../../lib/types";
+import { DEFAULT_EDITOR_CONFIG, type VideoClip, type AudioTrack, type Layer } from "../../../lib/types";
 vi.mock("react-dom", () => ({ createPortal: (node: unknown) => node }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), convertFileSrc: (path: string) => path }));
+
+it("shows imported video on its own row above the recording footage", async () => {
+  const { invoke } = await import("@tauri-apps/api/core");
+  vi.mocked(invoke).mockResolvedValueOnce("download-strip.jpg");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  vi.stubGlobal("document", { addEventListener: vi.fn(), removeEventListener: vi.fn(), querySelector: vi.fn(() => null) });
+  const layer: Layer = {
+    id: "imported-video", type: "video", path: "download.mp4", timeSpace: "sequence",
+    start: 1, end: 3, sourceDuration: 2, sourceOffset: 0, fit: "contain",
+    x: 0, y: 0, w: 1, h: 1, opacity: 1, rotation: 0, flipX: false, flipY: false,
+  };
+  const props = {
+    inputLogPath: "", audioTracks: [], duration: 5, currentTime: 0, keyframes: [],
+    config: { ...DEFAULT_EDITOR_CONFIG, trimEnd: 5, layers: [layer] },
+    playing: false, playbackStatus: "paused", layers: [layer], captionTracks: [],
+    selectedActionId: null, selectedLayerId: layer.id, selectedCaption: null, selectedZoomRegion: null,
+  } as unknown as ComponentProps<typeof Timeline>;
+  let renderer!: ReturnType<typeof create>;
+  try {
+    await act(async () => { renderer = create(createElement(Timeline, props)); });
+    const rows = renderer.root.findAll(node => node.type === "div" && /ss-track-row.*video-track/.test(node.props.className ?? ""));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].props.className).toContain("layer-track");
+    expect(invoke).toHaveBeenCalledWith("editor_cached_media", { path: "download.mp4", kind: "thumbnails" });
+    expect(rows[0].findByProps({ className: "footage-filmstrip layer-filmstrip" }).findAllByType("span")[0].props.style.backgroundImage)
+      .toBe('url("download-strip.jpg")');
+    expect(rows[0].findByProps({ "aria-label": "Change video start" })).toBeDefined();
+    expect(rows[1].findByProps({ "aria-label": "Footage segment 1" })).toBeDefined();
+  } finally {
+    if (renderer) await act(async () => renderer.unmount());
+    vi.unstubAllGlobals();
+  }
+});
 
 it("redraws loaded audio waveforms when the editor theme changes", async () => {
   const { invoke } = await import("@tauri-apps/api/core");

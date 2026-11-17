@@ -6,6 +6,8 @@ mod caption_install;
 mod capture;
 mod export;
 mod editor_cache;
+mod editor_sources;
+mod link_install;
 mod media_protocol;
 mod recording_health;
 mod input_hook;
@@ -351,23 +353,30 @@ async fn set_editor_suspended_for_recording(
             if payload["requestId"].as_str() == Some(expected_id.as_str()) {
                 if let Ok(mut sender) = sender.lock() {
                     if let Some(sender) = sender.take() {
-                        let _ = sender.send(payload["ready"].as_bool() == Some(true));
+                        let _ = sender.send((
+                            payload["ready"].as_bool() == Some(true),
+                            payload["reason"].as_str() == Some("media-import"),
+                        ));
                     }
                 }
             }
         });
         let emitted = window.emit("recording-starting", &request_id);
-        let ready = if emitted.is_ok() {
-            matches!(
-                tokio::time::timeout(std::time::Duration::from_secs(10), receiver).await,
-                Ok(Ok(true))
-            )
+        let (ready, importing) = if emitted.is_ok() {
+            tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default()
         } else {
-            false
+            (false, false)
         };
         app.unlisten(listener);
         if !ready {
             let _ = window.emit("recording-resuming", ());
+            if importing {
+                return Err("[media-import-busy] Finish media import before recording.".into());
+            }
             return Err("Save your project and finish any active export before recording. If project recovery failed, use Save As first.".into());
         }
         window.hide().map_err(|error| error.to_string())?;
@@ -1543,8 +1552,8 @@ async fn import_audio_file(
     source_path: String,
 ) -> std::result::Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        const AUDIO_EXTENSIONS: [&str; 12] = [
-            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm", "mp4", "mov", "mkv",
+        const AUDIO_EXTENSIONS: [&str; 13] = [
+            "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "webm", "mp4", "mov", "mkv", "avi",
         ];
         let source = PathBuf::from(&source_path);
         access::require(&app, &source)?;
@@ -1585,12 +1594,14 @@ async fn import_audio_file(
                 }
             })
             .collect::<String>();
+        static NEXT_AUDIO_IMPORT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let index = NEXT_AUDIO_IMPORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis();
+            .as_nanos();
         let destination = data_dir.join(format!(
-            "imported_{unique}_{}.wav",
+            "imported_{unique}_{index}_{}.wav",
             safe_name.trim_matches('_')
         ));
         // Normalize once during import. Playback and waveform rendering then
@@ -1943,6 +1954,9 @@ pub fn run() {
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                if window.label() == "editor" {
+                    editor_sources::cancel_link();
+                }
                 export::discard_export_sink_for_window(window.label());
                 export::motion::discard_for_window(window.label());
             }
@@ -1995,6 +2009,12 @@ pub fn run() {
             editor_cache::editor_media_fingerprint,
             recording_health::recording_health,
             editor_cache::cancel_editor_cached_media,
+            editor_sources::stage_editor_source,
+            editor_sources::editor_link_ready,
+            editor_sources::install_editor_link,
+            editor_sources::inspect_editor_link,
+            editor_sources::download_editor_link,
+            editor_sources::cancel_editor_link,
             export::write_delivery_package,
             open_editor_window,
             set_editor_suspended_for_recording,

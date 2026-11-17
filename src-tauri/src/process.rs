@@ -17,7 +17,10 @@ pub(crate) fn recording_diagnostic(message: std::fmt::Arguments<'_>) {
 
 fn resolve_media_tool(requested: &OsStr) -> Option<std::path::PathBuf> {
     let name = requested.to_string_lossy();
-    if !name.eq_ignore_ascii_case("ffmpeg") && !name.eq_ignore_ascii_case("ffprobe") {
+    if !["ffmpeg", "ffprobe", "yt-dlp", "node"]
+        .iter()
+        .any(|tool| name.eq_ignore_ascii_case(tool))
+    {
         return None;
     }
     let executable = format!("{name}.exe");
@@ -55,6 +58,18 @@ fn resolve_media_tool(requested: &OsStr) -> Option<std::path::PathBuf> {
     None
 }
 
+pub(crate) fn media_tool_path(name: &str) -> Option<std::path::PathBuf> {
+    resolve_media_tool(OsStr::new(name)).or_else(|| {
+        let executable = format!("{name}.exe");
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths)
+                .filter(|directory| directory.is_absolute())
+                .map(|directory| directory.join(&executable))
+                .find(|candidate| candidate.is_file())
+        })
+    })
+}
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -62,35 +77,78 @@ use std::os::windows::process::CommandExt;
 use std::os::windows::io::AsRawHandle;
 
 #[cfg(target_os = "windows")]
-fn recording_job_handle() -> std::io::Result<windows::Win32::Foundation::HANDLE> {
-    use std::io::Error;
+fn create_process_job() -> std::io::Result<windows::Win32::Foundation::HANDLE> {
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::JobObjects::{
         CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
-    // The process owns this handle for its entire lifetime. Closing it during
-    // app shutdown (including a crash or forced close) makes Windows terminate
-    // every live capture encoder assigned to the job.
-    static JOB: OnceLock<Result<usize, String>> = OnceLock::new();
-    let raw = JOB.get_or_init(|| unsafe {
-        let job = CreateJobObjectW(None, PCWSTR::null()).map_err(|error| error.to_string())?;
+    unsafe {
+        let job = CreateJobObjectW(None, PCWSTR::null()).map_err(std::io::Error::other)?;
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(
+        if let Err(error) = SetInformationJobObject(
             job,
             JobObjectExtendedLimitInformation,
             &limits as *const _ as *const std::ffi::c_void,
             std::mem::size_of_val(&limits) as u32,
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(job.0 as usize)
+        ) {
+            let _ = CloseHandle(job);
+            return Err(std::io::Error::other(error));
+        }
+        Ok(job)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn recording_job_handle() -> std::io::Result<windows::Win32::Foundation::HANDLE> {
+    use windows::Win32::Foundation::HANDLE;
+    // Windows closes this handle on Snap exit and stops every capture encoder.
+    static JOB: OnceLock<Result<usize, String>> = OnceLock::new();
+    let raw = JOB.get_or_init(|| {
+        create_process_job()
+            .map(|job| job.0 as usize)
+            .map_err(|error| error.to_string())
     });
     match raw {
         Ok(value) => Ok(HANDLE(*value as *mut std::ffi::c_void)),
-        Err(message) => Err(Error::other(message.clone())),
+        Err(message) => Err(std::io::Error::other(message.clone())),
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) struct ProcessJob(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl ProcessJob {
+    pub(crate) fn new() -> std::io::Result<Self> {
+        create_process_job().map(Self)
+    }
+
+    pub(crate) fn spawn(&self, command: &mut Command) -> std::io::Result<Child> {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+
+        let mut child = command.spawn()?;
+        if let Err(error) =
+            unsafe { AssignProcessToJobObject(self.0, HANDLE(child.as_raw_handle())) }
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other(error));
+        }
+        Ok(child)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
     }
 }
 
@@ -129,23 +187,18 @@ pub(crate) fn spawn_recording_child(command: &mut Command) -> std::io::Result<Ch
 /// terminal whenever one of those tools is launched from the installed app.
 pub(crate) fn background_command<S: AsRef<OsStr>>(program: S) -> Command {
     let requested = program.as_ref();
-    let resolved = resolve_media_tool(requested);
+    let resolved = requested
+        .to_str()
+        .filter(|name| name.eq_ignore_ascii_case("ffmpeg") || name.eq_ignore_ascii_case("ffprobe"))
+        .and_then(media_tool_path);
     let mut command = match resolved {
         Some(path) => Command::new(path),
         None if requested.eq_ignore_ascii_case(OsStr::new("ffmpeg"))
             || requested.eq_ignore_ascii_case(OsStr::new("ffprobe")) =>
         {
             let executable = format!("{}.exe", requested.to_string_lossy());
-            let from_path = std::env::var_os("PATH").and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .filter(|directory| directory.is_absolute())
-                    .map(|directory| directory.join(&executable))
-                    .find(|candidate| candidate.is_file())
-            });
             // Never let Windows search the working directory for media tools.
-            Command::new(from_path.unwrap_or_else(|| {
-                std::path::PathBuf::from(r"C:\Program Files\Snap\tools").join(executable)
-            }))
+            Command::new(std::path::PathBuf::from(r"C:\Program Files\Snap\tools").join(executable))
         }
         None => Command::new(requested),
     };

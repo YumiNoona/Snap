@@ -10,11 +10,12 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Keyboard, Camera, Activity, Snowflake, Palette, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Keyboard, Camera, Activity, Snowflake, Palette, Link2, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
 import ExportModal from "./ExportModal";
+import LinkImportDialog from "./LinkImportDialog";
 import FinishingStudio from "./FinishingStudio";
 import PreviewPlayer from "./PreviewPlayer";
 import { useModalFocus } from "./hooks/useModalFocus";
@@ -84,6 +85,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const setSharedCaptionTracks=useCallback((action:SetStateAction<CaptionTrack[]>)=>{if(!scopeRef.current){setRootCaptionTracks(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,captions:typeof action==="function"?action(d.captions):action}:d)}));},[]);
   const setAudioTracks=useCallback((action:SetStateAction<AudioTrack[]>)=>{if(!scopeRef.current){setRootAudioTracks(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,audioTracks:typeof action==="function"?action(d.audioTracks):action}:d)}));},[]);
   const [audioError, setAudioError] = useState("");
+  const [showLinkImport, setShowLinkImport] = useState(false);
+  const [downloadedUpload, setDownloadedUpload] = useState<string>();
+  const linkBusy = useRef(false);
+  const timelineImports = useRef(0);
   const [cameraMedia, setCameraMedia] = useState<{ path: string; startOffsetMs: number } | null>(null);
   const metadataDurationRef = useRef(0);
   const [duration, setDuration] = useState(isBrowserPreview ? 21.44 : 0);
@@ -303,6 +308,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     const unlisten = appWindow.onCloseRequested(async (event) => {
       if (committingClose) return;
       event.preventDefault();
+      if (linkBusy.current || timelineImports.current > 0) return;
       if (exportAbortRef.current) {
         setFileActionStatus("Cancel the active export before closing the editor");
         setShowExport(true);
@@ -331,6 +337,10 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     const unlisten = listen<string>("recording-starting", ({ payload }) => {
       requestId = payload;
       pausePlayback();
+      if (linkBusy.current || timelineImports.current > 0) {
+        void emit("editor-suspended", { requestId: payload, ready: false, reason: "media-import" });
+        return;
+      }
       void (async () => {
         try {
           if (exportAbortRef.current) throw new Error("Finish or cancel the export before recording");
@@ -362,9 +372,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, [videoPath]);
 
   const addAudioSources = useCallback(async (sources: string[], atTime = 0) => {
+    if (!sources.length) return;
+    const targetSequence = scopeRef.current;
+    timelineImports.current++;
     setAudioError("");
     try {
-      if (sources.length === 0) return;
       const additions = await Promise.all(sources.map(async (source, index): Promise<AudioTrack> => {
         const path = await invoke<string>("import_audio_file", { videoPath, sourcePath: source });
         const length = await invoke<number>("probe_media_duration", {path});
@@ -373,6 +385,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           id: `audio-imported-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
           kind: "imported",
           path,
+          sourcePath: source,
           label,
           muted: false,
           volume: 1,
@@ -381,28 +394,45 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           sourceStart:0, sourceEnd:length,
         };
       }));
+      if (scopeRef.current !== targetSequence) {
+        setAudioError("Return to the original sequence and add the audio again.");
+        return;
+      }
       setAudioTracks(current => [...current,...additions]);
       setConfig(current => {
         const clips=retainedClips(current.videoClips,current.trimStart,current.trimEnd||duration);
         const extra=Math.max(...additions.map(track=>(track.start??0)+(track.sourceEnd??0)))-sequenceDuration(clips);
         return extra>0?{...current,videoClips:[...clips,{id:`gap-${crypto.randomUUID()}`,start:0,end:extra,gap:true}]}:current;
       });
-      setActiveTool("audio");
+      setActiveTool((tool) => tool === "uploads" ? tool : "audio");
     } catch (error) {
       setAudioError(`Audio could not be added: ${userError(error)}`);
+    } finally {
+      timelineImports.current--;
     }
   }, [videoPath, duration]);
 
-  const addMediaToTimeline = useCallback(async (paths: string[], atTime = sequencePosition) => {
+  const addMediaToTimeline = useCallback(async (paths: string[], atTime = sequencePosition, fromLink = false) => {
+    if (!paths.length) return;
+    const targetSequence = scopeRef.current;
+    timelineImports.current++;
+    setAudioError("");
     const audio = paths.filter(path => /\.(wav|mp3|m4a|aac|flac|ogg|opus|wma)$/i.test(path));
-    if (audio.length) await addAudioSources(audio, atTime);
-    if (config.lockedTracks?.includes("annotations")) return;
-    const visuals = paths.filter(path => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm)$/i.test(path));
-    if (!visuals.length) return;
-    const start = Math.max(0, Math.round(atTime * sourceFrameRate) / sourceFrameRate);
+    const visuals = paths.filter(path => /\.(png|jpe?g|webp|bmp|gif|mp4|mov|mkv|webm|avi)$/i.test(path));
     try {
-      const additions = await Promise.all(visuals.map(async (path): Promise<Layer> => {
-        const type = /\.(mp4|mov|mkv|webm)$/i.test(path) ? "video" as const : "image" as const;
+      if (audio.length) {
+        const sources = await Promise.all(audio.map(path => invoke<string>("stage_editor_source", { path })));
+        if (scopeRef.current !== targetSequence) return;
+        await addAudioSources(sources, atTime);
+      }
+      if (!visuals.length) return;
+      if (config.lockedTracks?.includes("annotations")) {
+        throw new Error("Unlock the visual layers track to add clips.");
+      }
+      const start = Math.max(0, Math.round(atTime * sourceFrameRate) / sourceFrameRate);
+      const additions = await Promise.all(visuals.map(async (source): Promise<Layer> => {
+        const type = /\.(mp4|mov|mkv|webm|avi)$/i.test(source) ? "video" as const : "image" as const;
+        const path = source === videoPath ? source : await invoke<string>("stage_editor_source", { path: source });
         const length = type === "video" ? await invoke<number>("probe_media_duration", {path}) : 5;
         if (!Number.isFinite(length) || length <= 0) throw new Error("Media duration is unavailable");
         return {
@@ -412,9 +442,27 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           opacity: 1, rotation: 0, flipX: false, flipY: false,
         };
       }));
-      let placement=start;for(const layer of additions){const length=layer.end-layer.start;layer.start=placement;layer.end=placement+length;placement=layer.end;}
-      const videoAudio:AudioTrack[]=[];
-      for(const layer of additions){if(layer.type!=="video")continue;if(!await invoke<boolean>("media_has_audio",{path:layer.path}))continue;const path=await invoke<string>("import_audio_file",{videoPath,sourcePath:layer.path});videoAudio.push({id:`media-audio-${crypto.randomUUID()}`,mediaLayerId:layer.id,kind:"imported",path,label:layer.path.split(/[\\/]/).pop()??"Video audio",muted:false,volume:1,linked:false,start:layer.start,sourceStart:0,sourceEnd:layer.end-layer.start});}
+      let placement = start;
+      const videoAudio: AudioTrack[] = [];
+      for (const layer of additions) {
+        const length = layer.end - layer.start;
+        layer.start = placement;
+        layer.end = placement + length;
+        placement = layer.end;
+        if (layer.type !== "video" || !await invoke<boolean>("media_has_audio", { path: layer.path })) continue;
+        const path = await invoke<string>("import_audio_file", { videoPath, sourcePath: layer.path });
+        videoAudio.push({
+          id: `media-audio-${crypto.randomUUID()}`, mediaLayerId: layer.id, kind: "imported", path,
+          sourcePath: layer.path, label: layer.path.split(/[\\/]/).pop() ?? "Video audio", muted: false,
+          volume: 1, linked: false, start: layer.start, sourceStart: 0, sourceEnd: length,
+        });
+      }
+      if (scopeRef.current !== targetSequence) {
+        throw new Error("Return to the original sequence and add the clips again.");
+      }
+      if (effectEditRef.current.config.lockedTracks?.includes("annotations")) {
+        throw new Error("Unlock the visual layers track to add clips.");
+      }
       setConfig(current => {
         if (current.lockedTracks?.includes("annotations")) return current;
         const clips = retainedClips(current.videoClips,current.trimStart,current.trimEnd||duration);
@@ -423,33 +471,47 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
       });
       if(videoAudio.length)setAudioTracks(tracks=>[...tracks,...videoAudio]);
       setSelectedLayerId(additions[additions.length - 1].id);
-      setSelectedCaption(null); setSelectedZoomRegion(null); setActiveTool("annotations");
-    } catch (error) { setAudioError(`Media could not be added: ${userError(error)}`); }
+      setSelectedCaption(null);
+      setSelectedZoomRegion(null);
+      setActiveTool((tool) => fromLink || tool === "uploads" ? "uploads" : "annotations");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : userError(error);
+      if (fromLink) throw message;
+      setAudioError(`Media could not be added: ${message}`);
+    } finally {
+      timelineImports.current--;
+    }
   }, [addAudioSources, config.lockedTracks, duration, sequencePosition, sourceFrameRate,videoPath]);
 
+  const nativeMediaDrop = useRef<(paths: string[], x: number, y: number) => void>(() => {});
+  nativeMediaDrop.current = (paths, x, y) => {
+    const target = document.elementFromPoint(x, y);
+    if (target?.closest(".uploads-drawer-content, [data-editor-uploads]")) {
+      setActiveTool("uploads");
+      window.dispatchEvent(new CustomEvent<string[]>("snap-import-media", { detail: paths }));
+      return;
+    }
+    if (target?.closest(".ss-preview-center-area")) {
+      void addMediaToTimeline(paths, sequencePosition);
+      return;
+    }
+    const timeline = target?.closest<HTMLElement>(".ss-timeline-col") ??
+      target?.closest(".ss-timeline-container")?.querySelector<HTMLElement>(".ss-timeline-col");
+    if (timeline && duration > 0) {
+      const length = Number(timeline.dataset.timelineDuration) || sequenceDuration(footageClips);
+      const at = mediaDropPosition(x, timeline.getBoundingClientRect(), length, footageClips, timeline.dataset.timeView === "source", timeline.dataset.snapping !== "false", sourceFrameRate).sequence;
+      void addMediaToTimeline(paths, at);
+    }
+  };
   useEffect(() => {
     if (isBrowserPreview || !appWindow) return;
-    const unlisten = appWindow.onDragDropEvent(async ({ payload }) => {
-      if (payload.type !== "drop" || payload.paths.length === 0) return;
-      const scale = await appWindow.scaleFactor();
-      const clientX = payload.position.x / scale;
-      const clientY = payload.position.y / scale;
-      const target = document.elementFromPoint(clientX, clientY);
-      if (target?.closest(".uploads-drawer-content")) {
-        window.dispatchEvent(new CustomEvent<string[]>("snap-import-media", { detail: payload.paths }));
-        return;
-      }
-      const timeline = target?.closest<HTMLElement>(".ss-timeline-col");
-      if (target?.closest(".ss-preview-center-area")) { void addMediaToTimeline(payload.paths, sequencePosition); return; }
-      if (timeline && duration > 0) {
-        const rect = timeline.getBoundingClientRect();
-        const length = Number(timeline.dataset.timelineDuration) || sequenceDuration(footageClips);
-        const at = mediaDropPosition(clientX, rect, length, footageClips, timeline.dataset.timeView === "source", timeline.dataset.snapping !== "false", sourceFrameRate).sequence;
-        void addMediaToTimeline(payload.paths, at);
-      }
+    const unlisten = appWindow.onDragDropEvent(({ payload }) => {
+      if (payload.type !== "drop" || !payload.paths.length) return;
+      const scale = window.devicePixelRatio || 1;
+      nativeMediaDrop.current(payload.paths, payload.position.x / scale, payload.position.y / scale);
     });
     return () => { void unlisten.then((stop) => stop()); };
-  }, [addMediaToTimeline, appWindow, duration, footageClips, isBrowserPreview, sequencePosition, sourceFrameRate]);
+  }, [appWindow, isBrowserPreview]);
   useEffect(() => {
     const drop = (event: Event) => {
       const d = (event as CustomEvent<MediaDragDetail>).detail;
@@ -1083,6 +1145,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         <div className="ss-topbar-right">
+          <button className="ss-theme-toggle" onClick={() => { pausePlayback(); setShowLinkImport(true); }} title="Import from link" aria-label="Import from link" disabled={isBrowserPreview}><Link2 size={17} /></button>
           <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Refine" aria-label="Refine video"><WandSparkles size={16} /></button>
           <button
             className="ss-theme-toggle"
@@ -1125,10 +1188,11 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         <aside className="ss-vertical-tool-palette">
           <button
             className={`ss-tool-icon-btn ${activeTool === "uploads" ? "active" : ""}`}
+            data-editor-uploads
             onClick={() => setActiveTool("uploads")}
             onDoubleClick={() => setActiveTool(null)}
             aria-pressed={activeTool === "uploads"}
-            title="Uploads and media"
+            title="Uploads"
           >
             <Library size={20} /><span className="ss-tool-label">Uploads</span>
           </button>
@@ -1286,7 +1350,9 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
 
         {/* Right Tool Settings Panel Drawer */}
-        {activeTool && <Panels
+        <Panels
+          downloadedUpload={downloadedUpload}
+          onDownloadRegistered={setDownloadedUpload}
           sequenceScopeId={scopeId} referencedSequenceIds={(rootConfig.videoClips??[]).flatMap(c=>c.sequenceId?[c.sequenceId]:[])} onSequenceInsert={insertSequenceAt} onSequenceEdit={openSequence}
           onSequencesChange={nestedSequences=>setRootConfig(c=>({...c,nestedSequences:[...nestedSequences,...(c.nestedSequences??[]).filter(d=>!nestedSequences.some(s=>s.id===d.id)&&(c.videoClips?.some(clip=>clip.sequenceId===d.id)||nestedSequences.some(s=>s.editor.videoClips?.some(clip=>clip.sequenceId===d.id))))]}))}
           colorConfig={config} colorClipId={colorClipId??activeClipId} sequencePosition={sequencePosition} sequenceLength={sequenceDuration(footageClips)} comparison={colorComparison} onComparison={setColorComparison}
@@ -1323,7 +1389,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           audioTracks={audioTracks}
           audioError={audioError}
           onAddAudio={handleAddAudio}
-          onAddAudioSources={addAudioSources}
           onAddMediaToTimeline={addMediaToTimeline}
           onAddManualCaption={() => addManualCaptionAt(currentTime)}
           onAudioTracksChange={(next) => setAudioTracks(current => [...next.filter(t => !config.lockedTracks?.includes(t.id)),...current.filter(t => config.lockedTracks?.includes(t.id))])}
@@ -1334,7 +1399,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           selectedActionId={selectedActionId}
           onSelectAction={setSelectedActionId}
           onSnapLayerToAction={snapLayerToAction}
-        />}
+        />
       </div>
 
       {/* ── Multi-Track Timeline (Screen Studio Style) ─────────────── */}
@@ -1530,6 +1595,12 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
       />
+      {showLinkImport && <LinkImportDialog onClose={() => setShowLinkImport(false)} onBusy={(busy) => { linkBusy.current = busy; }}
+        onImported={async (path) => {
+          setDownloadedUpload(path);
+          setActiveTool("uploads");
+          await addMediaToTimeline([path], sequencePosition, true);
+        }} />}
       {showProjectHealth && <div className="ss-command-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setShowProjectHealth(false)}>
         <section ref={healthRef} tabIndex={-1} className="ss-health-panel" role="dialog" aria-modal="true" aria-label="Project health">
           <header><div><Activity size={20} /><span><strong>Project health</strong><small>Pre-export readiness</small></span></div><button onClick={() => setShowProjectHealth(false)}><X size={17} /></button></header>

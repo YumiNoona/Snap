@@ -75,13 +75,14 @@ export default function RecordingDock() {
   // Keep the visible clock moving even when Windows throttles the minimized
   // launcher WebView. Backend snapshots still correct pause/mute state.
   useEffect(() => {
+    if (!state.recording || state.paused) return;
     const timer = window.setInterval(() => {
       setState((current) => current.recording && !current.paused
         ? { ...current, elapsed: current.elapsed + 1 }
         : current);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [state.recording, state.paused]);
 
   useEffect(() => {
     const un = listen<boolean>("dock-compact", (event) => setCompact(event.payload));

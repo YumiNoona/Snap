@@ -55,7 +55,7 @@ static HOOK_HEALTH: AtomicU8 = AtomicU8::new(0); // 0 idle, 1 starting, 2 listen
 static EVENT_TX: OnceLock<SyncSender<WriterMessage>> = OnceLock::new();
 static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
-static CAPTURE_FPS: AtomicU64 = AtomicU64::new(30);
+static MOUSE_INTERVAL_US: AtomicU64 = AtomicU64::new(1_000_000 / 60);
 // Bitset: Ctrl=1, Shift=2, Alt=4, Meta=8. This is only used to identify
 // shortcuts. Ordinary text remains the privacy-safe "Typing" marker.
 static KEY_MODIFIERS: AtomicU8 = AtomicU8::new(0);
@@ -124,9 +124,7 @@ fn modifier_bit(name: &str) -> u8 {
     }
 }
 
-fn key_name(key: &rdev::Key) -> String {
-    let raw = format!("{key:?}");
-    let bit = modifier_bit(&raw);
+fn key_name(raw: String, bit: u8) -> String {
     if bit != 0 {
         return match bit {
             1 => "Ctrl",
@@ -241,11 +239,7 @@ fn ensure_hook_started() -> std::result::Result<(), String> {
                     // Keep cursor sampling at roughly twice the selected video
                     // rate. More samples cannot appear in the recording and
                     // only add hook callbacks, JSON writes, and editor memory.
-                    let sample_hz = CAPTURE_FPS
-                        .load(Ordering::Relaxed)
-                        .saturating_mul(2)
-                        .clamp(48, 120);
-                    let minimum_interval_us = 1_000_000 / sample_hz;
+                    let minimum_interval_us = MOUSE_INTERVAL_US.load(Ordering::Relaxed);
                     if previous != 0 && now_us.saturating_sub(previous) < minimum_interval_us {
                         return;
                     }
@@ -273,14 +267,14 @@ fn ensure_hook_started() -> std::result::Result<(), String> {
                         event_type: "keydown",
                         x: None,
                         y: None,
-                        key: Some(key_name(&key)),
+                        key: Some(key_name(raw, bit)),
                         button: None,
                     }
                 }
                 EventType::KeyRelease(key) => {
-                    let name = key_name(&key);
                     let raw = format!("{key:?}");
                     let bit = modifier_bit(&raw);
+                    let name = key_name(raw, bit);
                     if bit != 0 {
                         KEY_MODIFIERS.fetch_and(!bit, Ordering::Relaxed);
                     }
@@ -356,7 +350,8 @@ fn ensure_hook_started() -> std::result::Result<(), String> {
 }
 
 pub fn configure_capture_fps(fps: u32) {
-    CAPTURE_FPS.store(fps.clamp(24, 60) as u64, Ordering::Release);
+    let sample_hz = u64::from(fps.clamp(24, 60)) * 2;
+    MOUSE_INTERVAL_US.store(1_000_000 / sample_hz, Ordering::Relaxed);
 }
 
 fn flush_event_queue() -> std::result::Result<(), String> {

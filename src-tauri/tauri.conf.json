@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Snap",
-  "version": "9.5.0",
+  "version": "9.6.0",
   "identifier": "com.ringale.snap",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -63,7 +63,7 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost https://asset.localhost snap-media: http://snap-media.localhost https://snap-media.localhost blob:; connect-src ipc: http://ipc.localhost http://asset.localhost https://asset.localhost",
       "assetProtocol": {
         "enable": true,
-        "scope": ["$VIDEO/Snap", "$VIDEO/Snap/**", "$RESOURCE/**"]
+        "scope": ["$VIDEO/Snap", "$VIDEO/Snap/**", "$RESOURCE/**", "$APPLOCALDATA/editor-sources/**"]
       }
     }
   },

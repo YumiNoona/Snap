@@ -296,6 +296,7 @@ export type AudioTrackKind = "microphone" | "system" | "device" | "imported";
 export interface AudioClip { id: string; sourceStart: number; sourceEnd: number; start: number; videoClipId?: string; linked?: boolean; speed?: number; volume?: number; fadeIn?: number; fadeOut?: number }
 export interface AudioTrack {
   mediaLayerId?: string;
+  sourcePath?: string;
   voicePolish?: { enabled: boolean; strength: number; hum: "off" | "50" | "60"; roomTail: boolean; loudness: boolean };
   id: string;
   kind: AudioTrackKind;

@@ -1,6 +1,7 @@
 /** Product text must never interpolate backend diagnostics or local paths. */
 export function userError(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (text.includes("[media-import-busy]")) return "Finish or cancel the media import in the editor before recording.";
   if (text.includes("[cursor-name]")) return "Enter a cursor name between 1 and 48 characters.";
   if (text.includes("[cursor-exists]")) return "A custom cursor already uses this name. Choose another name.";
   if (text.includes("[cursor-size]")) return "Use a static PNG up to 512 × 512 pixels and smaller than 2 MB.";

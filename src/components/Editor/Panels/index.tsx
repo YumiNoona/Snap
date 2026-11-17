@@ -22,7 +22,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, ImagePlus, Plus, X, Palette, WandSparkles, Captions, Images, Video, ExternalLink, FolderSearch, AlertTriangle, Copy, RefreshCw, type LucideIcon } from "lucide-react";
+import { MousePointer2, Triangle, Diamond, Star, Square, Circle, Minus, ArrowLeft, ArrowRight, Hand, PenLine, Slash, Radio, Disc3, LocateFixed, Sparkles, PartyPopper, Snowflake, ScanSearch, Blend, Search, Trash2, FlipHorizontal2, FlipVertical2, AlignLeft, AlignCenter, AlignRight, AudioWaveform, Languages, Check, ChevronDown, Music2, Plus, X, Palette, WandSparkles, Captions, Images, Video, ExternalLink, FolderSearch, AlertTriangle, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import type { AudioTrack, CaptionTrack, CaptionSegmentSelection, EditorConfig, CursorPackInfo, ImageLayer, Layer, TextLayer, ShapeLayer, MaskLayer, ClickEffect, MovementSpeed, ZoomRegionSettings, AutoZoomPreset } from "../../../lib/types";
 import { AUTO_ZOOM_PRESETS } from "../../../lib/types";
 import { GRADIENT_PRESETS, COLOR_PRESETS, WALLPAPER_PRESETS, gradientToCss, type GradientPreset } from "../../../lib/wallpapers";
@@ -35,6 +35,8 @@ import { buildDisplayActions, resolveDisplayActions, type DisplayAction } from "
 import "./Panels.css";
 
 interface Props {
+  downloadedUpload?: string;
+  onDownloadRegistered: (path: undefined) => void;
   sequenceScopeId?:string;
   referencedSequenceIds?: string[];
   onSequenceInsert?:(id:string)=>void;
@@ -58,7 +60,7 @@ interface Props {
   selectedLayerId: string | null;
   onAddLayer: (layer: Layer) => void;
   onSelectLayer: (id: string | null) => void;
-  activeTab: SidebarToolTab;
+  activeTab: SidebarToolTab | null;
   onAddManualZoom: () => void;
   onRegenerateAutoZoom: () => void;
   onZoomModeChange: (mode: "auto" | "manual") => void;
@@ -69,7 +71,6 @@ interface Props {
   audioTracks: AudioTrack[];
   audioError: string;
   onAddAudio: () => void;
-  onAddAudioSources: (paths: string[]) => Promise<void>;
   onAddMediaToTimeline: (paths: string[], atTime?: number) => void;
   onAddManualCaption: () => void;
   onAudioTracksChange: (tracks: AudioTrack[]) => void;
@@ -121,7 +122,6 @@ const CAPTION_MODEL_OPTIONS: Array<{ value: TranscriptionModel; label: string; d
 const MEDIA_LIBRARY_KEY = "snap.editorMediaLibrary.v1";
 type MediaKind = "image" | "audio" | "video";
 interface MediaAsset { id: string; name: string; path: string; kind: MediaKind; duration?: number }
-interface DuplicateMediaConflict { existing: MediaAsset; incomingPath: string; incomingName: string }
 
 function mediaKind(path: string): MediaKind {
   const extension = path.split(".").pop()?.toLowerCase() ?? "";
@@ -131,7 +131,7 @@ function mediaKind(path: string): MediaKind {
 }
 
 function isSupportedMedia(path: string): boolean {
-  return /\.(png|jpe?g|webp|bmp|gif|wav|mp3|m4a|aac|flac|ogg|opus|wma|mp4|mov|mkv|webm)$/i.test(path);
+  return /\.(png|jpe?g|webp|bmp|gif|wav|mp3|m4a|aac|flac|ogg|opus|wma|mp4|mov|mkv|webm|avi)$/i.test(path);
 }
 
 function fileName(path: string): string {
@@ -162,6 +162,7 @@ const CLICK_EFFECT_ICONS: Record<ClickEffect, LucideIcon> = {
 };
 
 export default function Panels({
+  downloadedUpload, onDownloadRegistered,
   sequenceScopeId,referencedSequenceIds,onSequenceInsert,onSequenceEdit,onSequencesChange,
   colorConfig, colorClipId, sequencePosition=0, sequenceLength=0, comparison, onComparison, onColorConfigChange,
 
@@ -170,7 +171,7 @@ export default function Panels({
   activeTab, onAddManualZoom, onRegenerateAutoZoom, onZoomModeChange,
   selectedZoomRegion, onSelectedZoomChange, onClearSelectedZoom, onDeleteSelectedZoom,
   audioTracks,
-  audioError, onAddAudio, onAddAudioSources, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
+  audioError, onAddAudio, onAddMediaToTimeline, onAddManualCaption, onAudioTracksChange, captionTracks, onCaptionTracksChange, selectedCaption, onSelectCaption, selectedActionId, onSelectAction, onSnapLayerToAction,
 }: Props) {
   const [cursorPacks, setCursorPacks] = useState<CursorPackInfo[]>([]);
   const [selectedMediaIds,setSelectedMediaIds]=useState<string[]>([]);
@@ -210,14 +211,11 @@ export default function Panels({
   });
   const [mediaSearch, setMediaSearch] = useState("");
   const [mediaActionStatus, setMediaActionStatus] = useState("");
-  const [activeMediaKind, setActiveMediaKind] = useState<MediaKind>("image");
+  const [activeMediaKind, setActiveMediaKind] = useState<MediaKind | "all">("all");
   const [mediaDragOver, setMediaDragOver] = useState(false);
   const [mediaContextMenu, setMediaContextMenu] = useState<{ asset: MediaAsset; x: number; y: number } | null>(null);
-  const [pendingMediaImports, setPendingMediaImports] = useState<string[]>([]);
-  const [duplicateMedia, setDuplicateMedia] = useState<DuplicateMediaConflict | null>(null);
   const [pendingMediaRemoval, setPendingMediaRemoval] = useState<MediaAsset | null>(null);
   const mediaContextMenuRef = useRef<HTMLDivElement>(null);
-  const mediaLibraryRef = useRef(mediaLibrary);
   const probedMedia = useRef(new Set<string>());
 
   const update = (patch: Partial<EditorConfig>) => onConfigChange({ ...config, ...patch });
@@ -253,10 +251,10 @@ export default function Panels({
 
   useEffect(() => {
     let cancelled = false;
-    if (!inputLogPath) { setRecordedActions([]); return; }
+    if (activeTab !== "actions" || !inputLogPath) return;
     void loadInputLog(inputLogPath).then((log) => { if (!cancelled) setRecordedActions(buildDisplayActions(log.allEvents)); }).catch(() => { if (!cancelled) setRecordedActions([]); });
     return () => { cancelled = true; };
-  }, [inputLogPath]);
+  }, [inputLogPath, activeTab]);
 
   const resolvedRecordedActions = useMemo(
     () => resolveDisplayActions(recordedActions, config.actionOverlay),
@@ -275,11 +273,15 @@ export default function Panels({
   };
 
   useEffect(() => {
-    mediaLibraryRef.current = mediaLibrary;
-    localStorage.setItem(MEDIA_LIBRARY_KEY, JSON.stringify(mediaLibrary));
+    try {
+      localStorage.setItem(MEDIA_LIBRARY_KEY, JSON.stringify(mediaLibrary));
+    } catch {
+      setMediaActionStatus("Snap could not save the Uploads library.");
+    }
   }, [mediaLibrary]);
 
   useEffect(() => {
+    if (activeTab !== "uploads") return;
     for (const asset of mediaLibrary.assets) {
       if (asset.kind === "image" || asset.duration || probedMedia.current.has(asset.path)) continue;
       probedMedia.current.add(asset.path);
@@ -287,55 +289,50 @@ export default function Panels({
         if (Number.isFinite(length) && length > 0) setMediaLibrary(current => ({ assets: current.assets.map(item => item.path === asset.path ? { ...item, duration: length } : item) }));
       }).catch(() => {});
     }
-  }, [mediaLibrary.assets]);
+  }, [activeTab, mediaLibrary.assets]);
 
-  const addMediaPaths = useCallback((paths: string[]) => {
-    const supported = paths.filter(isSupportedMedia);
-    if (!supported.length) return;
-    setActiveMediaKind(mediaKind(supported[0]));
-    setPendingMediaImports((current) => [...current, ...supported]);
+  const registerMedia = useCallback((paths: string[]) => {
+    setMediaLibrary(({ assets }) => {
+      const next = [...assets];
+      for (const path of paths) {
+        if (next.some((item) => item.path.toLowerCase() === path.toLowerCase())) continue;
+        const baseName = fileName(path);
+        const names = next.map((item) => item.name);
+        const name = names.some((existing) => existing.toLowerCase() === baseName.toLowerCase())
+          ? numberedMediaName(baseName, names) : baseName;
+        next.push({ id: path.toLowerCase(), path, name, kind: mediaKind(path) });
+      }
+      return next.length === assets.length ? { assets } : { assets: next };
+    });
+    setActiveMediaKind("all");
+    setMediaSearch("");
   }, []);
 
-  useEffect(() => {
-    if (duplicateMedia || pendingMediaImports.length === 0) return;
-    const incomingPath = pendingMediaImports[0];
-    setPendingMediaImports((current) => current.slice(1));
-    const current = mediaLibraryRef.current;
-    if (current.assets.some((asset) => asset.path.toLowerCase() === incomingPath.toLowerCase())) return;
-    const incomingName = fileName(incomingPath);
-    const existing = current.assets.find((asset) => asset.name.toLowerCase() === incomingName.toLowerCase());
-    if (existing) {
-      setDuplicateMedia({ existing, incomingPath, incomingName });
-      return;
+  const addMediaPaths = useCallback(async (paths: string[]) => {
+    if (!paths.length) return;
+    setMediaActionStatus("Importing files…");
+    let failed = 0;
+    const staged: string[] = [];
+    for (const path of paths) {
+      if (!isSupportedMedia(path)) {
+        failed++;
+        continue;
+      }
+      try {
+        staged.push(await invoke<string>("stage_editor_source", { path }));
+      } catch {
+        failed++;
+      }
     }
-    setMediaLibrary((library) => ({ assets: [...library.assets, {
-      id: `media-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      path: incomingPath,
-      kind: mediaKind(incomingPath),
-      name: incomingName,
-    }] }));
-  }, [duplicateMedia, pendingMediaImports]);
+    if (staged.length) registerMedia(staged);
+    setMediaActionStatus(failed ? `${failed} ${failed === 1 ? "file could" : "files could"} not be imported. Check the file type and location.` : "");
+  }, [registerMedia]);
 
-  const resolveDuplicateMedia = (choice: "replace" | "keep") => {
-    if (!duplicateMedia) return;
-    const { existing, incomingPath, incomingName } = duplicateMedia;
-    if (choice === "replace") {
-      setMediaLibrary((library) => ({ assets: library.assets.map((asset) => asset.id === existing.id ? {
-        ...asset, path: incomingPath, name: incomingName, kind: mediaKind(incomingPath),
-      } : asset) }));
-      onConfigChange({ ...config, layers: config.layers.map((layer) => (layer.type === "image" || layer.type === "video") && layer.path.toLowerCase() === existing.path.toLowerCase() ? { ...layer, path: incomingPath } : layer) });
-      onAudioTracksChange(audioTracks.map((track) => track.path.toLowerCase() === existing.path.toLowerCase() ? { ...track, path: incomingPath, label: incomingName.replace(/\.[^.]+$/, "") } : track));
-    } else {
-      const renamed = numberedMediaName(incomingName, mediaLibraryRef.current.assets.map((asset) => asset.name));
-      setMediaLibrary((library) => ({ assets: [...library.assets, {
-        id: `media-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        path: incomingPath,
-        kind: mediaKind(incomingPath),
-        name: renamed,
-      }] }));
-    }
-    setDuplicateMedia(null);
-  };
+  useEffect(() => {
+    if (!downloadedUpload) return;
+    registerMedia([downloadedUpload]);
+    onDownloadRegistered(undefined);
+  }, [downloadedUpload, onDownloadRegistered, registerMedia]);
 
   const requestMediaRemoval = (asset: MediaAsset) => {
     setMediaContextMenu(null);
@@ -345,26 +342,27 @@ export default function Panels({
   const confirmMediaRemoval = () => {
     if (!pendingMediaRemoval) return;
     const asset = pendingMediaRemoval;
-    const matchingLayers = config.layers.filter((layer) => (layer.type === "image" || layer.type === "video") && layer.path.toLowerCase() === asset.path.toLowerCase());
     setMediaLibrary((library) => ({ assets: library.assets.filter((item) => item.id !== asset.id) }));
-    onConfigChange({ ...config, layers: config.layers.filter((layer) => !((layer.type === "image" || layer.type === "video") && layer.path.toLowerCase() === asset.path.toLowerCase())) });
-    onAudioTracksChange(audioTracks.filter((track) => track.path.toLowerCase() !== asset.path.toLowerCase()));
-    if (matchingLayers.some((layer) => layer.id === selectedLayerId)) onSelectLayer(null);
+    setSelectedMediaIds((ids) => ids.filter((id) => id !== asset.id));
     setPendingMediaRemoval(null);
   };
 
   const importMedia = async () => {
-    const selected = await openDialog({
+    try {
+      const selected = await openDialog({
       multiple: true,
       directory: false,
       title: "Upload media",
-      filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mov", "mkv", "webm"] }],
-    });
-    addMediaPaths(typeof selected === "string" ? [selected] : selected ?? []);
+      filters: [{ name: "Media", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "mp4", "mov", "mkv", "webm", "avi"] }],
+      });
+      await addMediaPaths(typeof selected === "string" ? [selected] : selected ?? []);
+    } catch (error) {
+      setMediaActionStatus(userError(error));
+    }
   };
 
   useEffect(() => {
-    const receive = (event: Event) => addMediaPaths((event as CustomEvent<string[]>).detail ?? []);
+    const receive = (event: Event) => { void addMediaPaths((event as CustomEvent<string[]>).detail ?? []); };
     window.addEventListener("snap-import-media", receive);
     return () => window.removeEventListener("snap-import-media", receive);
   }, [addMediaPaths]);
@@ -375,7 +373,11 @@ export default function Panels({
     // native listener is only needed in the packaged desktop application.
     if (!("__TAURI_INTERNALS__" in window)) return;
     const unlisten = getCurrentWindow().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter" || payload.type === "over") setMediaDragOver(true);
+      if (payload.type === "enter" || payload.type === "over") {
+        const scale = window.devicePixelRatio || 1;
+        const target = document.elementFromPoint(payload.position.x / scale, payload.position.y / scale);
+        setMediaDragOver(Boolean(target?.closest(".uploads-drawer-content")));
+      }
       if (payload.type === "leave") setMediaDragOver(false);
       if (payload.type === "drop") {
         setMediaDragOver(false);
@@ -383,7 +385,15 @@ export default function Panels({
       }
     });
     return () => { void unlisten.then((stop) => stop()); };
-  }, [activeTab, addMediaPaths]);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "uploads") {
+      setMediaContextMenu(null);
+      setPendingMediaRemoval(null);
+      setMediaDragOver(false);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!mediaContextMenu) return;
@@ -402,15 +412,14 @@ export default function Panels({
   }, [mediaContextMenu]);
 
   useEffect(() => {
-    if (!duplicateMedia && !pendingMediaRemoval) return;
+    if (!pendingMediaRemoval) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setDuplicateMedia(null);
       setPendingMediaRemoval(null);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [duplicateMedia, pendingMediaRemoval]);
+  }, [pendingMediaRemoval]);
 
   useLayoutEffect(() => {
     const menu = mediaContextMenuRef.current;
@@ -429,13 +438,14 @@ export default function Panels({
   };
 
   useEffect(() => {
+    if (activeTab !== "cursor") return;
     let alive = true;
     (async () => {
       try { const packs = await invoke<CursorPackInfo[]>("list_cursor_packs"); if (alive) setCursorPacks(packs); }
       catch (e) { if (alive) setCursorPacksError(`Failed to load cursor packs: ${userError(e)}`); }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab !== "captions" || transcriptionEnv) return;
@@ -631,9 +641,10 @@ export default function Panels({
   const captionModelReady = Boolean(transcriptionEnv && (captionModel === "auto"
     ? transcriptionEnv.available
     : transcriptionEnv.available && transcriptionEnv.installedModels?.includes(captionModel)));
-  const visibleMedia = mediaLibrary.assets.filter((asset) => asset.kind === activeMediaKind && asset.name.toLowerCase().includes(mediaSearch.trim().toLowerCase()));
-  const pendingRemovalLayerCount = pendingMediaRemoval ? config.layers.filter((layer) => (layer.type === "image" || layer.type === "video") && layer.path.toLowerCase() === pendingMediaRemoval.path.toLowerCase()).length : 0;
-  const pendingRemovalAudioCount = pendingMediaRemoval ? audioTracks.filter((track) => track.path.toLowerCase() === pendingMediaRemoval.path.toLowerCase()).length : 0;
+  const visibleMedia = mediaLibrary.assets.filter((asset) =>
+    (activeMediaKind === "all" || asset.kind === activeMediaKind) &&
+    asset.name.toLowerCase().includes(mediaSearch.trim().toLowerCase())
+  );
   const updateSelectedLayer = (patch: Partial<Layer>) => {
     if (!selectedLayer || config.lockedTracks?.includes("annotations")) return;
     onConfigChange({ ...config, layers: config.layers.map((layer) => layer.id === selectedLayer.id ? ({ ...layer, ...patch } as Layer) : layer) });
@@ -664,6 +675,7 @@ export default function Panels({
     ],
   };
 
+  if (!activeTab) return null;
   return (
     <aside className="ss-panels-drawer">
       {activeTab === "uploads" && (
@@ -675,12 +687,18 @@ export default function Panels({
           onDrop={(event) => {
             event.preventDefault(); setMediaDragOver(false);
             const files = Array.from(event.dataTransfer.files) as Array<File & { path?: string }>;
-            addMediaPaths(files.map((file) => file.path).filter((path): path is string => Boolean(path)));
+            void addMediaPaths(files.map((file) => file.path).filter((path): path is string => Boolean(path)));
           }}
         >
+          <div className="uploads-header">
+            <strong>Uploads</strong>
+            <button type="button" className="ss-drawer-action-btn" onClick={() => void importMedia()}><Plus size={14} /> Upload files</button>
+          </div>
           <label className="media-search"><Search size={15} /><input value={mediaSearch} onChange={(event) => setMediaSearch(event.target.value)} placeholder="Search media" /></label>
           {mediaActionStatus && <p className="caption-status-message" role="status">{mediaActionStatus}</p>}
+          {audioError && <p className="caption-status-message" role="alert">{audioError}</p>}
           <div className="media-kind-tabs" aria-label="Media type">
+            <button type="button" className={activeMediaKind === "all" ? "active" : ""} onClick={() => setActiveMediaKind("all")}>All</button>
             {([ ["image", Images, "Images"], ["video", Video, "Video"], ["audio", Music2, "Audio"] ] as const).map(([kind, Icon, label]) => <button type="button" key={kind} className={activeMediaKind === kind ? "active" : ""} onClick={() => setActiveMediaKind(kind)}><Icon size={14} />{label}</button>)}
           </div>
           <div className="media-asset-list">
@@ -691,9 +709,21 @@ export default function Panels({
                 style={{ "--media-index": index } as CSSProperties}
                 draggable={false}
                 tabIndex={0}
-                onPointerDown={e=>{if((e.target as Element).closest("button"))return;const ids=e.ctrlKey||e.metaKey||e.shiftKey?selectedMediaIds.includes(asset.id)?selectedMediaIds.filter(id=>id!==asset.id):[...selectedMediaIds,asset.id]:selectedMediaIds.includes(asset.id)?selectedMediaIds:[asset.id];setSelectedMediaIds(ids);beginMediaDrag(e,mediaLibrary.assets.filter(a=>ids.includes(a.id)));}}
-                onKeyDown={e=>{if(e.key==="Enter")onAddMediaToTimeline(mediaLibrary.assets.filter(a=>selectedMediaIds.includes(a.id)||a.id===asset.id).map(a=>a.path));}}
-                onDoubleClick={() => addAssetToTimeline(asset)}
+                onPointerDown={event => {
+                  if (event.button !== 0 || (event.target as Element).closest("button")) return;
+                  const selected = selectedMediaIds.includes(asset.id);
+                  const ids = event.ctrlKey || event.metaKey || event.shiftKey
+                    ? selected ? selectedMediaIds.filter((id) => id !== asset.id) : [...selectedMediaIds, asset.id]
+                    : selected ? selectedMediaIds : [asset.id];
+                  setSelectedMediaIds(ids);
+                  if (ids.length) beginMediaDrag(event, mediaLibrary.assets.filter((item) => ids.includes(item.id)));
+                }}
+                onKeyDown={event => {
+                  if (event.key !== "Enter" || event.target !== event.currentTarget) return;
+                  const ids = selectedMediaIds.includes(asset.id) ? selectedMediaIds : [asset.id];
+                  onAddMediaToTimeline(mediaLibrary.assets.filter((item) => ids.includes(item.id)).map((item) => item.path));
+                }}
+                onDoubleClick={(event) => { if (!(event.target as Element).closest("button")) addAssetToTimeline(asset); }}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -709,10 +739,8 @@ export default function Panels({
                 <div className={`media-asset-preview ${asset.kind}`}>
                   <MediaPreview path={asset.path} kind={asset.kind} name={asset.name} />
                   <div className="media-card-actions">
-                    {asset.kind === "audio" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => void onAddAudioSources([asset.path])}><Music2 size={14} /></button>}
-                    {asset.kind === "image" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><ImagePlus size={14} /></button>}
-                    {asset.kind === "video" && <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => onAddMediaToTimeline([asset.path])}><Plus size={14} /></button>}
-                    <button className="danger" title="Remove from library" aria-label={`Remove ${asset.name}`} onClick={() => requestMediaRemoval(asset)}><X size={14} /></button>
+                    <button title="Add to timeline" aria-label={`Add ${asset.name} to timeline`} onClick={() => addAssetToTimeline(asset)}><Plus size={14} /></button>
+                    <button className="danger" title="Remove from Uploads" aria-label={`Remove ${asset.name}`} onClick={() => requestMediaRemoval(asset)}><X size={14} /></button>
                   </div>
                 </div>
                 <span className="media-asset-name"><strong title={asset.name}>{asset.name}</strong></span>
@@ -720,8 +748,7 @@ export default function Panels({
             })}
             {visibleMedia.length === 0 && <button type="button" className={`media-library-empty media-library-drop-target ${mediaDragOver ? "active" : ""}`} onClick={() => void importMedia()} aria-label={`Browse for ${activeMediaKind} files`}>
               {activeMediaKind === "image" ? <Images size={25} /> : activeMediaKind === "video" ? <Video size={25} /> : <Music2 size={25} />}
-              <strong>{mediaDragOver ? "Drop files here" : `No ${activeMediaKind} files yet`}</strong>
-              <span>{mediaDragOver ? "Release to add them to your library." : "Click to browse or drop media here."}</span>
+              <strong>{mediaDragOver ? "Drop files here" : mediaSearch ? "No matching uploads" : "Drop files or browse"}</strong>
             </button>}
           </div>
           {onSequenceInsert&&onSequenceEdit&&onSequencesChange&&<SequenceLibrary sequences={config.nestedSequences??[]} scopeId={sequenceScopeId} referencedIds={referencedSequenceIds} duration={duration} onInsert={onSequenceInsert} onEdit={onSequenceEdit} onChange={onSequencesChange}/>}
@@ -738,7 +765,7 @@ export default function Panels({
             <button role="menuitem" onClick={() => { setMediaActionStatus(""); void invoke("open_media_file", { path: mediaContextMenu.asset.path }).catch(error => { console.error("[Snap] Open media failed:", error); setMediaActionStatus("Windows could not open this file. Use Show in folder to choose an app."); }); setMediaContextMenu(null); }}><ExternalLink size={15} /> Open file</button>
             <button role="menuitem" onClick={() => { setMediaActionStatus(""); void revealItemInDir(mediaContextMenu.asset.path).catch(error => { console.error("[Snap] Reveal media failed:", error); setMediaActionStatus("Windows could not show this file. Check that it is still available."); }); setMediaContextMenu(null); }}><FolderSearch size={15} /> Show in folder</button>
             <div className="media-context-separator" />
-            <button className="danger" role="menuitem" onClick={() => requestMediaRemoval(mediaContextMenu.asset)}><Trash2 size={15} /> Remove from library</button>
+            <button className="danger" role="menuitem" onClick={() => requestMediaRemoval(mediaContextMenu.asset)}><Trash2 size={15} /> Remove from Uploads</button>
           </div>, document.body)}
         </div>
       )}
@@ -1343,25 +1370,11 @@ export default function Panels({
         </div>
       )}
 
-      {duplicateMedia && createPortal(<div className="media-decision-backdrop" role="presentation" onPointerDown={() => setDuplicateMedia(null)}>
-        <section className="media-decision-dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-media-title" onPointerDown={(event) => event.stopPropagation()}>
-          <button type="button" className="media-decision-close" aria-label="Cancel import" onClick={() => setDuplicateMedia(null)}><X size={16} /></button>
-          <span className="media-decision-icon"><Copy size={20} /></span>
-          <h3 id="duplicate-media-title">A file with this name already exists</h3>
-          <p><strong>{duplicateMedia.incomingName}</strong> is already in your media library. Choose how Snap should add the new file.</p>
-          <div className="media-decision-file"><span>Existing</span><strong>{duplicateMedia.existing.name}</strong></div>
-          <div className="media-decision-actions stacked">
-            <button type="button" className="secondary" onClick={() => resolveDuplicateMedia("keep")}><Copy size={15} /><span><strong>Keep both</strong><small>Add it with the next available number</small></span></button>
-            <button type="button" className="primary" onClick={() => resolveDuplicateMedia("replace")}><RefreshCw size={15} /><span><strong>Replace existing</strong><small>Update its timeline references</small></span></button>
-          </div>
-        </section>
-      </div>, document.body)}
-
       {pendingMediaRemoval && createPortal(<div className="media-decision-backdrop" role="presentation" onPointerDown={() => setPendingMediaRemoval(null)}>
         <section className="media-decision-dialog danger" role="dialog" aria-modal="true" aria-labelledby="remove-media-title" onPointerDown={(event) => event.stopPropagation()}>
           <span className="media-decision-icon"><AlertTriangle size={21} /></span>
           <h3 id="remove-media-title">Remove this media?</h3>
-          <p><strong>{pendingMediaRemoval.name}</strong> will be removed from Uploads{pendingRemovalLayerCount + pendingRemovalAudioCount > 0 ? ` and from ${pendingRemovalLayerCount + pendingRemovalAudioCount} timeline ${pendingRemovalLayerCount + pendingRemovalAudioCount === 1 ? "item" : "items"}` : ""}. This cannot be undone.</p>
+          <p>Remove <strong>{pendingMediaRemoval.name}</strong> from the shared source library?</p>
           <div className="media-decision-actions">
             <button type="button" className="secondary" onClick={() => setPendingMediaRemoval(null)}>No, keep it</button>
             <button type="button" className="danger" onClick={confirmMediaRemoval}><Trash2 size={15} /> Yes, remove it</button>

@@ -130,7 +130,8 @@ pub async fn editor_cached_media(
         if recording_active()||generation!=GENERATION.load(Ordering::Relaxed) {return Err("Preview preparation is paused while recording".into());}
         let metadata=source.metadata().map_err(|e|e.to_string())?;
         let mut hasher=std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);metadata.len().hash(&mut hasher);metadata.modified().ok().hash(&mut hasher);kind.hash(&mut hasher);"v3".hash(&mut hasher);
+        source.hash(&mut hasher);metadata.len().hash(&mut hasher);metadata.modified().ok().hash(&mut hasher);kind.hash(&mut hasher);
+        (if kind == "thumbnails" { "v4" } else { "v3" }).hash(&mut hasher);
         let cache=app.path().app_cache_dir().map_err(|e|e.to_string())?.join("editor-media");std::fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
         let voice_filter=voice.as_ref().map(voice_filter).transpose()?;
         voice_filter.hash(&mut hasher);
@@ -139,7 +140,10 @@ pub async fn editor_cached_media(
         if !output.is_file() {
             let temporary=output.with_extension(format!("part.{extension}"));
             let mut command=background_command("ffmpeg");
-            command.args(["-y","-v","error","-threads","2","-i"]).arg(&source);
+            command.args(["-y", "-v", "error"]);
+            if kind != "thumbnails" {
+                command.args(["-threads", "2", "-i"]).arg(&source);
+            }
             if kind=="proxy" {command.args(["-map","0:v:0","-map","0:a:0?","-c:a","aac","-b:a","128k","-vf","scale='min(960,iw)':-2","-c:v","libx264","-preset","veryfast","-crf","24","-pix_fmt","yuv420p","-threads","2","-movflags","+faststart"]);}
             else if kind=="compatible" {
                 // Full-resolution compatibility media, not the low-resolution
@@ -155,7 +159,18 @@ pub async fn editor_cached_media(
             } else {
                 let probe=probe_output(background_command("ffprobe").args(["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1"]).arg(&source),generation)?;
                 let duration=String::from_utf8_lossy(&probe).trim().parse::<f64>().ok().filter(|d|d.is_finite()&&*d>0.0).ok_or("Thumbnail duration is unavailable")?;
-                command.args(["-an","-vf"]).arg(format!("fps={:.9},scale=160:-2,tile=10x1",10.0/duration)).args(["-frames:v","1","-q:v","4"]);
+                // Seek to each bin instead of decoding every frame of a long 4K source.
+                let mut filters = Vec::new();
+                let mut tiles = String::new();
+                for frame in 0..10 {
+                    let time = format!("{:.6}", duration * (frame as f64 + 0.5) / 10.0);
+                    command.args(["-ss", &time, "-threads", "1", "-i"]).arg(&source);
+                    filters.push(format!("[{frame}:v:0]scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2,setsar=1[t{frame}]"));
+                    tiles.push_str(&format!("[t{frame}]"));
+                }
+                filters.push(format!("{tiles}hstack=inputs=10[out]"));
+                command.args(["-filter_complex_threads", "1", "-filter_complex"]).arg(filters.join(";"))
+                    .args(["-an", "-map", "[out]", "-frames:v", "1", "-q:v", "4"]);
             }
             let mut child=command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).arg(&temporary).spawn().map_err(|_|"Unable to start preview preparation. Install FFmpeg in recorder settings.")?;
             let started=Instant::now();
