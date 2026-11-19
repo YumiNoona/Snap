@@ -40,8 +40,21 @@ if ($canPush -ne 'true') { throw "$account does not have push access to $reposit
 Write-Host "Publishing as $account"
 
 Write-Host 'Pushing the prepared source commit and release tag...'
-& git -C $Checkout push --atomic origin HEAD:refs/heads/main refs/tags/v9.7.0
-Check-Exit 'Source and tag push'
+# Use the same authenticated account as the gh API checks above. Reset inherited
+# helpers for this command so stale Git Credential Manager entries cannot win.
+# Keep this scoped to the push; do not rewrite the user's global Git settings.
+$previousGitPrompt = [Environment]::GetEnvironmentVariable('GIT_TERMINAL_PROMPT', 'Process')
+try {
+    $env:GIT_TERMINAL_PROMPT = '0'
+    & git -C $Checkout `
+        -c 'credential.helper=' `
+        -c 'credential.https://github.com.helper=' `
+        -c 'credential.https://github.com.helper=!gh auth git-credential' `
+        push --atomic origin HEAD:refs/heads/main refs/tags/v9.7.0
+    Check-Exit 'Source and tag push using GitHub CLI credentials'
+} finally {
+    [Environment]::SetEnvironmentVariable('GIT_TERMINAL_PROMPT', $previousGitPrompt, 'Process')
+}
 
 # Query the list: a missing release is expected on the first run, not an error.
 $releases = & gh release list --repo $repository --limit 1000 --json tagName
