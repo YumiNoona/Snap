@@ -6,6 +6,12 @@ $ErrorActionPreference = 'Stop'
 $repository = 'YumiNoona/Snap'
 $tag = 'v9.8.0'
 function Check-Exit([string]$Operation) { if ($LASTEXITCODE -ne 0) { throw "$Operation failed (exit $LASTEXITCODE)." } }
+function Get-SnapSha256([string]$Path) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try { return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+    finally { $stream.Dispose(); $algorithm.Dispose() }
+}
 $build = Get-Content -LiteralPath (Join-Path $Artifacts 'build-info.json') -Raw | ConvertFrom-Json
 $commit = & git -C $Checkout rev-parse HEAD
 Check-Exit 'Release checkout check'
@@ -16,7 +22,7 @@ Check-Exit 'Working tree check'
 if ($changes -or $commit -ne $build.commit -or $tagCommit -ne $commit) { throw 'The prepared release source or tag has changed.' }
 foreach ($asset in $build.executables) {
     $path = Join-Path $Artifacts $asset.name
-    if ((Get-Item -LiteralPath $path).VersionInfo.ProductVersion -ne '9.8.0' -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256) { throw "The verified $($asset.name) has changed." }
+    if ([Diagnostics.FileVersionInfo]::GetVersionInfo($path).ProductVersion -ne '9.8.0' -or (Get-SnapSha256 $path) -ne $asset.sha256) { throw "The verified $($asset.name) has changed." }
 }
 Write-Host 'Checking your signed-in GitHub account...'
 $account = & gh api user --jq .login
