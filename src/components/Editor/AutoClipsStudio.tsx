@@ -27,6 +27,7 @@ import {
   formatClipTime,
   mergeClipTranscript,
   rankedClips,
+  naturalClipBounds,
   type ClipAnalysis,
   type ClipCandidate,
   type ClipCaptionOptions,
@@ -75,7 +76,9 @@ const RATIOS: ClipRatio[] = ["9:16", "1:1", "4:5", "16:9"],
   FACE: FrameRect = { x: 0.02, y: 0.02, w: 0.25, h: 0.35 };
 const durationText = (n: number) =>
   `${Math.floor(n / 60)}m ${Math.floor(n % 60)}s`;
+interface ClipFraming { camera: FrameRect; content: FrameRect; fraction: number; template: "stacked" | "full" | "fit" }
 export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
+  const [framings, setFramings] = useState<Record<string, ClipFraming>>({});
   const [extras, setExtras] = useState<AutoClipSource[]>([]),
     [path, setPath] = useState(sources[0]?.path ?? ""),
     [showLink, setShowLink] = useState(false),
@@ -93,7 +96,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
     [mode, setMode] = useState<"auto" | "gaming" | "talking" | "reactions">(
       "gaming",
     ),
-    [flexible, setFlexible] = useState(false),
+    [flexible, setFlexible] = useState(true),
     [detailed, setDetailed] = useState(false);
   const [captions, setCaptions] = useState(true),
     [ccReady, setCcReady] = useState(false),
@@ -125,6 +128,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
     Array<{ name: string; path: string; video: string; log: string }>
   >([]);
   const alive = useRef(true),
+    preparedSpeech = useRef<{path:string;language:string;ranges:Array<{start:number;end:number}>}>({path:"",language:"",ranges:[]}),
     cancelled = useRef(false),
     dialog = useModalFocus(!showLink),
     rangeVideo = useRef<HTMLVideoElement>(null),
@@ -287,23 +291,29 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
       finish();
     }
   };
-  const speech = (
+  const speech = async (
     clips: ClipCandidate[],
     base = 40,
     span = 45,
-  ): Promise<ClipTranscript[]> =>
-    invoke("transcribe_auto_clip_ranges", {
+    context = false,
+  ): Promise<ClipTranscript[]> => {
+    const ranges = clips.map((c) => ({ start: Math.max(rangeStart, c.start - (context ? 2 : 0)), end: Math.min(rangeEnd, c.end + (context ? 3 : 0)) }));
+    const result = await invoke<ClipTranscript[]>("transcribe_auto_clip_ranges", {
       request: {
         path,
         audioPath: source?.audioPath ?? null,
         language,
-        ranges: clips.map((c) => ({ start: c.start, end: c.end })),
+        ranges,
       },
       updates: updates(base, span),
     });
+    if (!cancelled.current) preparedSpeech.current = {path, language, ranges: [...(preparedSpeech.current.path === path && preparedSpeech.current.language === language ? preparedSpeech.current.ranges : []), ...ranges.map(r=>({start:Math.max(0,r.start-.6),end:Math.min(info?.duration??rangeEnd,r.end+.6)}))]};
+    return result;
+  };
   const analyze = async () => {
     if (!source || disabled || !info) return;
     begin("Finding moments");
+    preparedSpeech.current = {path,language,ranges:[]};
     setCreated([]);
     setAnalysis(undefined);
     setCandidates([]);
@@ -326,6 +336,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
             ...result,
             transcript: await speech(
               distinctClips(clips, Math.min(6, Math.max(2, count * 2))),
+              40, 45, flexible,
             ),
           };
         } catch (e) {
@@ -336,15 +347,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
         }
       }
       if (cancelled.current || !alive.current) return;
-      if (flexible)
-        clips = clips.map((c) => {
-          const boundary = result.transcript.find(
-            (s) => s.endMs / 1000 >= c.end - 2 && s.endMs / 1000 <= c.end + 3,
-          );
-          return boundary
-            ? { ...c, end: Math.min(rangeEnd, boundary.endMs / 1000 + 0.2) }
-            : c;
-        });
+      if (flexible) clips = clips.map((c) => naturalClipBounds(result, c));
       clips = clips.map((c) => {
         const text = result.transcript
           .filter((s) => s.endMs > c.start * 1000 && s.startMs < c.end * 1000)
@@ -379,6 +382,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
       }
       if (cancelled.current || !alive.current) return;
       setAnalysis(result);
+      setFramings({});
       setCandidates(clips);
       setSelected(distinctClips(clips, count).map((c) => c.id));
       setActiveId(clips[0]?.id ?? "");
@@ -402,14 +406,16 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
       let current = analysis;
       const chosen = candidates.filter((c) => selected.includes(c.id));
       if (captions) {
-        const added = await speech(chosen, 0, 85);
+        const coverage = preparedSpeech.current;
+        const missing = chosen.filter(c => coverage.path !== path || coverage.language !== language || !coverage.ranges.some(r=>c.start>=r.start && c.end<=r.end));
+        const added = missing.length ? await speech(missing, 0, 85) : [];
         if (cancelled.current) return;
         current = {
           ...analysis,
           transcript: mergeClipTranscript(
             analysis.transcript.filter(
               (s) =>
-                !chosen.some(
+                !missing.some(
                   (c) =>
                     s.endMs > (c.start - 0.6) * 1000 &&
                     s.startMs < (c.end + 0.6) * 1000,
@@ -425,19 +431,20 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
       for (const clip of chosen)
         for (const format of formats) {
           if (cancelled.current) return;
+          const frame = clip.id === active?.id ? { camera, content, fraction, template } : framings[clip.id] ?? { camera: current.facecam ?? FACE, content: FULL, fraction: .38, template: current.facecam ? "stacked" : "full" };
           const project = autoClipProject(
             path,
             current,
             clip,
             format,
-            split,
+            frame.template === "stacked" ? { camera: frame.camera, content: frame.content, fraction: frame.fraction, contentFit: "cover", cameraFit: "cover" } : undefined,
             captions,
             source.audioTracks ?? [],
             hasAudio,
             captionOptions,
             {
-              fit: template === "fit" ? "contain" : "cover",
-              crop: template === "full" ? content : undefined,
+              fit: frame.template === "fit" ? "contain" : "cover",
+              crop: frame.template === "full" ? frame.content : undefined,
             },
           );
           const projectPath = `${recordingDataPaths(path).dataDir}\\auto-clips\\${batch}\\${clip.id}-${format.replace(":", "x")}.snap.json`;
@@ -489,7 +496,18 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
   };
   useEffect(() => {
     setCreated([]);
-  }, [candidates, selected, formats, split, captions, captionOptions]);
+  }, [candidates, selected, formats, split, captions, captionOptions, content, template, framings]);
+  const reviewMoment = (id: string) => {
+    if (id === active?.id) return;
+    if (active) setFramings(old => ({ ...old, [active.id]: { camera, content, fraction, template } }));
+    const frame = framings[id];
+    setCamera(frame?.camera ?? analysis?.facecam ?? FACE);
+    setContent(frame?.content ?? FULL);
+    setFraction(frame?.fraction ?? .38);
+    setTemplate(frame?.template ?? (analysis?.facecam ? "stacked" : "full"));
+    setActiveId(id);
+    setEditRegion(null);
+  };
   const rangeLength = Math.max(0, rangeEnd - rangeStart),
     validRange =
       !!info &&
@@ -712,7 +730,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                 <button
                                   onClick={() => changeRange(0, info.duration)}
                                 >
-                                  Use full video
+                                  Full video
                                 </button>
                               </div>
                               <div className="ac-range-total">
@@ -722,20 +740,16 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                             </div>
                           </div>
                         )}
-                        <div className="ac-guidance">
+                        {info && info.duration > 600 && <div className="ac-guidance">
                           <Clock3 size={18} />
                           <div>
                             <strong>
-                              {info && info.duration <= 600
-                                ? "Ready to analyze"
-                                : rangeLength > 600
+                              {rangeLength > 600
                                   ? "Longer sections take longer to process"
                                   : "A shorter section gets you to clips faster"}
                             </strong>
                             <p>
-                              {info && info.duration <= 600
-                                ? "Use the full video, or narrow the range to focus on a specific section."
-                                : info && info.duration >= 1200
+                              {info && info.duration >= 1200
                                   ? "For a 30–40 minute video, start with a 5–10 minute section. Set Start and End above to choose the part you want."
                                   : "About 5–10 minutes is a good starting point. Processing time depends on selected length, your PC and model."}
                               {rangeLength > 600
@@ -743,7 +757,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                 : ""}
                             </p>
                           </div>
-                        </div>
+                        </div>}
                       </div>
                     )}
                     {step === 1 && (
@@ -938,55 +952,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                     )}
                     {step === 2 && analysis && active && (
                       <div className="ac-review">
-                        <aside className="ac-candidates">
-                          <div>
-                            <h3>Suggested moments</h3>
-                            <small>{selected.length} selected</small>
-                          </div>
-                          {candidates.slice(0, 16).map((c) => (
-                            <article
-                              key={c.id}
-                              className={active.id === c.id ? "active" : ""}
-                            >
-                              <button
-                                type="button"
-                                className="ac-candidate-select"
-                                aria-label={`Select ${c.title}`}
-                                aria-pressed={selected.includes(c.id)}
-                                disabled={
-                                  !selected.includes(c.id) &&
-                                  selected.length >= 6
-                                }
-                                onClick={() =>
-                                  setSelected((old) =>
-                                    old.includes(c.id)
-                                      ? old.filter((id) => id !== c.id)
-                                      : [...old, c.id],
-                                  )
-                                }
-                              >
-                                {selected.includes(c.id) && <Check size={12} />}
-                              </button>
-                              <button onClick={() => setActiveId(c.id)}>
-                                {atlas && (
-                                  <span
-                                    className="ac-thumbnail"
-                                    style={{
-                                      backgroundImage: `url("${atlas}")`,
-                                      backgroundPosition: `${(Math.min(9, Math.floor(((c.start + c.end) / 2 / analysis.duration) * 10)) / 9) * 100}% center`,
-                                    }}
-                                  />
-                                )}
-                                <strong>{c.title}</strong>
-                                <small>
-                                  {formatClipTime(c.start)} ·{" "}
-                                  {(c.end - c.start).toFixed(1)}s
-                                </small>
-                                <span>{c.reason}</span>
-                              </button>
-                            </article>
-                          ))}
-                        </aside>
+
                         <div className="ac-review-main">
                           <AutoClipPreview
                             path={path}
@@ -1086,8 +1052,8 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                 />
                               )}
                               <p className="ac-help">
-                                Panels crop to fill without stretching. Drag the
-                                source boxes to reframe.
+                                Drag the output preview to position the picture.
+                                Use source boxes to choose or resize a region.
                               </p>
                             </div>
                           )}
@@ -1213,11 +1179,59 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                             ))}
                           </fieldset>
                           <p className="ac-help">
-                            Captions refresh for the final cuts when you create
-                            clips. Review activity-based suggestions before
-                            using them.
+                            Captions follow the final cuts; prepared speech is
+                            reused. Preview suggestions before creating clips.
                           </p>
                         </div>
+                        <aside className="ac-candidates">
+                          <div>
+                            <h3>Suggested moments</h3>
+                            <small>{selected.length} selected</small>
+                          </div>
+                          <div className="ac-moments-list">{candidates.slice(0, 16).map((c) => (
+                            <article
+                              key={c.id}
+                              className={active.id === c.id ? "active" : ""}
+                            >
+                              <button
+                                type="button"
+                                className="ac-candidate-select"
+                                aria-label={`Select ${c.title}`}
+                                aria-pressed={selected.includes(c.id)}
+                                disabled={
+                                  !selected.includes(c.id) &&
+                                  selected.length >= 6
+                                }
+                                onClick={() =>
+                                  setSelected((old) =>
+                                    old.includes(c.id)
+                                      ? old.filter((id) => id !== c.id)
+                                      : [...old, c.id],
+                                  )
+                                }
+                              >
+                                {selected.includes(c.id) && <Check size={12} />}
+                              </button>
+                              <button onClick={() => reviewMoment(c.id)} aria-label={`Preview ${c.title}`}>
+                                {atlas && (
+                                  <span
+                                    className="ac-thumbnail"
+                                    style={{
+                                      backgroundImage: `url("${atlas}")`,
+                                      backgroundPosition: `${(Math.min(9, Math.floor(((c.start + c.end) / 2 / analysis.duration) * 10)) / 9) * 100}% center`,
+                                    }}
+                                  />
+                                )}
+                                <strong>{c.title}</strong>
+                                <small>
+                                  {formatClipTime(c.start)} ·{" "}
+                                  {(c.end - c.start).toFixed(1)}s
+                                </small>
+                                <span>{c.reason}</span>
+                              </button>
+                            </article>
+                          ))}</div>
+                        </aside>
                       </div>
                     )}
                   </>

@@ -11,7 +11,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MorphIcon } from "morphicons/react";
 import { Square as SquareIcon, Minimize2 as RestoreIcon } from "lucide";
-import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, WandSparkles, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Keyboard, Camera, Activity, Snowflake, Palette, Link2, Image as ImageIcon } from "lucide-react";
+import { ChevronLeft, Upload, Minus, X, Frame, Box, MousePointer2, Layers3, Focus, AudioLines, Save, SaveAll, FolderOpen, File, Captions, Sun, Moon, Library, Maximize2, Minimize2, Keyboard, Camera, Activity, Snowflake, Palette, Link2, Scissors, SlidersHorizontal, Image as ImageIcon } from "lucide-react";
 import Preview from "./Preview/index";
 import Timeline from "./Timeline/index";
 import Panels from "./Panels/index";
@@ -1166,7 +1166,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
         <div className="ss-topbar-right">
           <button className="ss-theme-toggle" onClick={() => { pausePlayback(); setShowLinkImport(true); }} title="Import from link" aria-label="Import from link" disabled={isBrowserPreview}><Link2 size={17} /></button>
-          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Refine" aria-label="Refine video"><WandSparkles size={16} /></button>
+          <button className="ss-theme-toggle" onClick={() => { pausePlayback(); setShowAutoClips(true); }} title="Auto Clips" aria-label="Auto Clips"><Scissors size={17} /></button>
+          <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Refine video" aria-label="Refine video"><SlidersHorizontal size={16} /></button>
           <button
             className="ss-theme-toggle"
             onClick={() => setEditorTheme((theme) => theme === "dark" ? "light" : "dark")}
@@ -1217,7 +1218,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           >
             <Library size={20} /><span className="ss-tool-label">Uploads</span>
           </button>
-          <button className="ss-tool-icon-btn" title="Auto Clips — local highlights" onClick={() => { pausePlayback(); setShowAutoClips(true); }}><WandSparkles size={20}/><span className="ss-tool-label">Auto Clips</span></button>
+          <button className="ss-tool-icon-btn" title="Auto Clips — local highlights" onClick={() => { pausePlayback(); setShowAutoClips(true); }}><Scissors size={20}/><span className="ss-tool-label">Auto Clips</span></button>
           <button
             className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
             onClick={() => setActiveTool("canvas")}

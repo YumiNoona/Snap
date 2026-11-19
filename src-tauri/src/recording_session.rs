@@ -192,6 +192,7 @@ pub async fn start_recording_session(
     app: tauri::AppHandle,
     request: StartRecordingSessionRequest,
 ) -> Result<RecordingSessionSnapshot, String> {
+    if cfg!(feature = "editor-only") { return Err("Recording is available in Snap or Snap Recorder".into()); }
     let _operation = LIFECYCLE
         .try_lock()
         .map_err(|_| "Another recording operation is still finishing".to_string())?;

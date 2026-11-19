@@ -19,7 +19,7 @@ it("shows imported video on its own row above the recording footage", async () =
   };
   const props = {
     inputLogPath: "", audioTracks: [], duration: 5, currentTime: 0, keyframes: [],
-    config: { ...DEFAULT_EDITOR_CONFIG, trimEnd: 5, layers: [layer] },
+    config: { ...DEFAULT_EDITOR_CONFIG, trimEnd: 5, layers: [layer], videoClips: [{id:"recording",start:0,end:1},{id:"internal-gap",start:0,end:.5,gap:true},{id:"recording-2",start:1,end:2},{id:"layer-padding",start:0,end:4,gap:true}] },
     playing: false, playbackStatus: "paused", layers: [layer], captionTracks: [],
     selectedActionId: null, selectedLayerId: layer.id, selectedCaption: null, selectedZoomRegion: null,
   } as unknown as ComponentProps<typeof Timeline>;
@@ -34,6 +34,8 @@ it("shows imported video on its own row above the recording footage", async () =
       .toBe('url("download-strip.jpg")');
     expect(rows[0].findByProps({ "aria-label": "Change video start" })).toBeDefined();
     expect(rows[1].findByProps({ "aria-label": "Footage segment 1" })).toBeDefined();
+    expect(rows[1].findAllByProps({className:"timeline-gap-label"})).toHaveLength(1);
+    expect(rows[1].findAllByProps({"aria-label":"Footage segment 4"})).toHaveLength(0);
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     vi.unstubAllGlobals();

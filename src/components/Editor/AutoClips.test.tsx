@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import AutoClips from "./AutoClips";
 import ClipTimeField from "./ClipTimeField";
+import AutoClipPreview from "./AutoClipPreview";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -101,6 +102,17 @@ it("creates two separately editable projects and preserves the original source",
     .findAllByType("button")
     .find((b) => label(b).includes("Create 2 clips"))!;
   expect(createButton.props.disabled).toBe(false);
+  expect(view.root.findAllByType("strong").some(n => label(n) === "Ready to analyze")).toBe(false);
+  const firstId = view.root.findByType(AutoClipPreview).props.clip.id;
+  const crop = {x:.18,y:0,w:.32,h:1};
+  await act(async () => { view.root.findByType(AutoClipPreview).props.onRegion("content",crop); });
+  const other = view.root.findAllByType("button").find(n=>String(n.props["aria-label"]??"").startsWith("Preview ") && n.props["aria-label"] !== `Preview ${view.root.findByType(AutoClipPreview).props.clip.title}`)!;
+  await act(async () => { other.props.onClick(); });
+  expect(view.root.findByType(AutoClipPreview).props.content).toEqual({x:0,y:0,w:1,h:1});
+  const first = view.root.findAllByType("button").find(n=>String(n.props["aria-label"]??"").startsWith("Preview "))!;
+  await act(async () => { first.props.onClick(); });
+  expect(view.root.findByType(AutoClipPreview).props.clip.id).toBe(firstId);
+  expect(view.root.findByType(AutoClipPreview).props.content).toEqual(crop);
   await act(async () => {
     view.root
       .findAllByType(ClipTimeField)
@@ -124,19 +136,16 @@ it("creates two separately editable projects and preserves the original source",
     expect(project.editor.videoFit).toBe("cover");
     expect(project.audioTracks).toHaveLength(1);
   }
+  expect(saved.map(s=>JSON.parse(s.contents).editor.crop)).toContainEqual(crop);
+  expect(saved.map(s=>JSON.parse(s.contents).editor.crop)).toContainEqual({x:0,y:0,w:1,h:1});
   expect(onOpen).not.toHaveBeenCalled();
   const speechCalls = vi
     .mocked(invoke)
     .mock.calls.filter(([c]) => c === "transcribe_auto_clip_ranges");
-  expect(speechCalls).toHaveLength(2);
-  expect(
-    (speechCalls[1][1] as { request: { ranges: unknown[] } }).request.ranges,
-  ).toHaveLength(2);
-  expect(
-    (
-      speechCalls[1][1] as { request: { ranges: { end: number }[] } }
-    ).request.ranges.some((r) => r.end === 9),
-  ).toBe(true);
+  // Trimming within the already prepared speech keeps captions exact without
+  // running Whisper a second time for the same footage.
+  expect(speechCalls).toHaveLength(1);
+  expect(saved.some(s=>JSON.parse(s.contents).captions.some((t:{segments:Array<{endMs:number}>})=>t.segments.some(segment=>segment.endMs===9000)))).toBe(true);
   await act(async () => {
     await view.root
       .findAllByType("button")
@@ -241,6 +250,7 @@ it("starts a forty-minute source with a ten-minute range and sends only that ran
   };
   expect(
     request.request.ranges.reduce((n, r) => n + r.end - r.start, 0),
-  ).toBeLessThanOrEqual(40);
+  ).toBeLessThanOrEqual(60);
+  expect(request.request.ranges.every(r=>r.end-r.start<=15)).toBe(true);
   await act(async () => view.unmount());
 });

@@ -1006,6 +1006,7 @@ fn failure_exit_status() -> ExitStatus {
 pub fn start_mobile_recording(
     request: StartMobileRecordingRequest,
 ) -> Result<MobileRecordingStatus, String> {
+    if cfg!(feature = "editor-only") { return Err("Recording is available in Snap or Snap Recorder".into()); }
     {
         let mut guard = manager().lock().map_err(|error| error.to_string())?;
         if guard.control.is_some() || guard.starting {

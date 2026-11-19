@@ -1,0 +1,23 @@
+{
+  "productName": "Snap Editor",
+  "identifier": "com.ringale.snap.editor",
+  "build": { "beforeBuildCommand": "npm run build:editor" },
+  "app": {
+    "windows": [{
+      "label": "editor",
+      "url": "index.html?window=editor",
+      "title": "Snap Editor",
+      "width": 1360,
+      "height": 860,
+      "minWidth": 980,
+      "minHeight": 640,
+      "visible": false,
+      "backgroundColor": "#0b0d12",
+      "decorations": false,
+      "maximizable": true,
+      "resizable": true
+    }]
+  },
+  "bundle": { "createUpdaterArtifacts": false },
+  "plugins": { "updater": { "endpoints": [] } }
+}

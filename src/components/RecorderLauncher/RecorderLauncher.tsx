@@ -586,7 +586,9 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
     const targetVideo = lastVideoRef.current || lastVideo;
     const targetLog = lastLogRef.current || lastLog;
     try {
-      if (failures.length === 0 && targetVideo && targetLog) {
+      if (import.meta.env.VITE_SNAP_EDITION === "recorder" && failures.length === 0) {
+        setRecordStatus("Recording saved. Open it from Media in Snap Editor when you’re ready.");
+      } else if (failures.length === 0 && targetVideo && targetLog) {
         setProcessingMessage("Opening your recording in the editor…");
         await onOpenEditor(targetVideo, targetLog);
       } else {
@@ -801,7 +803,7 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         <div className="titlebar-left">
           <div className="brand-logo-area">
             <img className="brand-logo-icon" src={snapAppIcon} alt="" aria-hidden="true" />
-            <span className="app-name">Snap</span>
+            <span className="app-name">{import.meta.env.VITE_SNAP_EDITION === "recorder" ? "Snap Recorder" : "Snap"}</span>
           </div>
 
           <div className="menu-wrap">
@@ -966,8 +968,8 @@ export default function RecorderLauncher({ onOpenEditor, onOpenTeleprompter, onO
         </div>
       )}
 
-      {recordStatusIsActionable && (
-        <div className="recording-status-toast error" role="alert">
+      {(recordStatusIsActionable || recordStatus.startsWith("Recording saved.")) && (
+        <div className={`recording-status-toast ${recordStatusIsActionable ? "error" : ""}`} role={recordStatusIsActionable ? "alert" : "status"}>
           <span>{recordStatus}</span>
           {!recording && <button onClick={() => setRecordStatus("")} aria-label="Dismiss status"><X size={13} /></button>}
         </div>

@@ -1,4 +1,6 @@
 mod access;
+#[cfg(all(feature = "recorder-only", feature = "editor-only"))]
+compile_error!("Choose only one Snap edition");
 mod auto_clips;
 mod clip_analysis;
 mod clip_ai;
@@ -247,6 +249,16 @@ async fn open_editor_window(
 ) -> Result<(), String> {
     if recording_session::get_recording_session_state()?.is_some() {
         return Err("Finish the current recording before opening the editor".into());
+    }
+    if cfg!(feature = "recorder-only") {
+        access::require(&app, Path::new(&video))?;
+        let companion = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name(format!("Snap_Editor_{}_x64.exe", env!("CARGO_PKG_VERSION")));
+        if companion.is_file() {
+            process::background_command(companion).arg("--open").arg(&video).spawn().map_err(|e| e.to_string())?;
+        } else {
+            process::background_command("explorer.exe").arg(format!("/select,{}", video)).spawn().map_err(|e| e.to_string())?;
+        }
+        return Ok(());
     }
     access::require(&app, Path::new(&video))?;
     access::grant_video(&app, Path::new(&video))?;
@@ -1946,7 +1958,21 @@ pub fn run() {
         .manage(DockState(Mutex::new(DockStateSnapshot::default())))
         .setup(|app| {
             cursor_library::grant_scope(app.handle())?;
-            build_system_tray(app)?;
+            if cfg!(feature = "recorder-only") {
+                if let Some(main) = app.get_webview_window("main") { main.set_title("Snap Recorder")?; }
+            }
+            if !cfg!(feature = "editor-only") { build_system_tray(app)?; }
+            if cfg!(feature = "editor-only") {
+                let mut args = std::env::args().skip(1);
+                if args.next().as_deref() == Some("--open") {
+                    if let Some(video) = args.next() {
+                        let path = Path::new(&video);
+                        access::grant_video(app.handle(), path)?;
+                        let log = resolve_recording_log_path(video.clone());
+                        *app.state::<EditorPaths>().0.lock().map_err(|e| e.to_string())? = Some((video, log));
+                    }
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

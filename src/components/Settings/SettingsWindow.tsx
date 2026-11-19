@@ -78,6 +78,11 @@ export default function SettingsWindow() {
   }, [settings.showRecordingDataFiles]);
 
   const checkForUpdates = async () => {
+    if (import.meta.env.VITE_SNAP_EDITION && import.meta.env.VITE_SNAP_EDITION !== "full") {
+      setUpdateState("current");
+      setUpdateMessage("Download this edition’s updates from github.com/YumiNoona/Snap/releases.");
+      return;
+    }
     if (updateCheckRef.current || updateState === "downloading" || updateState === "installing") return;
     updateCheckRef.current = true;
     setUpdateState("checking");

@@ -1,12 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   drawSplitFrame,
   fitRect,
   normalizedRect,
   videoFrame,
+  visibleCrop,
+  panCrop,
 } from "./videoFraming";
 import { DEFAULT_EDITOR_CONFIG } from "./types";
 import { captureLayout, formatLayout } from "./editorFinishing";
+
+it("pans the visible portrait crop without stretching or leaving source bounds", () => {
+  const initial = visibleCrop({ x: 0, y: 0, w: 1, h: 1 }, 1920, 1080, 9/16);
+  expect(initial.w * 1920 / (initial.h * 1080)).toBeCloseTo(9/16);
+  const moved = panCrop(initial, -.5, 100);
+  expect(moved.x).toBeGreaterThan(initial.x);
+  expect(moved.y).toBe(0);
+  expect(moved.x + moved.w).toBeLessThanOrEqual(1);
+  expect(visibleCrop(moved, 1920, 1080, 9/16)).toEqual(moved);
+});
+
+it("uses the same panned split source coordinates when drawing export frames", () => {
+  const crop = panCrop(visibleCrop({x:0,y:0,w:1,h:1},1920,1080,9/16/.62), -.3, 0);
+  const drawImage = vi.fn();
+  const ctx = { save(){},restore(){},beginPath(){},rect(){},clip(){},fillRect(){},drawImage } as unknown as CanvasRenderingContext2D;
+  drawSplitFrame(ctx, {} as CanvasImageSource, 1920, 1080, {x:0,y:0,w:1080,h:1920}, {camera:{x:0,y:0,w:.25,h:.35},content:crop,fraction:.38,contentFit:"cover"});
+  const args = drawImage.mock.calls[1];
+  expect(args[1]).toBeCloseTo(crop.x * 1920);
+  expect(args[3]).toBeCloseTo(crop.w * 1920);
+  expect(args[7] / args[8]).toBeCloseTo(args[3] / args[4]);
+});
 
 describe("proportion-preserving framing", () => {
   it("fills both stacked streaming panels while preserving source proportions", () => {

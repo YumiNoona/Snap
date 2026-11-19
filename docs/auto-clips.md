@@ -1,12 +1,12 @@
 # Auto Clips
 
-Open **Auto Clips** on the editor's left toolbar. Choose the current recording, an imported video layer, a local file, or a video link.
+Open **Auto Clips** using the scissors icon on the top bar or left toolbar. Choose the current recording, an imported video layer, a local file, or a video link.
 
 The three steps are **Source**, **Highlights**, and **Layout**. Long sources initially select only the first ten minutes. Set Range in and Range out, or move the shared sliders, to choose another section. Fields accept timecodes such as `4:39.3`, or a number of seconds. For a 30–40 minute source, start with a 5–10 minute section; longer selections take longer depending on the PC, codec and model. The full video remains available and unchanged.
 
 Auto Clips uses the editor's shared controls and glass surface in both themes. Headings scroll normally; the action footer stays available.
 
-The defaults suggest two ten-second clips. Fast mode scans audio activity and video keyframes inside the selected range, then transcribes only a short list of likely moments. It does not transcribe the entire source. Detailed visual scanning and local AI ranking are optional slower steps under **Analysis & local tools**. Selection avoids overlapping copies of the same moment. A short or quiet source may have fewer useful suggestions.
+The defaults suggest two clips around ten seconds long, with natural endings enabled. Fast mode scans audio activity and video keyframes inside the selected range, then transcribes only a short list of likely moments. It does not transcribe the entire source. Detailed visual scanning and local AI ranking are optional slower steps under **Analysis & local tools**. Selection avoids overlapping copies of the same moment. A short or quiet source may have fewer useful suggestions.
 
 ## Local setup
 
@@ -21,9 +21,9 @@ Downloading sources and installing dependencies uses the internet. Analysis and 
 
 Select a suggestion to preview it. Adjust its start and end, select alternatives, and choose 9:16, 1:1, 4:5 or 16:9. The preview can show one ratio while several ratios are selected for creation.
 
-Landscape and output previews sit side by side. **Camera + gameplay** fills a stacked portrait frame. **Edit layout** lets you draw, move or resize the camera and gameplay regions on the source; the camera panel height is adjustable. Both panels crop uniformly without stretching. **Full portrait** fills a single view; **Fit whole video** preserves the entire picture with background space.
+Suggested moments appear in a horizontal tray below the preview and settings. Landscape and output previews sit side by side. Drag directly inside the output to position the camera or gameplay; each moment keeps its own framing. **Camera + gameplay** fills a stacked portrait frame. **Edit layout** lets you draw, move or resize the camera and gameplay regions on the source; the camera panel height is adjustable. Both panels crop uniformly without stretching. **Full portrait** fills a single view; **Fit whole video** preserves the entire picture with background space.
 
-Auto CC uses short phrases, a transparent background, optional spoken-word highlights and an automatic position near the camera split. Captions use source timestamps and are clamped to each cut. Creating clips refreshes speech for the final edited ranges, reusing cached results where possible. Overlapping refreshed transcripts replace old versions rather than producing duplicate words. Clip transcription prefers the installed base model, then tiny/small, before heavier models. Multiple uncached ranges share one Whisper model load.
+Auto CC uses short phrases, a transparent background, optional spoken-word highlights and an automatic position near the camera split. Captions use source timestamps and are clamped to each cut. Creating clips reuses prepared speech while the final trim stays inside its covered range; only newly exposed ranges need transcription. Overlapping refreshed transcripts replace old versions rather than producing duplicate words. Clip transcription prefers the installed base model, then tiny/small, before heavier models. Multiple uncached ranges share one Whisper model load.
 
 **Create editable clips** saves a separate Snap project for every selected moment and ratio under the source's data directory in `auto-clips/<batch>/`. The original recording and original project remain available. Open a saved clip to edit captions and export through Snap's normal export controls. Export defaults use MP4, 30 fps and burned captions when present. Creation itself does not batch-render MP4 files.
 

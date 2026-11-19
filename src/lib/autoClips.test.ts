@@ -5,6 +5,7 @@ import {
   distinctClips,
   findClipCandidates,
   rankedClips,
+  naturalClipBounds,
   type ClipAnalysis,
 } from "./autoClips";
 import {
@@ -12,6 +13,14 @@ import {
   sequenceDuration,
   mapCaptionTracks,
 } from "./videoEditing";
+
+it("keeps the opening word and a natural sentence ending inside the analysis range", () => {
+  const candidate = {id:"one",start:10,end:20,score:60,title:"Moment",reason:"",transcript:""};
+  const result = naturalClipBounds({duration:40,width:1920,height:1080,energy:[],motion:[],warnings:[],rangeStart:9.5,rangeEnd:22,transcript:[{startMs:9700,endMs:21200,text:"A complete sentence.",words:[{text:"A",startMs:9700,endMs:10300},{text:"sentence.",startMs:19800,endMs:21200}]}]},candidate);
+  expect(result.start).toBeCloseTo(9.58);
+  expect(result.end).toBeCloseTo(21.38);
+  expect(result.id).toBe(candidate.id);
+});
 
 const analysis: ClipAnalysis = {
   duration: 60,

@@ -1,6 +1,6 @@
 [package]
 name = "snap"
-version = "9.7.1"
+version = "9.8.0"
 description = "A native Windows screen recorder with an automatic motion editor"
 authors = ["Snap contributors"]
 edition = "2021"
@@ -16,6 +16,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[features]
+default = []
+recorder-only = []
+editor-only = []
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }

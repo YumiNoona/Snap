@@ -1,0 +1,7 @@
+{
+  "productName": "Snap Recorder",
+  "identifier": "com.ringale.snap.recorder",
+  "build": { "beforeBuildCommand": "npm run build:recorder" },
+  "bundle": { "createUpdaterArtifacts": false },
+  "plugins": { "updater": { "endpoints": [] } }
+}

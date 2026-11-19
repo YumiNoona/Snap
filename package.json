@@ -1,11 +1,13 @@
 {
   "name": "snap",
   "private": true,
-  "version": "9.7.1",
+  "version": "9.8.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node scripts/build-frontend.mjs full",
+    "build:recorder": "node scripts/build-frontend.mjs recorder",
+    "build:editor": "node scripts/build-frontend.mjs editor",
     "test": "vitest run",
     "test:watch": "vitest",
     "check:source": "node scripts/check-source-graph.mjs",

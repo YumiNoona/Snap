@@ -8,12 +8,13 @@ import "./App.css";
 import "./GlassSurfaces.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
 import {extendClipWorkspace,type ClipWorkspace,type EditorRoute} from "./lib/clipWorkspace";
+import { EDITOR_ONLY } from "./lib/edition";
 
-const RecorderLauncher = React.lazy(() => import("./components/RecorderLauncher/RecorderLauncher"));
-const DeviceView = React.lazy(() => import("./components/RecorderLauncher/DeviceView"));
-const RecordingDock = React.lazy(() => import("./components/RecorderLauncher/RecordingDock"));
-const RecordingOverlay = React.lazy(() => import("./components/RecorderLauncher/RecordingOverlay"));
-const Editor = React.lazy(() => import("./components/Editor/Editor"));
+const RecorderLauncher = import.meta.env.VITE_SNAP_EDITION === "editor" ? (() => null) : React.lazy(() => import("./components/RecorderLauncher/RecorderLauncher"));
+const DeviceView = import.meta.env.VITE_SNAP_EDITION === "editor" ? (() => null) : React.lazy(() => import("./components/RecorderLauncher/DeviceView"));
+const RecordingDock = import.meta.env.VITE_SNAP_EDITION === "editor" ? (() => null) : React.lazy(() => import("./components/RecorderLauncher/RecordingDock"));
+const RecordingOverlay = import.meta.env.VITE_SNAP_EDITION === "editor" ? (() => null) : React.lazy(() => import("./components/RecorderLauncher/RecordingOverlay"));
+const Editor = import.meta.env.VITE_SNAP_EDITION === "recorder" ? (() => null) : React.lazy(() => import("./components/Editor/Editor"));
 const TeleprompterWindow = React.lazy(() => import("./components/Teleprompter/TeleprompterWindow"));
 const SettingsWindow = React.lazy(() => import("./components/Settings/SettingsWindow"));
 const LibraryWindow = React.lazy(() => import("./components/LibraryWindow"));
@@ -57,7 +58,7 @@ class ErrorBoundary extends React.Component<
               this.props.onReset();
             }}
           >
-            Back to Recorder
+            {EDITOR_ONLY ? "Back to media" : "Back to Recorder"}
           </button>
         </div>
       );
@@ -172,7 +173,8 @@ function App() {
   // Tauri's IPC bridge is guaranteed to be ready. It's only unsafe to call
   // synchronously during the component's first render (see note above).
   const closeEditorWindow = useCallback(() => {
-    getCurrentWindow().close();
+    if (EDITOR_ONLY) { setEditorVideo(""); setEditorProjectPath(""); setClipWorkspace(null); setEditorPosition(0); }
+    else getCurrentWindow().close();
   }, []);
 
   const openTeleprompterWindow = useCallback(() => {
@@ -292,6 +294,7 @@ function App() {
         </div>
       );
     }
+    if (EDITOR_ONLY) return <ErrorBoundary onReset={closeEditorWindow}><LibraryWindow onOpen={openInEditorWindow} /></ErrorBoundary>;
     return (
       <div className="app-layout" style={{ alignItems: "center", justifyContent: "center", gap: "16px" }}>
         <span className="launcher-status-text" style={{ fontSize: "16px", color: "var(--text-secondary)" }}>

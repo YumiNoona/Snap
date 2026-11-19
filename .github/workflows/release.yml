@@ -40,6 +40,10 @@ jobs:
       - name: Verify native behavior
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
 
+      - name: Build the three standalone editions
+        shell: pwsh
+        run: ./scripts/Build-Snap-Editions.ps1 -Version ((Get-Content package.json -Raw | ConvertFrom-Json).version)
+
       - name: Build, sign, and publish the update
         uses: tauri-apps/tauri-action@v1
         env:
@@ -50,13 +54,32 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            - Auto Clips follows the editor theme with glass surfaces and shared sliders, switches and dropdowns.
-            - Headings scroll with content. Timecode fields make source and clip ranges easier to adjust.
-            - Return to the original timeline or switch between generated clips; edits save before switching and playheads are restored.
-            - Fast local scans, short-range Auto CC and proportion-preserving stacked layouts remain available.
-            - Publishing waits for the installer workflow before uploading standalone assets, avoiding draft-release lookup errors.
+            - Three standalone editions: full Snap, Snap Recorder and Snap Editor.
+            - Recording tracks no longer label trailing empty sequence time as a Gap clip.
+            - Auto Clips has quieter switches, side-by-side preview/settings and a bottom moments tray.
+            - Drag the output picture to reframe camera and gameplay separately; each moment retains its own framing.
+            - Natural clip edges, short audio edge ramps and reused caption speech reduce abrupt cuts and duplicate processing.
+            - Auto Clips and Refine have distinct navigation icons. Original timeline navigation remains available.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           updaterJsonPreferNsis: true
+
+      - name: Upload standalone editions and checksums
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          $view = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Published release lookup failed.' }
+          foreach ($file in Get-ChildItem -LiteralPath "release-artifacts/v$version" -File | Where-Object { $_.Name -match '\.exe(\.sha256)?$' }) {
+            if (@($view.assets | Where-Object { $_.name -eq $file.Name }).Count) {
+              Write-Host "Keeping existing asset $($file.Name)."
+            } else {
+              gh release upload $tag $file.FullName --repo $env:GITHUB_REPOSITORY
+              if ($LASTEXITCODE -ne 0) { throw "Upload failed: $($file.Name)" }
+            }
+          }

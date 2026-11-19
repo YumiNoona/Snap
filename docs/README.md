@@ -6,6 +6,7 @@ Start with the [project README](../README.md) for downloads, setup and builds.
 
 - [Editor tools and Refine](editor.md)
 - [Local Auto Clips and proportion-preserving framing](auto-clips.md)
+- [9.8.0 changes and the three Windows editions](release-9.8.0.md)
 - [Windows capture and game compatibility](capture.md)
 - [Publishing Windows releases and signed updates](releasing.md)
 - [Editor roadmap and design research](editor-roadmap.md)

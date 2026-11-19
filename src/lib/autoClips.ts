@@ -203,6 +203,34 @@ export function distinctClips(
   }
   return selected;
 }
+
+/** Keep continuous footage; move only the edges to pauses or complete phrases. */
+export function naturalClipBounds(analysis: ClipAnalysis, clip: ClipCandidate): ClipCandidate {
+  const lower = analysis.rangeStart ?? 0, upper = analysis.rangeEnd ?? analysis.duration;
+  const phrases = analysis.transcript.filter(s => s.startMs < (clip.end + 3) * 1000 && s.endMs > (clip.start - 2) * 1000);
+  const words = phrases.flatMap(s => s.words?.length ? s.words : [{ text: s.text, startMs: s.startMs, endMs: s.endMs }]).sort((a,b) => a.startMs-b.startMs);
+  let start = clip.start, end = clip.end;
+  // Include a small lead-in rather than beginning on an already spoken syllable.
+  const opening = words.find(w => w.startMs / 1000 <= start + .15 && w.endMs / 1000 > start);
+  if (opening && opening.startMs / 1000 >= start - 2) start = opening.startMs / 1000 - .12;
+  const sentenceEnds = phrases.filter(s => /[.!?…]["'’”]*$/u.test(s.text.trim())).map(s => s.endMs / 1000);
+  const pauses = words.flatMap((word,i) => i === words.length-1 || words[i+1].startMs-word.endMs >= 220 ? [word.endMs / 1000] : []);
+  const near = (values:number[]) => values.filter(t => t >= clip.end - 1.5 && t <= clip.end + 3).sort((a,b) => Math.abs(a-clip.end)-Math.abs(b-clip.end))[0];
+  const boundary = near(sentenceEnds) ?? near(pauses);
+  if (boundary !== undefined) end = boundary + .18;
+  else {
+    const crossing = words.find(w => w.startMs / 1000 < end && w.endMs / 1000 > end);
+    if (crossing && crossing.endMs / 1000 <= end + 3) end = crossing.endMs / 1000 + .12;
+    else if (!words.length) {
+      // The activity scan is one sample per second: favour quiet endpoints.
+      const choices = [-1,0,1,2].map(delta => clip.end+delta).filter(t=>t>start+2 && t>=lower && t<=upper);
+      choices.sort((a,b)=>(analysis.energy[Math.floor(a-lower)]??Infinity)-(analysis.energy[Math.floor(b-lower)]??Infinity) || Math.abs(a-clip.end)-Math.abs(b-clip.end));
+      if (choices.length) end = choices[0];
+    }
+  }
+  start = Math.max(lower, start); end = Math.min(upper, Math.max(start + .1, end), start + 123);
+  return { ...clip, start, end };
+}
 export function formatClipTime(time: number): string {
   return `${Math.floor(time / 60)}:${(time % 60).toFixed(1).padStart(4, "0")}`;
 }
@@ -392,6 +420,8 @@ export function autoClipProject(
           },
         ]
       : [];
+  // Very short edge ramps avoid clicks while preserving the moment's impact.
+  project.audioTracks = project.audioTracks.map(track => ({ ...track, sourceStart: clip.start, sourceEnd: clip.end, fadeIn: .025, fadeOut: .08 }));
   project.captions = captions
     ? clipCaptions(
         analysis,
@@ -424,7 +454,7 @@ export function autoClipProject(
     fps: 30,
     format: "mp4",
     quality: "high",
-    captions: "burned",
+    captions: project.captions.length ? "burned" : "none",
   };
   return project;
 }

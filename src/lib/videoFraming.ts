@@ -2,6 +2,17 @@ import type { EditorConfig } from "./types";
 
 export interface FrameRect { x: number; y: number; w: number; h: number }
 export type VideoFit = "contain" | "cover";
+/** The actual visible source rectangle, shared by direct framing and rendering. */
+export function visibleCrop(rect: FrameRect, vw: number, vh: number, ratio: number): FrameRect {
+  const r = normalizedRect(rect);
+  const f = fitRect({ x: r.x * vw, y: r.y * vh, w: r.w * vw, h: r.h * vh }, { x: 0, y: 0, w: ratio, h: 1 }, "cover").source;
+  return { x: f.x / vw, y: f.y / vh, w: f.w / vw, h: f.h / vh };
+}
+
+/** Move the picture with the pointer while keeping the crop inside the source. */
+export function panCrop(rect: FrameRect, dx: number, dy: number): FrameRect {
+  return { ...rect, x: Math.max(0, Math.min(1 - rect.w, rect.x - dx * rect.w)), y: Math.max(0, Math.min(1 - rect.h, rect.y - dy * rect.h)) };
+}
 export interface SplitLayout {
   camera: FrameRect;
   content: FrameRect;

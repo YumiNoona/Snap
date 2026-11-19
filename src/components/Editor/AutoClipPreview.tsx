@@ -13,6 +13,8 @@ import {
   drawSplitFrame,
   fitRect,
   normalizedRect,
+  visibleCrop,
+  panCrop,
   type FrameRect,
   type SplitLayout,
   type VideoFit,
@@ -69,6 +71,7 @@ export default function AutoClipPreview(p: Props) {
     mode: "draw" | "move" | "se" | "nw";
     region: "camera" | "content";
   } | null>(null);
+  const portraitDrag = useRef<{ x: number; y: number; height: number; width: number; rect: FrameRect; region: "camera" | "content" } | null>(null);
   const tracks = useMemo(
     () =>
       p.captions
@@ -105,7 +108,7 @@ export default function AutoClipPreview(p: Props) {
       ) {
         if (v.currentTime >= p.clip.end) {
           v.pause();
-          v.currentTime = p.clip.start;
+          v.currentTime = Math.max(p.clip.start, p.clip.end - 1 / 60);
         }
         const target = { x: 0, y: 0, w: c.width, h: c.height };
         ctx.fillStyle = "#08090c";
@@ -145,7 +148,7 @@ export default function AutoClipPreview(p: Props) {
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [p.clip, p.split, p.content, p.fit, tracks]);
+  }, [p.clip, p.split, p.content, p.fit, p.ratio, tracks]);
   useEffect(() => {
     const media = video.current;
     const sounds = audio.current.filter((a): a is HTMLAudioElement => !!a);
@@ -385,7 +388,38 @@ export default function AutoClipPreview(p: Props) {
           height={Math.round((360 * rh) / rw)}
           aria-label={`${p.ratio} clip preview`}
           style={{ aspectRatio: `${rw}/${rh}` }}
+          className={p.split || p.fit === "cover" ? "ac-draggable-preview" : ""}
+          tabIndex={p.split || p.fit === "cover" ? 0 : undefined}
+          onPointerDown={(e) => {
+            if (e.button !== 0 || (!p.split && p.fit !== "cover")) return;
+            e.preventDefault();
+            const b = e.currentTarget.getBoundingClientRect();
+            const region = p.split && (e.clientY - b.top) / b.height < p.split.fraction ? "camera" : "content";
+            const fraction = p.split ? region === "camera" ? p.split.fraction : 1 - p.split.fraction : 1;
+            const rect = region === "camera" ? p.split!.camera : p.split?.content ?? p.content;
+            portraitDrag.current = { x: e.clientX, y: e.clientY, width: b.width, height: b.height * fraction, region, rect: visibleCrop(rect, p.analysis.width, p.analysis.height, rw / rh / fraction) };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const d = portraitDrag.current;
+            if (d) p.onRegion(d.region, panCrop(d.rect, (e.clientX - d.x) / d.width, (e.clientY - d.y) / d.height));
+          }}
+          onPointerUp={(e) => {
+            portraitDrag.current = null;
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={() => { portraitDrag.current = null; }}
+          onKeyDown={(e) => {
+            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+            e.preventDefault();
+            const region = p.editRegion === "camera" && p.split ? "camera" : "content";
+            const fraction = p.split ? region === "camera" ? p.split.fraction : 1 - p.split.fraction : 1;
+            const r = visibleCrop(region === "camera" ? p.split!.camera : p.split?.content ?? p.content, p.analysis.width, p.analysis.height, rw / rh / fraction);
+            const amount = e.shiftKey ? .1 : .02;
+            p.onRegion(region, panCrop(r, e.key === "ArrowRight" ? amount : e.key === "ArrowLeft" ? -amount : 0, e.key === "ArrowDown" ? amount : e.key === "ArrowUp" ? -amount : 0));
+          }}
         />
+        <p className="ac-help">{p.split ? "Drag either panel to frame the camera or gameplay." : p.fit === "cover" ? "Drag the picture to reframe. Arrow keys fine-tune." : "The whole source fits inside the frame."}</p>
       </section>
     </div>
   );
