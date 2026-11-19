@@ -1,6 +1,6 @@
 [package]
 name = "snap"
-version = "9.6.0"
+version = "9.7.0"
 description = "A native Windows screen recorder with an automatic motion editor"
 authors = ["Snap contributors"]
 edition = "2021"
@@ -56,6 +56,9 @@ windows = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
     "Foundation",
+    "Media_FaceAnalysis",
+    "Graphics_Imaging",
+    "Storage_Streams",
     "Devices_Enumeration",
 ] }
 windows-future = { version = "0.2", features = ["std"] }

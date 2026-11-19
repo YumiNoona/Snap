@@ -87,7 +87,7 @@ fn bundled_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
 }
 
-fn user_transcription_root() -> PathBuf {
+pub(crate) fn user_transcription_root() -> PathBuf {
     std::env::var("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -95,7 +95,7 @@ fn user_transcription_root() -> PathBuf {
         .join("transcription")
 }
 
-fn resolve_executable() -> Option<PathBuf> {
+pub(crate) fn resolve_executable() -> Option<PathBuf> {
     let root = bundled_root();
     let user = user_transcription_root();
     existing_candidate([
@@ -107,7 +107,7 @@ fn resolve_executable() -> Option<PathBuf> {
     ])
 }
 
-fn resolve_model(preferred: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_model(preferred: &str) -> Option<PathBuf> {
     let root = bundled_root().join("transcription").join("models");
     let user = user_transcription_root().join("models");
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models");
@@ -209,12 +209,12 @@ fn parse_timestamp(value: &serde_json::Value) -> Option<u64> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AudioActivityRange {
+pub(crate) struct AudioActivityRange {
     start_ms: u64,
     end_ms: u64,
 }
 
-fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
+pub(crate) fn pcm16_mono_activity(path: &Path) -> Result<Vec<AudioActivityRange>, String> {
     let mut file = std::fs::File::open(path)
         .map_err(|error| format!("Unable to inspect transcription audio: {error}"))?;
     let mut header = [0u8; 12];
@@ -455,7 +455,7 @@ fn parse_words(entry: &serde_json::Value) -> Vec<TranscriptionWord> {
     words
 }
 
-fn parse_output(
+pub(crate) fn parse_output(
     path: &Path,
     source_path: String,
     requested_language: String,

@@ -343,6 +343,8 @@ export interface CaptionSegmentSelection {
 }
 
 export interface CaptionStyle {
+  wordHighlight?: boolean;
+  highlightColor?: string;
   fontFamily: string;
   fontSize: number;
   fontWeight: 400 | 500 | 600 | 700 | 800;
@@ -378,6 +380,9 @@ export interface CaptionTrack {
 }
 
 export interface EditorConfig {
+  /** Preserve proportions on ratio changes. Cover is an explicit crop to fill. */
+  videoFit?: import("./videoFraming").VideoFit;
+  splitLayout?: import("./videoFraming").SplitLayout;
   colorGrade?: ColorGrade;
   colorLuts?: CubeLut[];
   adjustmentLayers?: AdjustmentLayer[];
@@ -438,7 +443,7 @@ export interface LayoutVariant {
   clipEffects?: Record<string, ClipEffects | undefined>;
   id: string;
   name: string;
-  layout: Pick<EditorConfig, "aspectRatio" | "crop" | "padding" | "cameraOverlay" | "safeArea">;
+  layout: Pick<EditorConfig, "aspectRatio" | "crop" | "padding" | "cameraOverlay" | "safeArea" | "videoFit" | "splitLayout">;
   keyframes: Keyframe[];
   captions: CaptionTrack[];
 }

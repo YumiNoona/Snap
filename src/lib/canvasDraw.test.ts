@@ -1,25 +1,130 @@
 import { describe, expect, it } from "vitest";
-import { drawCameraBubble, drawCaptionTrack, drawCursorImage, resolveLayerFade, resolveMagnifierSample, resolveMaskCameraFocus } from "./canvasDraw";
+import {
+  drawCameraBubble,
+  drawCaptionTrack,
+  drawCursorImage,
+  resolveLayerFade,
+  resolveMagnifierSample,
+  resolveMaskCameraFocus,
+} from "./canvasDraw";
 import type { CaptionTrack } from "./types";
 import { DEFAULT_EDITOR_CONFIG } from "./types";
+import { clipCaptions } from "./autoClips";
 
 it("normalizes custom cursor bitmap size and keeps the hotspot proportional", () => {
   const calls: unknown[][] = [];
-  const ctx = { save: () => {}, restore: () => {}, globalAlpha: 1, drawImage: (...args: unknown[]) => calls.push(args) } as unknown as CanvasRenderingContext2D;
-  const image = { complete: true, naturalWidth: 512, naturalHeight: 256 } as HTMLImageElement;
+  const ctx = {
+    save: () => {},
+    restore: () => {},
+    globalAlpha: 1,
+    drawImage: (...args: unknown[]) => calls.push(args),
+  } as unknown as CanvasRenderingContext2D;
+  const image = {
+    complete: true,
+    naturalWidth: 512,
+    naturalHeight: 256,
+  } as HTMLImageElement;
   drawCursorImage(ctx, image, 100, 100, 16, { x: 25, y: 50 });
   expect(calls[0].slice(1)).toEqual([96, 96, 16, 8]);
 });
 
-it("isolates animated camera rotation from the rest of the canvas",()=>{
-  let depth=0;const rotations:number[]=[];
-  const context={save:()=>{depth++;},restore:()=>{depth--;expect(depth).toBeGreaterThanOrEqual(0);},translate:()=>{},rotate:(n:number)=>rotations.push(n),scale:()=>{},beginPath:()=>{},moveTo:()=>{},lineTo:()=>{},arcTo:()=>{},closePath:()=>{},fill:()=>{},clip:()=>{},drawImage:()=>{},stroke:()=>{}} as unknown as CanvasRenderingContext2D;
-  const previous=globalThis.HTMLMediaElement;
-  Object.assign(globalThis,{HTMLMediaElement:{HAVE_CURRENT_DATA:2}});
-  try {drawCameraBubble(context,{readyState:4,videoWidth:640,videoHeight:480} as HTMLVideoElement,{x:0,y:0,w:1000,h:500},{...DEFAULT_EDITOR_CONFIG.cameraOverlay,enabled:true,rotation:90});expect(depth).toBe(0);expect(rotations[0]).toBeCloseTo(Math.PI/2);}finally{Object.assign(globalThis,{HTMLMediaElement:previous});}
+it("isolates animated camera rotation from the rest of the canvas", () => {
+  let depth = 0;
+  const rotations: number[] = [];
+  const context = {
+    save: () => {
+      depth++;
+    },
+    restore: () => {
+      depth--;
+      expect(depth).toBeGreaterThanOrEqual(0);
+    },
+    translate: () => {},
+    rotate: (n: number) => rotations.push(n),
+    scale: () => {},
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    arcTo: () => {},
+    closePath: () => {},
+    fill: () => {},
+    clip: () => {},
+    drawImage: () => {},
+    stroke: () => {},
+  } as unknown as CanvasRenderingContext2D;
+  const previous = globalThis.HTMLMediaElement;
+  Object.assign(globalThis, { HTMLMediaElement: { HAVE_CURRENT_DATA: 2 } });
+  try {
+    drawCameraBubble(
+      context,
+      { readyState: 4, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement,
+      { x: 0, y: 0, w: 1000, h: 500 },
+      { ...DEFAULT_EDITOR_CONFIG.cameraOverlay, enabled: true, rotation: 90 },
+    );
+    expect(depth).toBe(0);
+    expect(rotations[0]).toBeCloseTo(Math.PI / 2);
+  } finally {
+    Object.assign(globalThis, { HTMLMediaElement: previous });
+  }
 });
 
 describe("caption canvas isolation", () => {
+  it("scales caption typography and highlights only the currently spoken word", () => {
+    const fills: Array<{ text: string; color: string }> = [];
+    const context = {
+      globalAlpha: 1,
+      fillStyle: "",
+      font: "",
+      lineWidth: 0,
+      save() {},
+      restore() {},
+      measureText(text: string) {
+        return { width: text.length * 4 };
+      },
+      strokeText() {},
+      fillText(this: { fillStyle: string }, text: string) {
+        fills.push({ text, color: this.fillStyle });
+      },
+    } as unknown as CanvasRenderingContext2D;
+    const track = clipCaptions(
+      {
+        duration: 10,
+        width: 1920,
+        height: 1080,
+        energy: [],
+        motion: [],
+        warnings: [],
+        transcript: [
+          {
+            startMs: 0,
+            endMs: 1000,
+            text: "Nice play",
+            words: [
+              { startMs: 0, endMs: 500, text: "Nice" },
+              { startMs: 500, endMs: 1000, text: "play" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "c",
+        start: 0,
+        end: 2,
+        title: "",
+        transcript: "",
+        reason: "",
+        score: 0,
+      },
+      "9:16",
+      [],
+    )[0];
+    drawCaptionTrack(context, track, 750, { x: 0, y: 0, w: 270, h: 480 });
+    expect(context.font).toContain("10.6875px");
+    expect(context.lineWidth).toBeCloseTo(1.125);
+    expect(fills.filter((f) => f.color === "#b58cff")).toEqual([
+      { text: "play", color: "#b58cff" },
+    ]);
+  });
   it("starts a fresh path before filling the caption background", () => {
     const operations: string[] = [];
     const context = {
@@ -46,18 +151,39 @@ describe("caption canvas isolation", () => {
       visible: true,
       burnedIn: true,
       style: {
-        fontFamily: "Arial", fontSize: 42, fontWeight: 700,
-        color: "#fff", backgroundColor: "rgba(0,0,0,.68)",
-        outlineColor: "#000", outlineWidth: 0, shadow: false,
-        align: "center", x: .5, y: .86, maxWidth: .82, animation: "none",
+        fontFamily: "Arial",
+        fontSize: 42,
+        fontWeight: 700,
+        color: "#fff",
+        backgroundColor: "rgba(0,0,0,.68)",
+        outlineColor: "#000",
+        outlineWidth: 0,
+        shadow: false,
+        align: "center",
+        x: 0.5,
+        y: 0.86,
+        maxWidth: 0.82,
+        animation: "none",
       },
-      segments: [{ id: "line", startMs: 0, endMs: 1_000, text: "Safe caption", language: "en", sourceTrackIds: ["mic"], userEdited: false }],
+      segments: [
+        {
+          id: "line",
+          startMs: 0,
+          endMs: 1_000,
+          text: "Safe caption",
+          language: "en",
+          sourceTrackIds: ["mic"],
+          userEdited: false,
+        },
+      ],
     };
 
     drawCaptionTrack(context, track, 500, { x: 0, y: 0, w: 1_920, h: 1_080 });
 
     expect(operations.indexOf("beginPath")).toBeGreaterThan(-1);
-    expect(operations.indexOf("beginPath")).toBeLessThan(operations.indexOf("fill"));
+    expect(operations.indexOf("beginPath")).toBeLessThan(
+      operations.indexOf("fill"),
+    );
   });
 
   it("anchors left and right aligned captions to the matching box edge", () => {
@@ -80,13 +206,38 @@ describe("caption canvas isolation", () => {
         fillText: (_value: string, x: number) => xPositions.push(x),
       } as unknown as CanvasRenderingContext2D;
       const track: CaptionTrack = {
-        id: "aligned", name: "Captions", language: "en", sourceTrackIds: ["mic"], visible: true, burnedIn: true,
+        id: "aligned",
+        name: "Captions",
+        language: "en",
+        sourceTrackIds: ["mic"],
+        visible: true,
+        burnedIn: true,
         style: {
-          fontFamily: "Segoe UI Variable", fontSize: 42, fontWeight: 700,
-          color: "#fff", backgroundColor: "#000", outlineColor: "#000", outlineWidth: 0,
-          shadow: false, align, x: .5, y: .86, maxWidth: .82, animation: "none",
+          fontFamily: "Segoe UI Variable",
+          fontSize: 42,
+          fontWeight: 700,
+          color: "#fff",
+          backgroundColor: "#000",
+          outlineColor: "#000",
+          outlineWidth: 0,
+          shadow: false,
+          align,
+          x: 0.5,
+          y: 0.86,
+          maxWidth: 0.82,
+          animation: "none",
         },
-        segments: [{ id: "line", startMs: 0, endMs: 1_000, text: "Aligned", language: "en", sourceTrackIds: ["mic"], userEdited: false }],
+        segments: [
+          {
+            id: "line",
+            startMs: 0,
+            endMs: 1_000,
+            text: "Aligned",
+            language: "en",
+            sourceTrackIds: ["mic"],
+            userEdited: false,
+          },
+        ],
       };
       drawCaptionTrack(context, track, 500, { x: 0, y: 0, w: 1_920, h: 1_080 });
       return xPositions[0];
@@ -99,31 +250,45 @@ describe("caption canvas isolation", () => {
 
 describe("mask camera transitions", () => {
   const mask = {
-    id: "lens", type: "mask" as const, mask: "magnifier" as const,
-    start: 2, end: 6, x: .1, y: .2, w: .3, h: .2,
-    intensity: 2, focusCamera: true, transitionDuration: .5,
+    id: "lens",
+    type: "mask" as const,
+    mask: "magnifier" as const,
+    start: 2,
+    end: 6,
+    x: 0.1,
+    y: 0.2,
+    w: 0.3,
+    h: 0.2,
+    intensity: 2,
+    focusCamera: true,
+    transitionDuration: 0.5,
   };
 
   it("eases in, holds, and returns to the normal camera", () => {
     expect(resolveLayerFade(mask, 2)).toBe(0);
     expect(resolveLayerFade(mask, 2.5)).toBe(1);
-    expect(resolveLayerFade(mask, 5.75)).toBeCloseTo(.5, 5);
+    expect(resolveLayerFade(mask, 5.75)).toBeCloseTo(0.5, 5);
     expect(resolveLayerFade(mask, 6)).toBe(0);
   });
 
   it("focuses on the mask center with a useful magnification", () => {
     const focus = resolveMaskCameraFocus([mask], 3);
-    expect(focus?.x).toBeCloseTo(.25);
-    expect(focus?.y).toBeCloseTo(.3);
+    expect(focus?.x).toBeCloseTo(0.25);
+    expect(focus?.y).toBeCloseTo(0.3);
     expect(focus?.scale).toBeGreaterThan(1);
     expect(focus?.mix).toBe(1);
   });
 
   it("supports independent cinematic mask entrance and exit curves", () => {
-    const curved = { ...mask, transitionDuration: 1, exitTransitionDuration: .5, transitionCurve: "smoother" as const };
+    const curved = {
+      ...mask,
+      transitionDuration: 1,
+      exitTransitionDuration: 0.5,
+      transitionCurve: "smoother" as const,
+    };
     expect(resolveLayerFade(curved, 2)).toBe(0);
-    expect(resolveLayerFade(curved, 2.5)).toBeCloseTo(.5, 5);
-    expect(resolveLayerFade(curved, 5.75)).toBeCloseTo(.5, 5);
+    expect(resolveLayerFade(curved, 2.5)).toBeCloseTo(0.5, 5);
+    expect(resolveLayerFade(curved, 5.75)).toBeCloseTo(0.5, 5);
     expect(resolveLayerFade(curved, 6)).toBe(0);
   });
 

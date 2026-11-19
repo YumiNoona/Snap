@@ -923,6 +923,7 @@ fn start_recording_blocking(
     region: Option<CaptureRegion>,
     options: Option<RecordingOptions>,
 ) -> std::result::Result<(), String> {
+    let _analysis_guard = crate::auto_clips::before_capture()?;
     if !Path::new(&output_path).is_absolute() || Path::new(&output_path).exists() {
         return Err("Recording requires a new absolute output path; existing recordings will not be overwritten".into());
     }

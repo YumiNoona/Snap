@@ -5,7 +5,7 @@
   <p>A local-first Windows screen recorder and motion editor inspired by Screen Studio and FocuSee.</p>
 
   <p>
-    <img src="https://img.shields.io/badge/version-9.6.0-10b981?style=flat-square" alt="Version 9.6.0" />
+    <img src="https://img.shields.io/badge/version-9.7.0-10b981?style=flat-square" alt="Version 9.7.0" />
     <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows11&logoColor=white" alt="Windows" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Rust-native-orange?style=flat-square&logo=rust" alt="Rust" />
@@ -230,24 +230,6 @@ layouts when opening previous recordings.
 
 Recording remains native and lightweight. The heavier React editor loads after
 capture, where timeline editing and rich visual rendering are appropriate.
-
-## Maintenance
-
-Run `npm run check:source` to check the desktop import graph for orphaned source files and missing relative imports. Tests, native commands and dynamically loaded editor modules remain separate from the website.
-
-Browse [the documentation index](docs/README.md) for current guides, the editor
-roadmap and archived development reviews.
-
-## Updates and releases
-
-Snap checks `YumiNoona/Snap` for signed updates and can install them without
-opening a web browser. Release versions must match in:
-
-- `package.json`
-- `src-tauri/Cargo.toml`
-- `src-tauri/tauri.conf.json`
-
-See [release instructions](docs/releasing.md) for signing, tagging, and publishing details.
 
 ## License
 

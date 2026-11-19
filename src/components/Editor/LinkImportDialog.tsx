@@ -25,12 +25,13 @@ interface LinkProgress {
 }
 
 interface Props {
+  actionLabel?: string;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
   onImported: (path: string) => Promise<void>;
 }
 
-export default function LinkImportDialog({ onClose, onBusy, onImported }: Props) {
+export default function LinkImportDialog({ onClose, onBusy, onImported, actionLabel }: Props) {
   const dialog = useModalFocus(true);
   const [url, setUrl] = useState("");
   const [info, setInfo] = useState<LinkInfo>();
@@ -197,7 +198,7 @@ export default function LinkImportDialog({ onClose, onBusy, onImported }: Props)
         <footer>
           {phase && phase !== "insert" && <button className="ss-link-import-cancel" type="button" disabled={cancelling} onClick={() => void cancel()}>Cancel</button>}
           {ready && !phase && error.startsWith("Could not read this link.") && <button className="ss-link-import-cancel" type="button" onClick={() => void install()}>Update downloader</button>}
-          {info && <button type="button" className="ss-topbar-export-btn" disabled={Boolean(phase)} onClick={() => void download()}><Download size={16} /> {downloadedPath ? "Add video layer" : "Download & add to timeline"}</button>}
+          {info && <button type="button" className="ss-topbar-export-btn" disabled={Boolean(phase)} onClick={() => void download()}><Download size={16} /> {actionLabel ?? (downloadedPath ? "Add video layer" : "Download & add to timeline")}</button>}
         </footer>
       </section>
     </div>

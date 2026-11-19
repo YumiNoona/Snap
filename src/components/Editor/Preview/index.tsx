@@ -1,3 +1,4 @@
+import { videoFrame, drawSplitFrame } from "../../../lib/videoFraming";
 import { projectMediaLayers } from "../../../lib/mediaTimeline";
 import type { ColorComparison } from "../../../lib/colorGrade";
 import { gradedSource, releaseColorRenderer } from "../../../lib/colorRenderer";
@@ -597,32 +598,12 @@ export default function Preview({
       ctx.drawImage(video, (cw - w) / 2, (ch - h) / 2, w, h);
       return;
     }
-    const pad = config.padding;
     const br = config.borderRadius;
     const vw = video.videoWidth;
     const vh = video.videoHeight;
 
     // Uniform 4-Side Padding Calculation (padding lives INSIDE the fixed canvas)
-    let videoW: number, videoH: number, offsetX: number, offsetY: number;
-    if (config.aspectRatio && config.aspectRatio.width > 0) {
-      const ar = config.aspectRatio.width / config.aspectRatio.height;
-      const innerW = Math.max(20, cw - pad * 2);
-      const innerH = Math.max(20, ch - pad * 2);
-      if (innerW / innerH > ar) {
-        videoH = innerH;
-        videoW = videoH * ar;
-      } else {
-        videoW = innerW;
-        videoH = videoW / ar;
-      }
-      offsetX = pad + (innerW - videoW) / 2;
-      offsetY = pad + (innerH - videoH) / 2;
-    } else {
-      videoW = Math.max(20, cw - pad * 2);
-      videoH = Math.max(20, ch - pad * 2);
-      offsetX = pad;
-      offsetY = pad;
-    }
+    const { x: offsetX, y: offsetY, w: videoW, h: videoH } = videoFrame(config, cw, ch, vw, vh);
     geomRef.current = { offsetX, offsetY, videoW, videoH, cw, ch };
 
     // Crop base rect (normalized 0-1 -> source pixels)
@@ -757,7 +738,8 @@ export default function Preview({
       screenCtx.save();
       screenCtx.imageSmoothingEnabled = true; screenCtx.imageSmoothingQuality = "high";
       const colorSource=gradedSource(canvas,video,vw,vh,config,config.videoClips?.length?sequenceTime(config.videoClips,video.currentTime,activeClipId):video.currentTime-config.trimStart,colorComparison);
-      drawVideoWithMotionBlur(
+      if (config.splitLayout) drawSplitFrame(screenCtx, colorSource, vw, vh, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.splitLayout);
+      else drawVideoWithMotionBlur(
         screenCtx,
         colorSource,
         { x: coverX, y: coverY, w: coverW, h: coverH },
@@ -949,7 +931,7 @@ export default function Preview({
     }
 
     for (const track of captionTracks) {
-      drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+      drawCaptionTrack(ctx, track, videoTs * 1000, { x: 0, y: 0, w: cw, h: ch });
     }
     drawActionOverlay(ctx, displayActions.current, ts, config.actionOverlay, { x: offsetX, y: offsetY, w: videoW, h: videoH });
     if(config.safeArea && config.safeArea!=="off"){

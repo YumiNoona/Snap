@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { reconcileAudioClips, resolvedAudioClips } from "../../lib/audioEditing";
 import { resolveClipEffects, editClipEffects, replaceAnimationKeys, replaceAnimationKeyGroups } from "../../lib/clipEffects";
 import { editLayerAtTime, moveLayerGroup } from "../../lib/layerAnimation";
@@ -52,6 +53,8 @@ interface Props {
   onClose: () => void;
 }
 
+const AutoClips = lazy(() => import("./AutoClips"));
+
 export type SidebarToolTab = "uploads" | "canvas" | "color" | "tilt" | "cursor" | "actions" | "camera" | "annotations" | "motion" | "captions" | "audio";
 
 const HOTSPOTS_STORAGE_KEY = "snap.cursorHotspots";
@@ -86,6 +89,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const setAudioTracks=useCallback((action:SetStateAction<AudioTrack[]>)=>{if(!scopeRef.current){setRootAudioTracks(action);return;}setRootConfig(root=>({...root,nestedSequences:root.nestedSequences?.map(d=>d.id===scopeRef.current?{...d,audioTracks:typeof action==="function"?action(d.audioTracks):action}:d)}));},[]);
   const [audioError, setAudioError] = useState("");
   const [showLinkImport, setShowLinkImport] = useState(false);
+  const [showAutoClips, setShowAutoClips] = useState(false);
   const [downloadedUpload, setDownloadedUpload] = useState<string>();
   const linkBusy = useRef(false);
   const timelineImports = useRef(0);
@@ -1196,6 +1200,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           >
             <Library size={20} /><span className="ss-tool-label">Uploads</span>
           </button>
+          <button className="ss-tool-icon-btn" title="Auto Clips — local highlights" onClick={() => { pausePlayback(); setShowAutoClips(true); }}><WandSparkles size={20}/><span className="ss-tool-label">Auto Clips</span></button>
           <button
             className={`ss-tool-icon-btn ${activeTool === "canvas" ? "active" : ""}`}
             onClick={() => setActiveTool("canvas")}
@@ -1467,7 +1472,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
             setConfig((c) => ({ ...c, cuts: newCuts }))
         }
         onVideoClipsChange={(videoClips) => { if(config.lockedTracks?.includes("video"))return; pausePlayback(); const next=retainedClips(videoClips,config.trimStart,config.trimEnd||duration);setAudioTracks(tracks=>reconcileAudioClips(tracks,footageClips,next));setConfig(c => ({ ...c, videoClips })); }}
-        onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar }))}
+        onAspectChange={(ar) => setConfig((c) => ({ ...c, aspectRatio: ar, videoFit: c.videoFit ?? "contain" }))}
+        onVideoFitChange={(videoFit) => setConfig(c => ({ ...c, videoFit }))}
         onToggleCrop={handleToggleCrop}
         cropActive={cropMode || !!config.crop}
         canUndo={canUndo}
@@ -1595,6 +1601,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
       />
+      {showAutoClips && <Suspense fallback={<div className="ss-command-backdrop" role="status">Opening Auto Clips…</div>}><AutoClips sources={[{path:videoPath,name:"Current recording",audioPath:audioTracks.find(t=>t.kind==="microphone")?.path??audioTracks.find(t=>t.kind==="system"||t.kind==="device")?.path,audioTracks:audioTracks.filter(t=>t.kind!=="imported")},...config.layers.filter((layer):layer is import("../../lib/types").VideoLayer=>layer.type==="video").map(layer=>({path:layer.path,name:layer.path.split(/[\\/]/).pop()??"Uploaded video"}))]} onClose={()=>setShowAutoClips(false)} onOpen={async(path,video,log)=>{if(projectDirty)await saveProjectNow();setShowAutoClips(false);onOpenProject?.(path,video,log);}} /></Suspense>}
       {showLinkImport && <LinkImportDialog onClose={() => setShowLinkImport(false)} onBusy={(busy) => { linkBusy.current = busy; }}
         onImported={async (path) => {
           setDownloadedUpload(path);

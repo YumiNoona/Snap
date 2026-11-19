@@ -62,6 +62,7 @@ interface Props {
   onTrimEndChange: (t: number) => void;
   onCutsChange: (cuts: number[]) => void;
   onVideoClipsChange: (clips: VideoClip[] | null) => void;
+  onVideoFitChange?: (fit: "contain" | "cover") => void;
   onAspectChange: (ar: { width: number; height: number } | null) => void;
   onToggleCrop: () => void;
   cropActive: boolean;
@@ -140,6 +141,7 @@ export default function Timeline({
   onCutsChange,
   onVideoClipsChange,
   onAspectChange,
+  onVideoFitChange,
   onToggleCrop,
   cropActive,
   canUndo,
@@ -1249,6 +1251,10 @@ export default function Timeline({
 
             {showAspectMenu && createPortal(
               <div ref={aspectMenuRef} className={`aspect-dropdown-menu aspect-dropdown-portal editor-glass-surface theme-${editorTheme}`} style={{ left: aspectMenuPosition.x, top: aspectMenuPosition.y }}>
+                <div className="aspect-fit-options" role="group" aria-label="Video framing">
+                  <button className="aspect-item" aria-pressed={config.videoFit !== "cover"} onClick={() => onVideoFitChange?.("contain")}>Fit whole video</button>
+                  <button className="aspect-item" aria-pressed={config.videoFit === "cover"} onClick={() => onVideoFitChange?.("cover")}>Fill and crop</button>
+                </div>
                 {ASPECT_RATIOS.map((ar) => (
                   <button
                     key={ar.label}

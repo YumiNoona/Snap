@@ -1,3 +1,4 @@
+import { videoFrame, drawSplitFrame } from "./videoFraming";
 import { projectMediaLayers } from "./mediaTimeline";
 import { maskPose } from "./maskEffects";
 import { FootageTransitions } from "./transitions";
@@ -292,7 +293,6 @@ export async function createExportCompositor(
     ctx.beginPath();
     const ts = video.currentTime * 1000;
     const cw = outputW, ch = outputH;
-    const pad = config.padding;
     const br = config.borderRadius;
     const vw = video.videoWidth || 1;
     const vh = video.videoHeight || 1;
@@ -300,26 +300,7 @@ export async function createExportCompositor(
     prevTs = ts;
     spawnClickRipples(Math.abs(ts - previousTime) > 300 ? ts - 1 : previousTime, ts, vw, vh);
 
-    let videoW: number, videoH: number, offsetX: number, offsetY: number;
-    if (config.aspectRatio && config.aspectRatio.width > 0) {
-      const ar = config.aspectRatio.width / config.aspectRatio.height;
-      const innerW = Math.max(20, cw - pad * 2);
-      const innerH = Math.max(20, ch - pad * 2);
-      if (innerW / innerH > ar) {
-        videoH = innerH;
-        videoW = videoH * ar;
-      } else {
-        videoW = innerW;
-        videoH = videoW / ar;
-      }
-      offsetX = pad + (innerW - videoW) / 2;
-      offsetY = pad + (innerH - videoH) / 2;
-    } else {
-      videoW = Math.max(20, cw - pad * 2);
-      videoH = Math.max(20, ch - pad * 2);
-      offsetX = pad;
-      offsetY = pad;
-    }
+    const { x: offsetX, y: offsetY, w: videoW, h: videoH } = videoFrame(config, cw, ch, vw, vh);
 
     const crop = config.crop;
     const baseX = crop ? crop.x * vw : 0;
@@ -421,7 +402,8 @@ export async function createExportCompositor(
       screenCtx.save();
       screenCtx.imageSmoothingEnabled = true; screenCtx.imageSmoothingQuality = "high";
       const colorSource=gradedSource(canvas,video,vw,vh,config,sequenceTime(footageClips,video.currentTime,effectClipId));
-      drawVideoWithMotionBlur(
+      if (config.splitLayout) drawSplitFrame(screenCtx, colorSource, vw, vh, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.splitLayout);
+      else drawVideoWithMotionBlur(
         screenCtx, colorSource,
         { x: coverX, y: coverY, w: coverW, h: coverH },
         { x: offsetX, y: offsetY, w: videoW, h: videoH },
@@ -583,7 +565,7 @@ export async function createExportCompositor(
       ctx.restore();
     }
     for (const track of captionTracks) {
-      if (track.burnedIn) drawCaptionTrack(ctx, track, videoTs * 1000, { x: offsetX, y: offsetY, w: videoW, h: videoH });
+      if (track.burnedIn) drawCaptionTrack(ctx, track, videoTs * 1000, { x: 0, y: 0, w: cw, h: ch });
     }
     drawActionOverlay(ctx, displayActions, ts, config.actionOverlay, { x: offsetX, y: offsetY, w: videoW, h: videoH });
 

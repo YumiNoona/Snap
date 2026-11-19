@@ -1276,3 +1276,5 @@
 .layer-clip-bar.mask[data-mask=pixelate] { background:linear-gradient(120deg,#29413d,#202e2b); border-color:#8ec9bb80; }
 .layer-clip-bar.mask[data-mask=redact] { background:linear-gradient(120deg,#463037,#2d2226); border-color:#d69aa980; }
 .layer-clip-bar.mask[data-mask=colorFocus] { background:linear-gradient(120deg,#3b3c2a,#292a20); border-color:#bfc69680; }
+.aspect-fit-options { border-bottom:1px solid var(--border-default); margin-bottom:6px; padding-bottom:6px; }
+.aspect-fit-options [aria-pressed=true] { color:var(--text-primary); background:var(--bg-hover); }

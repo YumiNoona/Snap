@@ -30,12 +30,12 @@ export function drawCaptionTrack(
   const entrance = captionAnimationFrame(animation, timeMs - segment.startMs, entranceDuration);
   const { layoutText, visibleText } = captionRenderText(segment.text, animation, entrance.reveal);
   if (!layoutText || !visibleText) return;
-  const fontSize = Math.max(12, style.fontSize * frame.w / 1920);
-  const maxWidth = Math.max(80, frame.w * style.maxWidth);
+  const fontSize = Math.max(2, style.fontSize * frame.w / 1920);
+  const maxWidth = Math.max(8, frame.w * style.maxWidth);
   ctx.save();
   const fontFamily = style.fontFamily.includes(" ") ? `"${style.fontFamily}"` : style.fontFamily;
   ctx.font = `${style.fontStyle ?? "normal"} ${style.fontWeight} ${fontSize}px ${fontFamily}`;
-  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${style.letterSpacing ?? 0}px`;
+  (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = `${(style.letterSpacing ?? 0) * frame.w / 1920}px`;
   ctx.textAlign = style.align;
   ctx.textBaseline = "middle";
   const words = layoutText.split(/\s+/u);
@@ -95,9 +95,18 @@ export function drawCaptionTrack(
     if (!value) return;
     const y = textCenterY + (index - (lines.length - 1) / 2) * lineHeight;
     if (style.shadow) { ctx.shadowColor = "rgba(0,0,0,.7)"; ctx.shadowBlur = fontSize * (style.shadowBlur ?? .18); ctx.shadowOffsetY = fontSize * 0.08; }
-    if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2; ctx.lineJoin = "round"; ctx.strokeText(value, textCenterX, y, maxWidth); }
+    if (style.outlineWidth > 0) { ctx.strokeStyle = style.outlineColor; ctx.lineWidth = style.outlineWidth * 2 * frame.w / 1920; ctx.lineJoin = "round"; ctx.strokeText(value, textCenterX, y, maxWidth); }
     ctx.fillStyle = style.color;
     ctx.fillText(value, textCenterX, y, maxWidth);
+    if(style.wordHighlight&&segment.words?.length){
+      const active=segment.words.find(w=>timeMs>=w.startMs&&timeMs<w.endMs);
+      if(active){
+        const prior=lines.slice(0,index).join(" ").split(/\s+/u).filter(Boolean).length;
+        const tokens=fullLine.split(/\s+/u);let left=textCenterX-(style.align==="center"?ctx.measureText(value).width/2:style.align==="right"?ctx.measureText(value).width:0);
+        ctx.save();ctx.textAlign="left";
+        tokens.forEach((word,i)=>{if(segment.words?.[prior+i]===active){ctx.fillStyle=style.highlightColor??"#b58cff";ctx.fillText(word,left,y);}left+=ctx.measureText(word+(i<tokens.length-1?" ":"")).width;});ctx.restore();
+      }
+    }
   });
   ctx.restore();
   ctx.restore();

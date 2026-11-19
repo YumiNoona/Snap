@@ -245,6 +245,15 @@ export default function FinishingStudio(p: Props) {
                 ))}
               </div>
               <fieldset className="refine-framing"><legend>Framing</legend>
+                <SelectRow label="Video fit" value={p.config.videoFit ?? "contain"} options={["contain","cover"]} optionLabels={{contain:"Fit whole video",cover:"Fill and crop"}} onChange={videoFit=>p.onChange({...p.config,videoFit:videoFit as "contain"|"cover"})}/>
+                <p>Fit keeps the full frame and its proportions. Fill crops the edges without stretching.</p>
+                {p.config.splitLayout && <>
+                  <h4>Facecam split</h4>
+                  <Slider label="Facecam height" value={p.config.splitLayout.fraction*100} min={15} max={60} step={1} unit="%" onChange={v=>p.onChange({...p.config,splitLayout:{...p.config.splitLayout!,fraction:v/100}})}/>
+                  <SelectRow label="Gameplay fit" value={p.config.splitLayout.contentFit} options={["contain","cover"]} optionLabels={{contain:"Fit whole gameplay",cover:"Fill and crop"}} onChange={v=>p.onChange({...p.config,splitLayout:{...p.config.splitLayout!,contentFit:v as "contain"|"cover"}})}/>
+                  {(["camera","content"] as const).map(region=><div key={region}><h4>{region==="camera"?"Camera source crop":"Gameplay source crop"}</h4>{(["x","y","w","h"] as const).map(axis=><Slider key={axis} label={axis.toUpperCase()} value={p.config.splitLayout![region][axis]*100} min={axis==="w"||axis==="h"?1:0} max={100} step={1} unit="%" onChange={v=>p.onChange({...p.config,splitLayout:{...p.config.splitLayout!,[region]:{...p.config.splitLayout![region],[axis]:v/100}}})}/>)}</div>)}
+                  <button onClick={()=>p.onChange({...p.config,splitLayout:undefined})}>Return to whole video</button>
+                </>}
                 <Slider showValueTooltip={false} label="Left" value={crop.x*100} min={0} max={Math.max(0,(crop.x+crop.w-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("left",value)}/>
                 <Slider showValueTooltip={false} label="Right" value={(1-crop.x-crop.w)*100} min={0} max={(.95-crop.x)*100} step={1} unit="%" onChange={value=>cropEdge("right",value)}/>
                 <Slider showValueTooltip={false} label="Top" value={crop.y*100} min={0} max={Math.max(0,(crop.y+crop.h-.05)*100)} step={1} unit="%" onChange={value=>cropEdge("top",value)}/>

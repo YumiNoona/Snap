@@ -50,10 +50,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            - Import videos from links with an in-editor downloader setup, quality controls and live progress.
-            - Segmented downloads run in parallel. Compatible H.264 MP4 downloads can skip video conversion.
-            - Imported video clips show filmstrip previews on their own timeline layers above the recording.
-            - Uploads is available in the editor sidebar. Link imports appear there as well as on the timeline.
+            - Auto Clips now guides you through source selection, a smaller analysis range, and layout review.
+            - Fast scans use keyframes; Auto CC processes shortlisted moments instead of the full source.
+            - Review landscape and portrait previews side by side. Drag camera and gameplay crops for filled stacked layouts.
+            - Clip captions use short phrases, timed word highlights, and refresh after final trim changes.
+            - Ratio changes preserve video proportions with fit or crop controls shared by preview and export.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

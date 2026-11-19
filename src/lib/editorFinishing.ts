@@ -405,6 +405,8 @@ export function captureLayout(
     id,
     name,
     layout: {
+      videoFit: config.videoFit,
+      splitLayout: config.splitLayout,
       aspectRatio: config.aspectRatio,
       crop: config.crop,
       padding: config.padding,
@@ -433,6 +435,7 @@ export function formatLayout(
 ) {
   return {
     ...config,
+    videoFit: config.videoFit ?? "contain",
     aspectRatio: { width: LAYOUT_FORMATS.find(f => f.id === format)!.width, height: LAYOUT_FORMATS.find(f => f.id === format)!.height },
     safeArea: format === "vertical" || format === "square" ? format : ("off" as const),
     cameraOverlay: {

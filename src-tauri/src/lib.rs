@@ -1,4 +1,7 @@
 mod access;
+mod auto_clips;
+mod clip_analysis;
+mod clip_ai;
 mod audio;
 mod microphone_meter;
 mod camera;
@@ -1955,6 +1958,7 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if window.label() == "editor" {
+                    auto_clips::cancel();
                     editor_sources::cancel_link();
                 }
                 export::discard_export_sink_for_window(window.label());
@@ -1962,6 +1966,14 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            clip_analysis::analyze_auto_clips,
+            clip_analysis::inspect_auto_clips_source,
+            clip_analysis::transcribe_auto_clip_ranges,
+            auto_clips::cancel_auto_clips,
+            auto_clips::auto_clips_ai_ready,
+            auto_clips::install_auto_clips_ai,
+            auto_clips::install_auto_clips_captions,
+            auto_clips::rank_auto_clips,
             capture::enumerate_targets,
             capture::window_preview,
             capture::get_target_bounds,
