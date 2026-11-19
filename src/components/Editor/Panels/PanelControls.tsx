@@ -18,7 +18,7 @@ export function SelectRow({ label, value, options, optionLabels, onChange, disab
     const place = () => {
       const trigger = triggerRef.current?.getBoundingClientRect();
       if (!trigger) return;
-      const boundary = rootRef.current?.closest?.(".timeline-inspector-scroll, .ss-panels-drawer, .timeline-clip-inspector, .finishing-body, .finishing-studio")?.getBoundingClientRect();
+      const boundary = rootRef.current?.closest?.(".timeline-inspector-scroll, .ss-panels-drawer, .timeline-clip-inspector, .finishing-body, .finishing-studio, .ac-scroll")?.getBoundingClientRect();
       const below = Math.max(40, Math.min(boundary?.bottom ?? window.innerHeight, window.innerHeight) - trigger.bottom - 12);
       const above = Math.max(40, trigger.top - Math.max(boundary?.top ?? 0, 0) - 12);
       const upwards = below < Math.min(238, options.length * 37 + 10) && above > below;
@@ -76,9 +76,9 @@ export function SelectRow({ label, value, options, optionLabels, onChange, disab
   );
 }
 
-export function CheckRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+export function CheckRow({ label, checked, onChange, disabled=false }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabled?:boolean }) {
   return (
-    <button type="button" className="field-row check-row" onClick={() => onChange(!checked)} aria-pressed={checked}>
+    <button type="button" className="field-row check-row" disabled={disabled} onClick={() => onChange(!checked)} aria-pressed={checked}>
       <span className="field-label">{label}</span>
       <span className={`pro-switch ${checked ? "checked" : ""}`} aria-hidden="true"><span /></span>
     </button>

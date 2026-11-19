@@ -50,11 +50,11 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Snap v__VERSION__"
           releaseBody: |
-            - Auto Clips now guides you through source selection, a smaller analysis range, and layout review.
-            - Fast scans use keyframes; Auto CC processes shortlisted moments instead of the full source.
-            - Review landscape and portrait previews side by side. Drag camera and gameplay crops for filled stacked layouts.
-            - Clip captions use short phrases, timed word highlights, and refresh after final trim changes.
-            - Ratio changes preserve video proportions with fit or crop controls shared by preview and export.
+            - Auto Clips follows the editor theme with glass surfaces and shared sliders, switches and dropdowns.
+            - Headings scroll with content. Timecode fields make source and clip ranges easier to adjust.
+            - Return to the original timeline or switch between generated clips; edits save before switching and playheads are restored.
+            - Fast local scans, short-range Auto CC and proportion-preserving stacked layouts remain available.
+            - Publishing waits for the installer workflow before uploading standalone assets, avoiding draft-release lookup errors.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

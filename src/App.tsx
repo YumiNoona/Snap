@@ -7,6 +7,7 @@ import { userError } from "./lib/userError";
 import "./App.css";
 import "./GlassSurfaces.css";
 import { recordingDataPaths } from "./lib/recordingPaths";
+import {extendClipWorkspace,type ClipWorkspace,type EditorRoute} from "./lib/clipWorkspace";
 
 const RecorderLauncher = React.lazy(() => import("./components/RecorderLauncher/RecorderLauncher"));
 const DeviceView = React.lazy(() => import("./components/RecorderLauncher/DeviceView"));
@@ -97,6 +98,12 @@ function App() {
   const [editorVideo, setEditorVideo] = useState(isEditorPreview ? editorPreviewVideo : "");
   const [editorLog, setEditorLog] = useState("");
   const [editorProjectPath, setEditorProjectPath] = useState("");
+  const [clipWorkspace,setClipWorkspace]=useState<ClipWorkspace|null>(null);
+  const [editorPosition,setEditorPosition]=useState(0);
+  const navigateEditor=(route:EditorRoute,current?:EditorRoute)=>{
+    if(current)setClipWorkspace(workspace=>workspace?{original:workspace.original.projectPath===current.projectPath?{...workspace.original,position:current.position}:workspace.original,clips:workspace.clips.map(c=>c.projectPath===current.projectPath?{...c,position:current.position}:c)}:null);
+    setEditorProjectPath(route.projectPath);setEditorVideo(route.videoPath);setEditorLog(route.inputLogPath);setEditorPosition(route.position??0);
+  };
   const [editorReady, setEditorReady] = useState(!isEditorWindow);
   const [editorSuspended, setEditorSuspended] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -122,6 +129,8 @@ function App() {
       setEditorLog(log);
       setEditorProjectPath("");
       setEditorSuspended(false);
+      setClipWorkspace(null);
+      setEditorPosition(0);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -260,7 +269,13 @@ function App() {
             videoPath={editorVideo}
             inputLogPath={editorLog || recordingDataPaths(editorVideo).logPath}
             initialProjectPath={editorProjectPath}
+            initialPosition={editorPosition}
+            clipWorkspace={clipWorkspace}
+            onNavigateTimeline={navigateEditor}
+            onOpenClip={(clip,original,clips)=>{setClipWorkspace(previous=>extendClipWorkspace(previous,original,clips));navigateEditor(clip);}}
             onOpenProject={(projectPath, video, log) => {
+              setClipWorkspace(null);
+              setEditorPosition(0);
               setEditorProjectPath(projectPath);
               setEditorVideo(video);
               setEditorLog(log);

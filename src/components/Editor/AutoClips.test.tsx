@@ -2,6 +2,7 @@ import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import AutoClips from "./AutoClips";
+import ClipTimeField from "./ClipTimeField";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -71,7 +72,14 @@ it("creates two separately editable projects and preserves the original source",
     if (command === "cancel_auto_clips") return;
     throw Error(`Unexpected command: ${command}`);
   });
-  const onOpen = vi.fn(async () => {});
+  const onOpen = vi.fn(
+    async (
+      _path: string,
+      _video: string,
+      _log: string,
+      _clips?: unknown[],
+    ) => {},
+  );
   let view!: ReturnType<typeof create>;
   await act(async () => {
     view = create(
@@ -91,13 +99,13 @@ it("creates two separately editable projects and preserves the original source",
   });
   const createButton = view.root
     .findAllByType("button")
-    .find((b) => label(b).includes("Create 2 editable clips"))!;
+    .find((b) => label(b).includes("Create 2 clips"))!;
   expect(createButton.props.disabled).toBe(false);
   await act(async () => {
     view.root
-      .findAllByType("input")
-      .find((i) => i.props.type === "number" && i.props.value === 10)!
-      .props.onChange({ target: { value: "9" } });
+      .findAllByType(ClipTimeField)
+      .find((i) => i.props.label === "Clip out")!
+      .props.onChange(9);
   });
   await act(async () => {
     await createButton.props.onClick();
@@ -129,6 +137,14 @@ it("creates two separately editable projects and preserves the original source",
       speechCalls[1][1] as { request: { ranges: { end: number }[] } }
     ).request.ranges.some((r) => r.end === 9),
   ).toBe(true);
+  await act(async () => {
+    await view.root
+      .findAllByType("button")
+      .find((b) => label(b).includes("Edit first clip"))!
+      .props.onClick();
+  });
+  expect(onOpen.mock.calls[0]).toHaveLength(4);
+  expect(onOpen.mock.calls[0][3]).toHaveLength(2);
   await act(async () => view.unmount());
 });
 

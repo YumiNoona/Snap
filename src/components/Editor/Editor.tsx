@@ -44,11 +44,17 @@ import "./Editor.css";
 import type { ColorComparison } from "../../lib/colorGrade";
 import type { MediaDragDetail } from "../../lib/mediaDrag";
 import { mediaDropPosition } from "../../lib/mediaDrop";
+import ClipWorkspaceBar from "./ClipWorkspaceBar";
+import type {ClipWorkspace,EditorRoute} from "../../lib/clipWorkspace";
 
 interface Props {
   videoPath: string;
   inputLogPath: string;
   initialProjectPath?: string;
+  initialPosition?: number;
+  clipWorkspace?: ClipWorkspace | null;
+  onNavigateTimeline?: (route:EditorRoute,current?:EditorRoute)=>void;
+  onOpenClip?: (clip:EditorRoute,original:EditorRoute,clips:EditorRoute[])=>void;
   onOpenProject?: (projectPath: string, videoPath: string, inputLogPath: string) => void;
   onClose: () => void;
 }
@@ -68,7 +74,7 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
-export default function Editor({ videoPath, inputLogPath, initialProjectPath = "", onOpenProject, onClose }: Props) {
+export default function Editor({ videoPath, inputLogPath, initialProjectPath = "", initialPosition=0,clipWorkspace,onNavigateTimeline,onOpenClip,onOpenProject, onClose }: Props) {
   const isBrowserPreview =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
   const [rootConfig, setRootConfig] = useState<EditorConfig>(() => ({
@@ -90,6 +96,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [audioError, setAudioError] = useState("");
   const [showLinkImport, setShowLinkImport] = useState(false);
   const [showAutoClips, setShowAutoClips] = useState(false);
+  const [switchingTimeline,setSwitchingTimeline]=useState(false);
   const [downloadedUpload, setDownloadedUpload] = useState<string>();
   const linkBusy = useRef(false);
   const timelineImports = useRef(0);
@@ -259,6 +266,15 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
     decorateRestoredConfig,
   });
 
+  const restoredPosition=useRef(false);
+  useEffect(()=>{if(!projectReady||duration<=0||restoredPosition.current)return;restoredPosition.current=true;if(initialPosition>0)seekSequence(initialPosition);},[projectReady,duration,initialPosition,seekSequence]);
+  const navigateTimeline=async(route:EditorRoute)=>{
+    if(switchingTimeline||!projectReady||route.projectPath===projectPath)return;
+    pausePlayback();setSwitchingTimeline(true);
+    try{await saveProjectNow();onNavigateTimeline?.(route,{projectPath,videoPath,inputLogPath,label:"Timeline",position:sequencePosition});}
+    catch(error){setFileActionStatus(`Could not switch timelines: ${userError(error)}`);setShowFileMenu(true);}
+    finally{setSwitchingTimeline(false);}
+  };
   const handleSaveProject = useCallback(async () => {
     try {
       await saveProjectNow();
@@ -1089,7 +1105,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   }, [previewFocusMode, revealPreviewControls]);
 
   return (
-    <div className={`screenstudio-editor-layout ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} data-restore-ready={projectReady} onPointerMove={revealPreviewControls}>
+    <div className={`screenstudio-editor-layout ${clipWorkspace ? "has-clip-workspace" : ""} ${previewFocusMode ? "preview-focus-mode" : ""} ${previewFocusMode && !previewControlsVisible ? "preview-controls-hidden" : ""}`} data-theme={editorTheme} data-restore-ready={projectReady} onPointerMove={revealPreviewControls}>
       {sequenceScope.length>0&&<nav className="sequence-breadcrumbs" aria-label="Sequence navigation"><button onClick={()=>{pausePlayback();setSequenceScope([]);}}>Main sequence</button>{sequenceScope.map((id,i)=><button key={id} onClick={()=>{pausePlayback();setSequenceScope(s=>s.slice(0,i+1));}}>{rootConfig.nestedSequences?.find(d=>d.id===id)?.name??"Sequence"}</button>)}</nav>}
       {!projectReady&&<div className="editor-opening" role="status">Opening editor…</div>}
       {/* ── Top Bar ────────────────────────────────────────────── */}
@@ -1097,7 +1113,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         <div className="ss-drag-area" data-tauri-drag-region />
         <div className="ss-topbar-left">
           {/* Back button */}
-          <button className="ss-icon-btn back-btn" onClick={onClose} title="Save and close editor">
+            <button className="ss-icon-btn back-btn" disabled={switchingTimeline} onClick={clipWorkspace&&projectPath!==clipWorkspace.original.projectPath?()=>void navigateTimeline(clipWorkspace.original):onClose} title={clipWorkspace&&projectPath!==clipWorkspace.original.projectPath?"Back to original timeline":"Save and close editor"}>
             <ChevronLeft size={20} />
           </button>
 
@@ -1186,7 +1202,8 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
         </div>
       </header>
 
-      {/* ── Main Workspace: Sidebar + Preview + Panels ─────────── */}
+        {clipWorkspace&&<ClipWorkspaceBar workspace={clipWorkspace} currentPath={projectPath} disabled={switchingTimeline||!projectReady} onNavigate={route=>void navigateTimeline(route)}/>}
+        {/* ── Main Workspace: Sidebar + Preview + Panels ─────────── */}
       <div className="ss-editor-body">
         {/* Left Vertical Tool Bar (Screen Studio style) */}
         <aside className="ss-vertical-tool-palette">
@@ -1601,7 +1618,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
           if (selectedCaption?.trackId === trackId && selectedCaption.segmentId === segmentId) setSelectedCaption(null);
         }}
       />
-      {showAutoClips && <Suspense fallback={<div className="ss-command-backdrop" role="status">Opening Auto Clips…</div>}><AutoClips sources={[{path:videoPath,name:"Current recording",audioPath:audioTracks.find(t=>t.kind==="microphone")?.path??audioTracks.find(t=>t.kind==="system"||t.kind==="device")?.path,audioTracks:audioTracks.filter(t=>t.kind!=="imported")},...config.layers.filter((layer):layer is import("../../lib/types").VideoLayer=>layer.type==="video").map(layer=>({path:layer.path,name:layer.path.split(/[\\/]/).pop()??"Uploaded video"}))]} onClose={()=>setShowAutoClips(false)} onOpen={async(path,video,log)=>{if(projectDirty)await saveProjectNow();setShowAutoClips(false);onOpenProject?.(path,video,log);}} /></Suspense>}
+      {showAutoClips && <Suspense fallback={<div className="ss-command-backdrop" role="status">Opening Auto Clips…</div>}><AutoClips sources={[{path:videoPath,name:"Current recording",audioPath:audioTracks.find(t=>t.kind==="microphone")?.path??audioTracks.find(t=>t.kind==="system"||t.kind==="device")?.path,audioTracks:audioTracks.filter(t=>t.kind!=="imported")},...config.layers.filter((layer):layer is import("../../lib/types").VideoLayer=>layer.type==="video").map(layer=>({path:layer.path,name:layer.path.split(/[\\/]/).pop()??"Uploaded video"}))]} onClose={()=>setShowAutoClips(false)} onOpen={async(path,video,log,clips)=>{await saveProjectNow();const clip={projectPath:path,videoPath:video,inputLogPath:log,label:clips?.find(c=>c.projectPath===path)?.label??"Clip",position:0};const original={projectPath,videoPath,inputLogPath,label:"Original timeline",position:sequencePosition};setShowAutoClips(false);if(onOpenClip)onOpenClip(clip,original,clips??[clip]);else onOpenProject?.(path,video,log);}} /></Suspense>}
       {showLinkImport && <LinkImportDialog onClose={() => setShowLinkImport(false)} onBusy={(busy) => { linkBusy.current = busy; }}
         onImported={async (path) => {
           setDownloadedUpload(path);

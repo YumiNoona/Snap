@@ -65,6 +65,19 @@
   position: relative;
   z-index: 10;
 }
+.ss-clip-workspace { display:flex;align-items:center;gap:14px;flex-shrink:0;min-height:46px;padding:7px 20px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);color:var(--text-secondary);font-size:11px;position:relative;z-index:9; }
+.ss-clip-workspace > button { display:flex;align-items:center;gap:7px;background:transparent;border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);font:inherit;cursor:pointer;padding:7px 10px; }
+.ss-clip-workspace > button:disabled { opacity:.4;cursor:default; }
+.ss-clip-workspace .custom-select-row { gap:12px;min-width:0;max-width:450px; }
+.ss-clip-workspace .custom-select { width:240px;max-width:45vw; }
+.ss-clip-workspace .custom-select-trigger > span { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.ss-clip-workspace > span { margin-left:auto; }
+.ss-clip-workspace { grid-column:1 / -1;grid-row:2; }
+.screenstudio-editor-layout.has-clip-workspace:not(.preview-focus-mode) { grid-template-rows:50px 44px minmax(0,1fr) auto; }
+.screenstudio-editor-layout.has-clip-workspace:not(.preview-focus-mode) :is(.ss-vertical-tool-palette,.ss-preview-center-area,.ss-panels-drawer) { grid-row:3; }
+.screenstudio-editor-layout.has-clip-workspace:not(.preview-focus-mode) .ss-timeline-container { grid-row:4; }
+.screenstudio-editor-layout.preview-focus-mode .ss-clip-workspace { display:none; }
+@media(max-width:1050px){.ss-clip-workspace > span{display:none;}}
 
 .ss-drag-area {
   position: absolute;

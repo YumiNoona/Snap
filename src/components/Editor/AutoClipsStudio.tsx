@@ -16,6 +16,7 @@ import {
 import { useModalFocus } from "./hooks/useModalFocus";
 import LinkImportDialog from "./LinkImportDialog";
 import AutoClipPreview from "./AutoClipPreview";
+import ClipTimeField from "./ClipTimeField";
 import { mediaSrc } from "../../lib/mediaSource";
 import { getTranscriptionEnvironment } from "../../lib/captions";
 import {
@@ -37,6 +38,10 @@ import { type FrameRect, type SplitLayout } from "../../lib/videoFraming";
 import { recordingDataPaths } from "../../lib/recordingPaths";
 import { saveProjectAtPath } from "../../lib/project";
 import type { AudioTrack } from "../../lib/types";
+import Slider from "../shared/Slider";
+import { SelectRow, CheckRow } from "./Panels/PanelControls";
+import type { EditorRoute } from "../../lib/clipWorkspace";
+import "./Panels/Panels.css";
 import "./AutoClips.css";
 
 export interface AutoClipSource {
@@ -52,6 +57,7 @@ interface Props {
     projectPath: string,
     videoPath: string,
     inputLogPath: string,
+    clips?: EditorRoute[],
   ) => Promise<void>;
 }
 interface SourceInfo {
@@ -126,6 +132,16 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
   useEffect(() => {
     if (scrollPanel.current) scrollPanel.current.scrollTop = 0;
   }, [step]);
+  useEffect(() => {
+    const media = rangeVideo.current;
+    return () => {
+      if (media) {
+        media.pause();
+        media.removeAttribute("src");
+        media.load();
+      }
+    };
+  }, [info, path, step]);
   const active = candidates.find((c) => c.id === activeId) ?? candidates[0],
     disabled = !!busy || loading;
   const split: SplitLayout | undefined = useMemo(
@@ -450,6 +466,30 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
     setNotice("Cancelling and releasing local workers…");
     await invoke("cancel_auto_clips").catch(() => {});
   };
+  const openCreated = async (c: (typeof created)[number]) => {
+    begin("Opening clip");
+    try {
+      await onOpen(
+        c.path,
+        c.video,
+        c.log,
+        created.map((item) => ({
+          projectPath: item.path,
+          videoPath: item.video,
+          inputLogPath: item.log,
+          label: item.name,
+          position: 0,
+        })),
+      );
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      finish();
+    }
+  };
+  useEffect(() => {
+    setCreated([]);
+  }, [candidates, selected, formats, split, captions, captionOptions]);
   const rangeLength = Math.max(0, rangeEnd - rangeStart),
     validRange =
       !!info &&
@@ -481,7 +521,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
         <div className="ss-command-backdrop auto-clips-backdrop">
           <section
             ref={dialog}
-            className="auto-clips-dialog ac-studio"
+            className="auto-clips-dialog ac-studio editor-glass-surface"
             role="dialog"
             aria-modal="true"
             aria-labelledby="auto-clips-title"
@@ -491,28 +531,28 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
               if (e.key === "Escape" && !disabled) onClose();
             }}
           >
-            <header className="ac-header">
-              <div className="ac-brand">
-                <span className="ac-logo">
-                  <Scissors size={20} />
-                </span>
-                <div>
-                  <h2 id="auto-clips-title">Auto Clips</h2>
-                  <p>Turn a good moment into a great clip.</p>
+            <div className="ac-scroll" ref={scrollPanel}>
+              <header className="ac-header">
+                <div className="ac-brand">
+                  <span className="ac-logo">
+                    <Scissors size={20} />
+                  </span>
+                  <div>
+                    <h2 id="auto-clips-title">Auto Clips</h2>
+                    <p>Find highlights, adjust the layout, and create clips.</p>
+                  </div>
                 </div>
-              </div>
-              <span className="ac-local-badge">On your PC</span>
-              <button
-                aria-label="Close Auto Clips"
-                disabled={disabled}
-                onClick={onClose}
-              >
-                <X size={18} />
-              </button>
-            </header>
-            <nav className="ac-steps" aria-label="Clipping steps">
-              {["Source & range", "Find moments", "Review & layout"].map(
-                (label, i) => (
+                <span className="ac-local-badge">Local processing</span>
+                <button
+                  aria-label="Close Auto Clips"
+                  disabled={disabled}
+                  onClick={onClose}
+                >
+                  <X size={18} />
+                </button>
+              </header>
+              <nav className="ac-steps" aria-label="Clipping steps">
+                {["Source", "Highlights", "Layout"].map((label, i) => (
                   <button
                     key={label}
                     disabled={
@@ -526,550 +566,545 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                     <span>{step > i ? <Check size={13} /> : i + 1}</span>
                     {label}
                   </button>
-                ),
-              )}
-            </nav>
-            <div className="ac-scroll" ref={scrollPanel}>
-              {busy ? (
-                <div className="ac-processing" role="status" aria-live="polite">
-                  <LoaderCircle size={30} className="spin" />
-                  <h3>{progress?.phase ?? busy}</h3>
-                  <p>Keep Snap open. Processing stays on this computer.</p>
-                  <progress max={100} value={progress?.percent ?? undefined} />
-                  <div className="ac-progress-meta">
-                    <span>
-                      <Clock3 size={14} />
-                      {formatClipTime(elapsed)} elapsed
-                    </span>
-                    <button
-                      onClick={() => void cancel()}
-                      disabled={cancelled.current}
-                    >
-                      Cancel
-                    </button>
+                ))}
+              </nav>
+              <div className="ac-content">
+                {busy ? (
+                  <div
+                    className="ac-processing"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <LoaderCircle size={30} className="spin" />
+                    <h3>{progress?.phase ?? busy}</h3>
+                    <p>Keep Snap open. Processing stays on this computer.</p>
+                    <progress
+                      max={100}
+                      value={
+                        /download|install/i.test(progress?.phase ?? busy)
+                          ? progress?.percent
+                          : undefined
+                      }
+                    />
+                    <div className="ac-progress-meta">
+                      <span>
+                        <Clock3 size={14} />
+                        {formatClipTime(elapsed)} elapsed
+                      </span>
+                      <button
+                        onClick={() => void cancel()}
+                        disabled={cancelled.current}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="ac-help">
+                      Cancel at any time to keep working on your timeline.
+                    </p>
                   </div>
-                  <p className="ac-help">
-                    Only shortlisted moments need caption processing.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {step === 0 && (
-                    <div className="ac-source-step">
-                      <div className="ac-section-heading">
-                        <div>
-                          <h3>Choose a video</h3>
-                          <p>Use an upload, recording, or video link.</p>
-                        </div>
-                        <div className="ac-actions">
-                          <button onClick={() => void choose()}>
-                            Choose file
-                          </button>
-                          <button onClick={() => setShowLink(true)}>
-                            <Link2 size={14} />
-                            From link
-                          </button>
-                        </div>
-                      </div>
-                      <label>
-                        Source
-                        <select
-                          disabled={loading}
-                          value={path}
-                          onChange={(e) => setPath(e.target.value)}
-                        >
-                          {allSources.map((s) => (
-                            <option key={s.path} value={s.path}>
-                              {s.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {loading && <p role="status">Reading video details…</p>}
-                      {info && (
-                        <div className="ac-range-grid">
-                          <div className="ac-range-video">
-                            <video
-                              ref={rangeVideo}
-                              src={mediaSrc(path)}
-                              controls
-                              playsInline
-                              preload="metadata"
-                            />
-                            <div className="ac-source-stat">
-                              <span>{durationText(info.duration)} source</span>
-                              <span>
-                                {info.width} × {info.height}
-                              </span>
-                            </div>
+                ) : (
+                  <>
+                    {step === 0 && (
+                      <div className="ac-source-step">
+                        <div className="ac-section-heading">
+                          <div>
+                            <h3>Choose a video</h3>
+                            <p>Use an upload, recording, or video link.</p>
                           </div>
-                          <div className="ac-range-panel">
-                            <h3>Analyze a section</h3>
-                            <p>
-                              Pick where the good moments happen. Your source
-                              stays unchanged.
-                            </p>
-                            <div className="ac-range-values">
-                              {(["start", "end"] as const).map((k) => (
-                                <label key={k}>
-                                  {k === "start" ? "Start" : "End"} (seconds)
-                                  <input
-                                    type="number"
+                          <div className="ac-actions">
+                            <button onClick={() => void choose()}>
+                              Choose file
+                            </button>
+                            <button onClick={() => setShowLink(true)}>
+                              <Link2 size={14} />
+                              From link
+                            </button>
+                          </div>
+                        </div>
+                        <SelectRow
+                          label="Source video"
+                          value={path}
+                          disabled={loading}
+                          options={allSources.map((s) => s.path)}
+                          optionLabels={Object.fromEntries(
+                            allSources.map((s) => [s.path, s.name]),
+                          )}
+                          onChange={setPath}
+                        />
+                        {loading && <p role="status">Reading video details…</p>}
+                        {info && (
+                          <div className="ac-range-grid">
+                            <div className="ac-range-video">
+                              <video
+                                ref={rangeVideo}
+                                src={mediaSrc(path)}
+                                controls
+                                playsInline
+                                preload="metadata"
+                              />
+                              <div className="ac-source-stat">
+                                <span>
+                                  {durationText(info.duration)} source
+                                </span>
+                                <span>
+                                  {info.width} × {info.height}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="ac-range-panel">
+                              <h3>Analysis range</h3>
+                              <p>
+                                Choose the section to search for highlights.
+                              </p>
+                              <div className="ac-range-values">
+                                {(["start", "end"] as const).map((k) => (
+                                  <ClipTimeField
+                                    key={k}
+                                    label={
+                                      k === "start" ? "Range in" : "Range out"
+                                    }
+                                    value={
+                                      k === "start" ? rangeStart : rangeEnd
+                                    }
                                     min={0}
                                     max={info.duration}
-                                    step={1}
-                                    value={Number(
-                                      (k === "start"
-                                        ? rangeStart
-                                        : rangeEnd
-                                      ).toFixed(1),
-                                    )}
-                                    onChange={(e) =>
-                                      boundary(k, Number(e.target.value))
-                                    }
+                                    onChange={(n) => boundary(k, n)}
                                   />
-                                  <small>
-                                    {formatClipTime(
-                                      k === "start" ? rangeStart : rangeEnd,
-                                    )}
-                                  </small>
-                                </label>
-                              ))}
-                            </div>
-                            <div className="ac-range-track">
-                              <i
-                                style={{
-                                  left: `${(rangeStart / info.duration) * 100}%`,
-                                  width: `${(rangeLength / info.duration) * 100}%`,
-                                }}
-                              />
-                            </div>
-                            {(["start", "end"] as const).map((k) => (
-                              <label className="ac-range-slider" key={k}>
-                                Range {k}
-                                <input
-                                  aria-label={`Analysis range ${k}`}
-                                  type="range"
-                                  min={0}
-                                  max={info.duration}
-                                  step={1}
-                                  value={k === "start" ? rangeStart : rangeEnd}
-                                  onChange={(e) =>
-                                    boundary(k, Number(e.target.value))
-                                  }
-                                />
-                              </label>
-                            ))}
-                            <div className="ac-actions">
-                              <button
-                                onClick={() =>
-                                  changeRange(
-                                    rangeStart,
-                                    Math.min(info.duration, rangeStart + 600),
-                                  )
-                                }
-                              >
-                                Use a 10-minute section
-                              </button>
-                              <button
-                                onClick={() => changeRange(0, info.duration)}
-                              >
-                                Use full video
-                              </button>
-                            </div>
-                            <div className="ac-range-total">
-                              <strong>{durationText(rangeLength)}</strong>
-                              <span>selected for analysis</span>
+                                ))}
+                              </div>
+                              <div className="ac-range-controls">
+                                {(["start", "end"] as const).map((k) => (
+                                  <Slider
+                                    key={k}
+                                    label={
+                                      k === "start"
+                                        ? "Range start"
+                                        : "Range end"
+                                    }
+                                    min={0}
+                                    max={info.duration}
+                                    step={0.1}
+                                    value={
+                                      k === "start" ? rangeStart : rangeEnd
+                                    }
+                                    unit="s"
+                                    onChange={(n) => boundary(k, n)}
+                                  />
+                                ))}
+                              </div>
+                              <div className="ac-actions">
+                                {info.duration > 600 && (
+                                  <button
+                                    disabled={info.duration <= 600}
+                                    onClick={() =>
+                                      changeRange(
+                                        rangeStart,
+                                        Math.min(
+                                          info.duration,
+                                          rangeStart + 600,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    10-minute range
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => changeRange(0, info.duration)}
+                                >
+                                  Use full video
+                                </button>
+                              </div>
+                              <div className="ac-range-total">
+                                <strong>{durationText(rangeLength)}</strong>
+                                <span>selected for analysis</span>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                      <div className="ac-guidance">
-                        <Clock3 size={18} />
-                        <div>
-                          <strong>
-                            {rangeLength > 600
-                              ? "Longer sections take longer to process"
-                              : "A shorter section gets you to clips faster"}
-                          </strong>
-                          <p>
-                            {info && info.duration >= 1200
-                              ? "For a 30–40 minute video, start with a 5–10 minute section. Set Start and End above to choose the part you want."
-                              : "About 5–10 minutes is a good starting point. Processing time depends on selected length, your PC and model."}
-                            {rangeLength > 600
-                              ? ` This selection scans about ${(rangeLength / 600).toFixed(1)}× as much footage as a 10-minute section.`
-                              : ""}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {step === 1 && (
-                    <div className="ac-find-step">
-                      <div className="ac-section-heading">
-                        <div>
-                          <h3>What should we find?</h3>
-                          <p>
-                            Scanning {durationText(rangeLength)} from{" "}
-                            {formatClipTime(rangeStart)}.
-                          </p>
-                        </div>
-                        <button onClick={() => setStep(0)}>
-                          Change section
-                        </button>
-                      </div>
-                      <div className="ac-config-grid">
-                        <label>
-                          Clips
-                          <input
-                            type="number"
-                            min={1}
-                            max={6}
-                            value={count}
-                            onChange={(e) =>
-                              setCount(
-                                Math.max(
-                                  1,
-                                  Math.min(6, Number(e.target.value) || 1),
-                                ),
-                              )
-                            }
-                          />
-                        </label>
-                        <label>
-                          Seconds per clip
-                          <input
-                            type="number"
-                            min={3}
-                            max={90}
-                            value={length}
-                            onChange={(e) =>
-                              setLength(
-                                Math.max(
-                                  3,
-                                  Math.min(90, Number(e.target.value) || 10),
-                                ),
-                              )
-                            }
-                          />
-                        </label>
-                        <label>
-                          Content
-                          <select
-                            value={mode}
-                            onChange={(e) =>
-                              setMode(e.target.value as typeof mode)
-                            }
-                          >
-                            {["gaming", "auto", "talking", "reactions"].map(
-                              (v) => (
-                                <option key={v} value={v}>
-                                  {v[0].toUpperCase() + v.slice(1)}
-                                </option>
-                              ),
-                            )}
-                          </select>
-                        </label>
-                      </div>
-                      <div className="ac-option-cards">
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={captions}
-                            onChange={(e) => setCaptions(e.target.checked)}
-                          />
-                          <span>
-                            <strong>Auto captions</strong>
-                            <small>
-                              Short, timed phrases on selected clips.
-                            </small>
-                          </span>
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={flexible}
-                            onChange={(e) => setFlexible(e.target.checked)}
-                          />
-                          <span>
-                            <strong>Natural endings</strong>
-                            <small>
-                              Allow a few extra seconds for the payoff.
-                            </small>
-                          </span>
-                        </label>
-                      </div>
-                      <details className="ac-advanced">
-                        <summary>
-                          <Settings2 size={15} />
-                          Analysis & local tools
-                        </summary>
-                        <label className="ac-check">
-                          <input
-                            type="checkbox"
-                            checked={detailed}
-                            onChange={(e) => setDetailed(e.target.checked)}
-                          />
-                          Detailed visual scan{" "}
-                          <small>Slower; decodes every frame.</small>
-                        </label>
-                        <label className="ac-check">
-                          <input
-                            type="checkbox"
-                            checked={useAI}
-                            disabled={!aiReady}
-                            onChange={(e) => setUseAI(e.target.checked)}
-                          />
-                          Local AI ranking{" "}
-                          <small>Optional CPU ranking step.</small>
-                        </label>
-                        <label>
-                          Speech language
-                          <select
-                            value={language}
-                            onChange={(e) => setLanguage(e.target.value)}
-                          >
-                            <option value="auto">Auto detect</option>
-                            <option value="en">English</option>
-                            <option value="hi">Hindi</option>
-                          </select>
-                        </label>
-                        {useAI && (
-                          <label>
-                            Look for
-                            <input
-                              value={instruction}
-                              maxLength={500}
-                              onChange={(e) => setInstruction(e.target.value)}
-                              placeholder="Funny reactions, surprising moments, useful tips…"
-                            />
-                          </label>
                         )}
-                        <div className="ac-tools">
-                          {!ccReady ? (
-                            <div>
-                              <span>
-                                <strong>Offline Auto CC</strong>
-                                <small>
-                                  Install once to caption clips on this PC.
-                                </small>
-                              </span>
-                              <button onClick={() => void install("captions")}>
-                                <Download size={14} />
-                                Install Auto CC
-                              </button>
-                            </div>
-                          ) : (
-                            <div>
-                              <span>Auto CC ready</span>
-                              <Check size={16} />
-                            </div>
-                          )}
-                          {!aiReady ? (
-                            <div>
-                              <span>
-                                <strong>Optional local AI</strong>
-                                <small>
-                                  2.5 GB + 25 MB engine. Fast clipping works
-                                  without it.
-                                </small>
-                              </span>
-                              <button onClick={() => void install("ai")}>
-                                <Download size={14} />
-                                Install local AI
-                              </button>
-                            </div>
-                          ) : (
-                            <div>
-                              <span>Local AI ready</span>
-                              <Check size={16} />
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                      <div className="ac-guidance">
-                        <Scissors size={18} />
-                        <div>
-                          <strong>Scan first. Caption the shortlist.</strong>
-                          <p>
-                            Fast mode scans audio and video keyframes, then
-                            transcribes only a few likely moments. It avoids
-                            transcribing the entire video.
-                          </p>
+                        <div className="ac-guidance">
+                          <Clock3 size={18} />
+                          <div>
+                            <strong>
+                              {info && info.duration <= 600
+                                ? "Ready to analyze"
+                                : rangeLength > 600
+                                  ? "Longer sections take longer to process"
+                                  : "A shorter section gets you to clips faster"}
+                            </strong>
+                            <p>
+                              {info && info.duration <= 600
+                                ? "Use the full video, or narrow the range to focus on a specific section."
+                                : info && info.duration >= 1200
+                                  ? "For a 30–40 minute video, start with a 5–10 minute section. Set Start and End above to choose the part you want."
+                                  : "About 5–10 minutes is a good starting point. Processing time depends on selected length, your PC and model."}
+                              {rangeLength > 600
+                                ? ` This selection scans about ${(rangeLength / 600).toFixed(1)}× as much footage as a 10-minute section.`
+                                : ""}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                      {(captions || useAI) && !ccReady && (
-                        <p className="ac-message">
-                          Install Auto CC in “Analysis & local tools”, or turn
-                          captions off for activity-only clipping.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {step === 2 && analysis && active && (
-                    <div className="ac-review">
-                      <aside className="ac-candidates">
-                        <div>
-                          <h3>Suggested moments</h3>
-                          <small>{selected.length} selected</small>
+                    )}
+                    {step === 1 && (
+                      <div className="ac-find-step">
+                        <div className="ac-section-heading">
+                          <div>
+                            <h3>Clip settings</h3>
+                            <p>
+                              Scanning {durationText(rangeLength)} from{" "}
+                              {formatClipTime(rangeStart)}.
+                            </p>
+                          </div>
+                          <button onClick={() => setStep(0)}>
+                            Change section
+                          </button>
                         </div>
-                        {candidates.slice(0, 16).map((c) => (
-                          <article
-                            key={c.id}
-                            className={active.id === c.id ? "active" : ""}
-                          >
+                        <div className="ac-config-grid">
+                          <label>
+                            Clips
                             <input
-                              type="checkbox"
-                              aria-label={`Select ${c.title}`}
-                              checked={selected.includes(c.id)}
-                              disabled={
-                                !selected.includes(c.id) && selected.length >= 6
-                              }
+                              type="number"
+                              min={1}
+                              max={6}
+                              value={count}
                               onChange={(e) =>
-                                setSelected((old) =>
-                                  e.target.checked
-                                    ? [...old, c.id]
-                                    : old.filter((id) => id !== c.id),
+                                setCount(
+                                  Math.max(
+                                    1,
+                                    Math.min(6, Number(e.target.value) || 1),
+                                  ),
                                 )
                               }
                             />
-                            <button onClick={() => setActiveId(c.id)}>
-                              {atlas && (
-                                <span
-                                  className="ac-thumbnail"
-                                  style={{
-                                    backgroundImage: `url("${atlas}")`,
-                                    backgroundPosition: `${(Math.min(9, Math.floor(((c.start + c.end) / 2 / analysis.duration) * 10)) / 9) * 100}% center`,
-                                  }}
-                                />
-                              )}
-                              <strong>{c.title}</strong>
-                              <small>
-                                {formatClipTime(c.start)} ·{" "}
-                                {(c.end - c.start).toFixed(1)}s
-                              </small>
-                              <span>{c.reason}</span>
-                            </button>
-                          </article>
-                        ))}
-                      </aside>
-                      <div className="ac-review-main">
-                        <AutoClipPreview
-                          path={path}
-                          audioTracks={source?.audioTracks}
-                          analysis={analysis}
-                          clip={active}
-                          ratio={ratio}
-                          split={split}
-                          captions={captions}
-                          captionOptions={captionOptions}
-                          editRegion={editRegion}
-                          content={template === "fit" ? FULL : content}
-                          fit={template === "fit" ? "contain" : "cover"}
-                          onRegion={(r, rect) =>
-                            r === "camera" ? setCamera(rect) : setContent(rect)
-                          }
-                        />
-                        <div className="ac-layout-bar">
-                          <div
-                            className="ac-segmented"
-                            aria-label="Clip layout"
-                          >
-                            {(["stacked", "full", "fit"] as const).map((t) => (
-                              <button
-                                key={t}
-                                aria-pressed={template === t}
-                                onClick={() => {
-                                  setTemplate(t);
-                                  setEditRegion(null);
-                                }}
-                              >
-                                {t === "stacked"
-                                  ? "Camera + gameplay"
-                                  : t === "full"
-                                    ? "Full portrait"
-                                    : "Fit whole video"}
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            aria-pressed={editRegion !== null}
-                            onClick={() =>
-                              setEditRegion(
-                                editRegion
-                                  ? null
-                                  : template === "stacked"
-                                    ? "camera"
-                                    : "content",
-                              )
-                            }
-                          >
-                            <Settings2 size={14} />
-                            {editRegion ? "Done editing layout" : "Edit layout"}
-                          </button>
+                          </label>
+                          <label>
+                            Clip length (seconds)
+                            <input
+                              type="number"
+                              min={3}
+                              max={90}
+                              value={length}
+                              onChange={(e) =>
+                                setLength(
+                                  Math.max(
+                                    3,
+                                    Math.min(90, Number(e.target.value) || 10),
+                                  ),
+                                )
+                              }
+                            />
+                          </label>
+                          <SelectRow
+                            label="Content"
+                            value={mode}
+                            options={["gaming", "auto", "talking", "reactions"]}
+                            onChange={(v) => setMode(v as typeof mode)}
+                          />
                         </div>
-                        {editRegion && (
-                          <div className="ac-layout-editor">
-                            <div className="ac-actions">
-                              {template === "stacked" && (
+                        <div className="ac-option-cards">
+                          <div className="ac-option">
+                            <CheckRow
+                              label="Auto CC"
+                              checked={captions}
+                              onChange={setCaptions}
+                            />
+                            <small>
+                              Add timed captions to the selected clips.
+                            </small>
+                          </div>
+                          <div className="ac-option">
+                            <CheckRow
+                              label="Natural endings"
+                              checked={flexible}
+                              onChange={setFlexible}
+                            />
+                            <small>
+                              Allow a few extra seconds to finish a moment.
+                            </small>
+                          </div>
+                        </div>
+                        <details className="ac-advanced">
+                          <summary>
+                            <Settings2 size={15} />
+                            Analysis & local tools
+                          </summary>
+                          <div className="ac-option">
+                            <CheckRow
+                              label="Detailed analysis"
+                              checked={detailed}
+                              onChange={setDetailed}
+                            />
+                            <small>
+                              Scans every frame. Takes longer than the standard
+                              scan.
+                            </small>
+                          </div>
+                          <div className="ac-option">
+                            <CheckRow
+                              label="Local AI ranking"
+                              checked={useAI}
+                              disabled={!aiReady}
+                              onChange={setUseAI}
+                            />
+                            <small>
+                              Optional speech-based ranking on this PC.
+                            </small>
+                          </div>
+                          <SelectRow
+                            label="Language"
+                            value={language}
+                            options={["auto", "en", "hi"]}
+                            optionLabels={{
+                              auto: "Detect automatically",
+                              en: "English",
+                              hi: "Hindi",
+                            }}
+                            onChange={setLanguage}
+                          />
+                          {useAI && (
+                            <label>
+                              Look for
+                              <input
+                                value={instruction}
+                                maxLength={500}
+                                onChange={(e) => setInstruction(e.target.value)}
+                                placeholder="Funny reactions, surprising moments, useful tips…"
+                              />
+                            </label>
+                          )}
+                          <div className="ac-tools">
+                            {!ccReady ? (
+                              <div>
+                                <span>
+                                  <strong>Offline Auto CC</strong>
+                                  <small>
+                                    Install once to caption clips on this PC.
+                                  </small>
+                                </span>
                                 <button
-                                  aria-pressed={editRegion === "camera"}
-                                  onClick={() => setEditRegion("camera")}
+                                  onClick={() => void install("captions")}
                                 >
-                                  Camera region
+                                  <Download size={14} />
+                                  Install Auto CC
                                 </button>
+                              </div>
+                            ) : (
+                              <div>
+                                <span>Auto CC ready</span>
+                                <Check size={16} />
+                              </div>
+                            )}
+                            {!aiReady ? (
+                              <div>
+                                <span>
+                                  <strong>Optional local AI</strong>
+                                  <small>
+                                    2.5 GB + 25 MB engine. Fast clipping works
+                                    without it.
+                                  </small>
+                                </span>
+                                <button onClick={() => void install("ai")}>
+                                  <Download size={14} />
+                                  Install local AI
+                                </button>
+                              </div>
+                            ) : (
+                              <div>
+                                <span>Local AI ready</span>
+                                <Check size={16} />
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                        <div className="ac-guidance">
+                          <Scissors size={18} />
+                          <div>
+                            <strong>Analysis</strong>
+                            <p>
+                              Highlights are suggested from audio and visual
+                              activity. Auto CC processes only the shortlisted
+                              moments.
+                            </p>
+                          </div>
+                        </div>
+                        {(captions || useAI) && !ccReady && (
+                          <p className="ac-message">
+                            Install Auto CC in “Analysis & local tools”, or turn
+                            captions off for activity-only clipping.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {step === 2 && analysis && active && (
+                      <div className="ac-review">
+                        <aside className="ac-candidates">
+                          <div>
+                            <h3>Suggested moments</h3>
+                            <small>{selected.length} selected</small>
+                          </div>
+                          {candidates.slice(0, 16).map((c) => (
+                            <article
+                              key={c.id}
+                              className={active.id === c.id ? "active" : ""}
+                            >
+                              <button
+                                type="button"
+                                className="ac-candidate-select"
+                                aria-label={`Select ${c.title}`}
+                                aria-pressed={selected.includes(c.id)}
+                                disabled={
+                                  !selected.includes(c.id) &&
+                                  selected.length >= 6
+                                }
+                                onClick={() =>
+                                  setSelected((old) =>
+                                    old.includes(c.id)
+                                      ? old.filter((id) => id !== c.id)
+                                      : [...old, c.id],
+                                  )
+                                }
+                              >
+                                {selected.includes(c.id) && <Check size={12} />}
+                              </button>
+                              <button onClick={() => setActiveId(c.id)}>
+                                {atlas && (
+                                  <span
+                                    className="ac-thumbnail"
+                                    style={{
+                                      backgroundImage: `url("${atlas}")`,
+                                      backgroundPosition: `${(Math.min(9, Math.floor(((c.start + c.end) / 2 / analysis.duration) * 10)) / 9) * 100}% center`,
+                                    }}
+                                  />
+                                )}
+                                <strong>{c.title}</strong>
+                                <small>
+                                  {formatClipTime(c.start)} ·{" "}
+                                  {(c.end - c.start).toFixed(1)}s
+                                </small>
+                                <span>{c.reason}</span>
+                              </button>
+                            </article>
+                          ))}
+                        </aside>
+                        <div className="ac-review-main">
+                          <AutoClipPreview
+                            path={path}
+                            audioTracks={source?.audioTracks}
+                            analysis={analysis}
+                            clip={active}
+                            ratio={ratio}
+                            split={split}
+                            captions={captions}
+                            captionOptions={captionOptions}
+                            editRegion={editRegion}
+                            content={template === "fit" ? FULL : content}
+                            fit={template === "fit" ? "contain" : "cover"}
+                            onRegion={(r, rect) =>
+                              r === "camera"
+                                ? setCamera(rect)
+                                : setContent(rect)
+                            }
+                          />
+                          <div className="ac-layout-bar">
+                            <div
+                              className="ac-segmented"
+                              aria-label="Clip layout"
+                            >
+                              {(["stacked", "full", "fit"] as const).map(
+                                (t) => (
+                                  <button
+                                    key={t}
+                                    aria-pressed={template === t}
+                                    onClick={() => {
+                                      setTemplate(t);
+                                      setEditRegion(null);
+                                    }}
+                                  >
+                                    {t === "stacked"
+                                      ? "Camera + gameplay"
+                                      : t === "full"
+                                        ? "Full portrait"
+                                        : "Fit whole video"}
+                                  </button>
+                                ),
                               )}
-                              <button
-                                aria-pressed={editRegion === "content"}
-                                onClick={() => setEditRegion("content")}
-                              >
-                                Gameplay region
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setCamera(analysis.facecam ?? FACE);
-                                  setContent(FULL);
-                                  setFraction(0.38);
-                                }}
-                              >
-                                Reset framing
-                              </button>
                             </div>
-                            {template === "stacked" && (
-                              <label>
-                                Camera panel height ·{" "}
-                                {Math.round(fraction * 100)}%
-                                <input
-                                  type="range"
+                            <button
+                              aria-pressed={editRegion !== null}
+                              onClick={() =>
+                                setEditRegion(
+                                  editRegion
+                                    ? null
+                                    : template === "stacked"
+                                      ? "camera"
+                                      : "content",
+                                )
+                              }
+                            >
+                              <Settings2 size={14} />
+                              {editRegion
+                                ? "Done editing layout"
+                                : "Edit layout"}
+                            </button>
+                          </div>
+                          {editRegion && (
+                            <div className="ac-layout-editor">
+                              <div className="ac-actions">
+                                {template === "stacked" && (
+                                  <button
+                                    aria-pressed={editRegion === "camera"}
+                                    onClick={() => setEditRegion("camera")}
+                                  >
+                                    Camera region
+                                  </button>
+                                )}
+                                <button
+                                  aria-pressed={editRegion === "content"}
+                                  onClick={() => setEditRegion("content")}
+                                >
+                                  Gameplay region
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setCamera(analysis.facecam ?? FACE);
+                                    setContent(FULL);
+                                    setFraction(0.38);
+                                  }}
+                                >
+                                  Reset framing
+                                </button>
+                              </div>
+                              {template === "stacked" && (
+                                <Slider
+                                  label="Camera height"
                                   min={20}
                                   max={60}
                                   value={fraction * 100}
-                                  onChange={(e) =>
-                                    setFraction(Number(e.target.value) / 100)
-                                  }
+                                  unit="%"
+                                  onChange={(n) => setFraction(n / 100)}
                                 />
-                              </label>
-                            )}
-                            <p className="ac-help">
-                              Panels crop to fill without stretching. Drag the
-                              source boxes to reframe.
-                            </p>
-                          </div>
-                        )}
-                        <div className="ac-review-settings">
-                          <fieldset>
-                            <legend>Trim selected clip</legend>
-                            <div className="ac-config-grid">
-                              {(["start", "end"] as const).map((k) => (
-                                <label key={k}>
-                                  {k === "start" ? "Start" : "End"} (seconds)
-                                  <input
-                                    type="number"
-                                    step={0.1}
+                              )}
+                              <p className="ac-help">
+                                Panels crop to fill without stretching. Drag the
+                                source boxes to reframe.
+                              </p>
+                            </div>
+                          )}
+                          <div className="ac-review-settings">
+                            <fieldset>
+                              <legend>Trim selected clip</legend>
+                              <div className="ac-config-grid">
+                                {(["start", "end"] as const).map((k) => (
+                                  <ClipTimeField
+                                    key={k}
+                                    label={
+                                      k === "start" ? "Clip in" : "Clip out"
+                                    }
                                     min={rangeStart}
                                     max={rangeEnd}
-                                    value={Number(active[k].toFixed(1))}
-                                    onChange={(e) =>
+                                    value={active[k]}
+                                    onChange={(n) =>
                                       setCandidates((old) =>
                                         old.map((c) =>
                                           c.id !== active.id
@@ -1082,8 +1117,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                                     Math.max(
                                                       rangeStart,
                                                       c.end - 93,
-                                                      Number(e.target.value) ||
-                                                        0,
+                                                      n,
                                                     ),
                                                   ),
                                                 }
@@ -1092,157 +1126,137 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                                   end: Math.min(
                                                     rangeEnd,
                                                     c.start + 93,
-                                                    Math.max(
-                                                      c.start + 0.1,
-                                                      Number(e.target.value) ||
-                                                        c.end,
-                                                    ),
+                                                    Math.max(c.start + 0.1, n),
                                                   ),
                                                 },
                                         ),
                                       )
                                     }
                                   />
-                                </label>
-                              ))}
-                            </div>
-                          </fieldset>
-                          <fieldset>
-                            <legend>Captions</legend>
-                            <label className="ac-check">
-                              <input
-                                type="checkbox"
+                                ))}
+                              </div>
+                            </fieldset>
+                            <fieldset>
+                              <legend>Captions</legend>
+                              <CheckRow
+                                label="Auto CC"
                                 checked={captions}
-                                onChange={(e) => setCaptions(e.target.checked)}
+                                onChange={setCaptions}
                               />
-                              Include Auto CC
-                            </label>
-                            <div className="ac-config-grid">
-                              <label>
-                                Words per phrase
-                                <select
-                                  value={captionOptions.words}
-                                  onChange={(e) =>
+                              <div className="ac-config-grid">
+                                <SelectRow
+                                  label="Words per caption"
+                                  value={String(captionOptions.words)}
+                                  options={["2", "3", "4"]}
+                                  onChange={(v) =>
                                     setCaptionOptions((o) => ({
                                       ...o,
-                                      words: Number(e.target.value),
+                                      words: Number(v),
                                     }))
                                   }
-                                >
-                                  {[2, 3, 4].map((v) => (
-                                    <option key={v}>{v}</option>
-                                  ))}
-                                </select>
-                              </label>
-                              <label>
-                                Position
-                                <select
+                                />
+                                <SelectRow
+                                  label="Caption position"
                                   value={
                                     captionOptions.y === undefined
                                       ? "auto"
                                       : "bottom"
                                   }
-                                  onChange={(e) =>
+                                  options={["auto", "bottom"]}
+                                  optionLabels={{
+                                    auto: "Automatic",
+                                    bottom: "Lower safe area",
+                                  }}
+                                  onChange={(v) =>
                                     setCaptionOptions((o) => ({
                                       ...o,
-                                      y:
-                                        e.target.value === "auto"
-                                          ? undefined
-                                          : 0.8,
+                                      y: v === "auto" ? undefined : 0.8,
                                     }))
                                   }
-                                >
-                                  <option value="auto">
-                                    At camera split / automatic
-                                  </option>
-                                  <option value="bottom">
-                                    Lower safe area
-                                  </option>
-                                </select>
-                              </label>
-                            </div>
-                            <label className="ac-check">
-                              <input
-                                type="checkbox"
+                                />
+                              </div>
+                              <CheckRow
+                                label="Highlight spoken word"
                                 checked={captionOptions.highlight}
-                                onChange={(e) =>
+                                onChange={(v) =>
                                   setCaptionOptions((o) => ({
                                     ...o,
-                                    highlight: e.target.checked,
+                                    highlight: v,
                                   }))
                                 }
                               />
-                              Highlight the spoken word
-                            </label>
-                          </fieldset>
-                        </div>
-                        <fieldset className="ac-output-formats">
-                          <legend>Output formats</legend>
-                          {RATIOS.map((r) => (
-                            <label
-                              key={r}
-                              className={ratio === r ? "active" : ""}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={formats.includes(r)}
-                                onChange={(e) => {
+                            </fieldset>
+                          </div>
+                          <fieldset className="ac-output-formats">
+                            <legend>Output formats</legend>
+                            {RATIOS.map((r) => (
+                              <button
+                                type="button"
+                                key={r}
+                                aria-pressed={formats.includes(r)}
+                                onClick={() => {
                                   setFormats((old) =>
-                                    e.target.checked
-                                      ? [...old, r]
-                                      : old.filter((v) => v !== r),
+                                    old.includes(r)
+                                      ? old.filter((v) => v !== r)
+                                      : [...old, r],
                                   );
                                   setRatio(r);
                                 }}
-                              />
-                              <button onClick={() => setRatio(r)}>{r}</button>
-                            </label>
-                          ))}
-                        </fieldset>
-                        <p className="ac-help">
-                          Captions refresh for the final cuts when you create
-                          clips. Review activity-based suggestions before using
-                          them.
-                        </p>
+                              >
+                                <span
+                                  className="ac-ratio-art"
+                                  style={{ aspectRatio: r.replace(":", "/") }}
+                                />
+                                {r}
+                                {formats.includes(r) && <Check size={13} />}
+                              </button>
+                            ))}
+                          </fieldset>
+                          <p className="ac-help">
+                            Captions refresh for the final cuts when you create
+                            clips. Review activity-based suggestions before
+                            using them.
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </>
-              )}
-              {error && (
-                <p role="alert" className="ac-message ac-error">
-                  {error}
-                </p>
-              )}
-              {notice && (
-                <p role="status" className="ac-message">
-                  {notice}
-                </p>
-              )}
-              {analysis?.warnings.map((w) => (
-                <p className="ac-message" key={w}>
-                  {w}
-                </p>
-              ))}
-              {created.length > 0 && (
-                <div className="ac-saved">
-                  <h3>Clips ready to edit</h3>
-                  {created.map((c) => (
-                    <button
-                      disabled={disabled}
-                      key={c.path}
-                      onClick={() => {
-                        void onOpen(c.path, c.video, c.log).catch((e) =>
-                          setError(String(e)),
-                        );
-                      }}
-                    >
-                      <span>{c.name}</span>Open in editor
-                      <ChevronRight size={14} />
-                    </button>
-                  ))}
-                </div>
-              )}
+                    )}
+                  </>
+                )}
+                {error && (
+                  <p role="alert" className="ac-message ac-error">
+                    {error}
+                  </p>
+                )}
+                {notice && (
+                  <p role="status" className="ac-message">
+                    {notice}
+                  </p>
+                )}
+                {analysis?.warnings.map((w) => (
+                  <p className="ac-message" key={w}>
+                    {w}
+                  </p>
+                ))}
+                {created.length > 0 && (
+                  <div className="ac-saved">
+                    <h3>Created clips</h3>
+                    <p className="ac-help">
+                      Open a clip to edit it. Use Original timeline in the
+                      editor to return to this project.
+                    </p>
+                    {created.map((c) => (
+                      <button
+                        disabled={disabled}
+                        key={c.path}
+                        onClick={() => void openCreated(c)}
+                      >
+                        <span>{c.name}</span>Open in editor
+                        <ChevronRight size={14} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <footer className="ac-footer">
               <span>
@@ -1252,6 +1266,9 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                   : "Local processing"}
               </span>
               <div>
+                <button disabled={disabled} onClick={onClose}>
+                  {created.length ? "Done" : "Close"}
+                </button>
                 {step > 0 && !busy && (
                   <button onClick={() => setStep(step - 1)}>
                     <ChevronLeft size={14} />
@@ -1283,6 +1300,15 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                     <Scissors size={15} />
                     Find clips
                   </button>
+                ) : created.length ? (
+                  <button
+                    className="ac-primary"
+                    disabled={disabled}
+                    onClick={() => void openCreated(created[0])}
+                  >
+                    {created.length > 1 ? "Edit first clip" : "Edit clip"}
+                    <ChevronRight size={15} />
+                  </button>
                 ) : (
                   <button
                     className="ac-primary"
@@ -1294,7 +1320,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                     }
                     onClick={() => void create()}
                   >
-                    Create {selected.length * formats.length} editable clips
+                    Create {selected.length * formats.length} clips
                     <ChevronRight size={15} />
                   </button>
                 )}

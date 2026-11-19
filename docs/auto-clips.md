@@ -2,7 +2,9 @@
 
 Open **Auto Clips** on the editor's left toolbar. Choose the current recording, an imported video layer, a local file, or a video link.
 
-The three steps are **Source & range**, **Find moments**, and **Review & layout**. Long sources initially select only the first ten minutes. Set Start and End, or move the range sliders, to choose another section. For a 30–40 minute source, start with a 5–10 minute section; longer selections take longer depending on the PC, codec and model. The full video remains available and unchanged.
+The three steps are **Source**, **Highlights**, and **Layout**. Long sources initially select only the first ten minutes. Set Range in and Range out, or move the shared sliders, to choose another section. Fields accept timecodes such as `4:39.3`, or a number of seconds. For a 30–40 minute source, start with a 5–10 minute section; longer selections take longer depending on the PC, codec and model. The full video remains available and unchanged.
+
+Auto Clips uses the editor's shared controls and glass surface in both themes. Headings scroll normally; the action footer stays available.
 
 The defaults suggest two ten-second clips. Fast mode scans audio activity and video keyframes inside the selected range, then transcribes only a short list of likely moments. It does not transcribe the entire source. Detailed visual scanning and local AI ranking are optional slower steps under **Analysis & local tools**. Selection avoids overlapping copies of the same moment. A short or quiet source may have fewer useful suggestions.
 
@@ -26,6 +28,8 @@ Auto CC uses short phrases, a transparent background, optional spoken-word highl
 **Create editable clips** saves a separate Snap project for every selected moment and ratio under the source's data directory in `auto-clips/<batch>/`. The original recording and original project remain available. Open a saved clip to edit captions and export through Snap's normal export controls. Export defaults use MP4, 30 fps and burned captions when present. Creation itself does not batch-render MP4 files.
 
 Framing can also be adjusted after opening a clip through **Refine > Formats**, including its split crops. Source frames remain unmodified.
+
+Opening a generated clip saves the current project first. **Original timeline** returns to that project, and **Open timeline** switches between it and the generated clips without repeating analysis. Changes save before switching; if saving fails, the editor stays on the current project. Each timeline's playhead is retained during this editor session. Opening an unrelated project starts a new workspace.
 
 ## Ratio changes
 
