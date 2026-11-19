@@ -1166,7 +1166,6 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
 
         <div className="ss-topbar-right">
           <button className="ss-theme-toggle" onClick={() => { pausePlayback(); setShowLinkImport(true); }} title="Import from link" aria-label="Import from link" disabled={isBrowserPreview}><Link2 size={17} /></button>
-          <button className="ss-theme-toggle" onClick={() => { pausePlayback(); setShowAutoClips(true); }} title="Auto Clips" aria-label="Auto Clips"><Scissors size={17} /></button>
           <button className="ss-theme-toggle" onClick={() => setShowFinishing(true)} title="Refine video" aria-label="Refine video"><SlidersHorizontal size={16} /></button>
           <button
             className="ss-theme-toggle"

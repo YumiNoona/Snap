@@ -17,6 +17,7 @@ import { useModalFocus } from "./hooks/useModalFocus";
 import LinkImportDialog from "./LinkImportDialog";
 import AutoClipPreview from "./AutoClipPreview";
 import ClipTimeField from "./ClipTimeField";
+import MomentStrip from "./MomentStrip";
 import { mediaSrc } from "../../lib/mediaSource";
 import { getTranscriptionEnvironment } from "../../lib/captions";
 import {
@@ -375,9 +376,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
           clips = rankedClips(clips, rank.rankings);
         } catch (e) {
           if (cancelled.current) return;
-          setNotice(
-            `Using activity suggestions. Local AI ranking: ${String(e)}`,
-          );
+          console.warn("Local AI ranking unavailable; keeping activity suggestions.", e);
         }
       }
       if (cancelled.current || !alive.current) return;
@@ -569,23 +568,6 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                   <X size={18} />
                 </button>
               </header>
-              <nav className="ac-steps" aria-label="Clipping steps">
-                {["Source", "Highlights", "Layout"].map((label, i) => (
-                  <button
-                    key={label}
-                    disabled={
-                      disabled ||
-                      (i === 1 && !validRange) ||
-                      (i === 2 && !analysis)
-                    }
-                    aria-current={step === i ? "step" : undefined}
-                    onClick={() => setStep(i)}
-                  >
-                    <span>{step > i ? <Check size={13} /> : i + 1}</span>
-                    {label}
-                  </button>
-                ))}
-              </nav>
               <div className="ac-content">
                 {busy ? (
                   <div
@@ -727,11 +709,6 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                     10-minute range
                                   </button>
                                 )}
-                                <button
-                                  onClick={() => changeRange(0, info.duration)}
-                                >
-                                  Full video
-                                </button>
                               </div>
                               <div className="ac-range-total">
                                 <strong>{durationText(rangeLength)}</strong>
@@ -931,17 +908,6 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                             )}
                           </div>
                         </details>
-                        <div className="ac-guidance">
-                          <Scissors size={18} />
-                          <div>
-                            <strong>Analysis</strong>
-                            <p>
-                              Highlights are suggested from audio and visual
-                              activity. Auto CC processes only the shortlisted
-                              moments.
-                            </p>
-                          </div>
-                        </div>
                         {(captions || useAI) && !ccReady && (
                           <p className="ac-message">
                             Install Auto CC in “Analysis & local tools”, or turn
@@ -1188,7 +1154,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                             <h3>Suggested moments</h3>
                             <small>{selected.length} selected</small>
                           </div>
-                          <div className="ac-moments-list">{candidates.slice(0, 16).map((c) => (
+                          <MomentStrip>{candidates.slice(0, 16).map((c) => (
                             <article
                               key={c.id}
                               className={active.id === c.id ? "active" : ""}
@@ -1213,15 +1179,14 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                 {selected.includes(c.id) && <Check size={12} />}
                               </button>
                               <button onClick={() => reviewMoment(c.id)} aria-label={`Preview ${c.title}`}>
-                                {atlas && (
                                   <span
                                     className="ac-thumbnail"
-                                    style={{
+                                    aria-hidden="true"
+                                    style={atlas ? {
                                       backgroundImage: `url("${atlas}")`,
                                       backgroundPosition: `${(Math.min(9, Math.floor(((c.start + c.end) / 2 / analysis.duration) * 10)) / 9) * 100}% center`,
-                                    }}
+                                    } : undefined}
                                   />
-                                )}
                                 <strong>{c.title}</strong>
                                 <small>
                                   {formatClipTime(c.start)} ·{" "}
@@ -1230,7 +1195,7 @@ export default function AutoClipsStudio({ sources, onClose, onOpen }: Props) {
                                 <span>{c.reason}</span>
                               </button>
                             </article>
-                          ))}</div>
+                          ))}</MomentStrip>
                         </aside>
                       </div>
                     )}

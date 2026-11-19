@@ -91,7 +91,10 @@ it("creates two separately editable projects and preserves the original source",
       />,
     );
   });
+  expect(view.root.findAllByType("nav")).toHaveLength(0);
+  expect(view.root.findAllByType("button").some(b=>label(b)==="Full video")).toBe(false);
   await next(view);
+  expect(view.root.findAllByType("strong").some(n=>label(n)==="Analysis")).toBe(false);
   await act(async () => {
     await view.root
       .findAllByType("button")
@@ -253,4 +256,28 @@ it("starts a forty-minute source with a ten-minute range and sends only that ran
   ).toBeLessThanOrEqual(60);
   expect(request.request.ranges.every(r=>r.end-r.start<=15)).toBe(true);
   await act(async () => view.unmount());
+});
+
+it("keeps suggestions available without a banner when optional AI ranking fails", async () => {
+  const warning=vi.spyOn(console,"warn").mockImplementation(()=>{});
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==="transcription_environment")return {available:true};
+    if(command==="auto_clips_ai_ready")return true;
+    if(command==="inspect_auto_clips_source")return {...fixture,hasAudio:true};
+    if(command==="analyze_auto_clips")return fixture;
+    if(command==="transcribe_auto_clip_ranges")return [{startMs:7000,endMs:9000,text:"An exciting moment."}];
+    if(command==="rank_auto_clips")throw Error("The local model returned an invalid ranking");
+    if(command==="cancel_auto_clips")return;
+    throw Error(command);
+  });
+  let view!:ReturnType<typeof create>;
+  try {
+    await act(async()=>{view=create(<AutoClips sources={[{path:"source.mp4",name:"Source"}]} onClose={()=>{}} onOpen={async()=>{}}/>);});
+    await next(view);
+    await act(async()=>{view.root.findByProps({label:"Local AI ranking"}).props.onChange(true);});
+    await act(async()=>{await view.root.findAllByType("button").find(b=>label(b).includes("Find clips"))!.props.onClick();});
+    expect(warning).toHaveBeenCalled();
+    expect(view.root.findAllByProps({role:"status"}).some(n=>label(n).includes("Using activity suggestions"))).toBe(false);
+    expect(view.root.findAllByType("button").find(b=>label(b).startsWith("Create "))!.props.disabled).toBe(false);
+  } finally { if(view)await act(async()=>view.unmount()); warning.mockRestore(); }
 });
