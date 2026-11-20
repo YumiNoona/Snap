@@ -1,4 +1,5 @@
 use std::fs::File;
+pub(crate) mod log_reader;
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};

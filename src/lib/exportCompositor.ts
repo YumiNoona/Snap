@@ -17,6 +17,7 @@ import { resolveClipEffects } from "./clipEffects";
 import { drawSystemCursor, loadSystemCursor } from "./systemCursor";
 import { seekMediaFrame } from "./mediaSeek";
 import { gradedSource, releaseColorRenderer } from "./colorRenderer";
+import { createExportDecoder, type ExportDecoder } from "./exportDecoder";
 import {
   loadCachedImage, loadCachedVideo, preloadImageAsset, readyImageAsset, paintGradient, paintImageCover, drawCursorImage, roundRect,
   computeCoverRect, resolveZoom, smoothTowards, drawClickEffect, clickEffectDuration,
@@ -161,7 +162,11 @@ export async function createExportCompositor(
   let destroyed = false;
   let rafId = 0;
   let frameConsumer: (() => void) | null = null;
+  let sourceDecoder: ExportDecoder | null = null;
+  let decodedFrame: VideoFrame | null = null;
+  let exportFrameTime: number | null = null;
   const cleanup = () => {
+    sourceDecoder?.destroy(); sourceDecoder = null; decodedFrame = null;
     releaseScreenTilt(canvas);
     releaseColorRenderer(canvas);
     destroyed = true;
@@ -267,18 +272,22 @@ export async function createExportCompositor(
   }
 
   const footageClips = retainedClips(config.videoClips, config.trimStart, config.trimEnd || video.duration);
+  try {
+    if (manualRender && !screenOnly) sourceDecoder = await createExportDecoder(videoPath, signal);
+  } catch (error) { cleanup(); throw error; }
   const sharedConfig = config, sharedKeyframes = keyframes, sharedCaptions = captionTracks;
   const transitions=new FootageTransitions();
   let gapTime = 0;
   let effectClipId = footageClips[0]?.id;
   function drawFrame() {
     if (destroyed) return;
+    const videoTime = exportFrameTime ?? video.currentTime;
     const activeClip = footageClips.find(clip => clip.id === effectClipId);
     const effects = resolveClipEffects(activeClip, sharedConfig, sharedKeyframes, sharedCaptions);
     config = effects.config; keyframes = effects.keyframes; captionTracks = renderCaptions ? effects.captions : [];
     // Keep the last retained canvas at cut boundaries, rather than drawing
     // deleted footage while the transport seeks to the next segment.
-    if (!activeClip?.gap && (video.readyState<2 || video.seeking || !footageClips.some(clip => video.currentTime >= clip.start && video.currentTime < clip.end))) {
+    if (!activeClip?.gap && ((!decodedFrame && (video.readyState<2 || video.seeking)) || !footageClips.some(clip => videoTime >= clip.start && videoTime < clip.end))) {
       if (!manualRender) rafId = requestAnimationFrame(drawFrame);
       return;
     }
@@ -291,11 +300,11 @@ export async function createExportCompositor(
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
     ctx.beginPath();
-    const ts = video.currentTime * 1000;
+    const ts = videoTime * 1000;
     const cw = outputW, ch = outputH;
     const br = config.borderRadius;
-    const vw = video.videoWidth || 1;
-    const vh = video.videoHeight || 1;
+    const vw = decodedFrame?.displayWidth || video.videoWidth || 1;
+    const vh = decodedFrame?.displayHeight || video.videoHeight || 1;
     const previousTime = prevTs < 0 ? ts - 1 : prevTs;
     prevTs = ts;
     spawnClickRipples(Math.abs(ts - previousTime) > 300 ? ts - 1 : previousTime, ts, vw, vh);
@@ -311,9 +320,9 @@ export async function createExportCompositor(
     const clipR = Math.max(0, Math.min(br, videoW / 2, videoH / 2));
 
     const zoom = resolveZoom(keyframes, ts, config.zoomEnabled, config.fixedZoomPart, config.zoomMovement.curve);
-    const maskLayers = projectMediaLayers(config.layers, video.currentTime, sequenceTime(footageClips, video.currentTime, effectClipId)).filter((layer): layer is MaskLayer => layer.type === "mask");
+    const maskLayers = projectMediaLayers(config.layers, videoTime, sequenceTime(footageClips, videoTime, effectClipId)).filter((layer): layer is MaskLayer => layer.type === "mask");
     const focusCursor = getCursorAt(ts), focusPoint = focusCursor ? screenToVideo(focusCursor.x, focusCursor.y, vw, vh) : null;
-    const maskFocus = resolveMaskCameraFocus(maskLayers, video.currentTime, config.crop ?? undefined, focusPoint ? { x: focusPoint.x / vw, y: focusPoint.y / vh } : null);
+    const maskFocus = resolveMaskCameraFocus(maskLayers, videoTime, config.crop ?? undefined, focusPoint ? { x: focusPoint.x / vw, y: focusPoint.y / vh } : null);
     const focusMix = maskFocus?.mix ?? 0;
     const zoomX = maskFocus ? zoom.x + (maskFocus.x - zoom.x) * focusMix : zoom.x;
     const zoomY = maskFocus ? zoom.y + (maskFocus.y - zoom.y) * focusMix : zoom.y;
@@ -362,7 +371,7 @@ export async function createExportCompositor(
     ctx.restore();
 
     if(activeClip?.gap) { camera?.pause(); drawGapLayers(ctx,config.layers,gapTime,!manualRender,layerVideoCache,{x:offsetX,y:offsetY,w:videoW,h:videoH},config.playbackRate||1);frameConsumer?.();if(!manualRender)rafId=requestAnimationFrame(drawFrame);return; }
-    const tiltPass=beginScreenTilt(ctx,config.screenTilt,video.currentTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
+    const tiltPass=beginScreenTilt(ctx,config.screenTilt,videoTime,{x:offsetX,y:offsetY,w:videoW,h:videoH});
     const screenCtx=tiltPass?.ctx??ctx;
     // Shadow
     if (config.shadow.enabled) {
@@ -401,7 +410,7 @@ export async function createExportCompositor(
         : null;
       screenCtx.save();
       screenCtx.imageSmoothingEnabled = true; screenCtx.imageSmoothingQuality = "high";
-      const colorSource=gradedSource(canvas,video,vw,vh,config,sequenceTime(footageClips,video.currentTime,effectClipId));
+      const colorSource=gradedSource(canvas,decodedFrame ?? video,vw,vh,config,sequenceTime(footageClips,videoTime,effectClipId));
       if (config.splitLayout) drawSplitFrame(screenCtx, colorSource, vw, vh, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.splitLayout);
       else drawVideoWithMotionBlur(
         screenCtx, colorSource,
@@ -493,7 +502,7 @@ export async function createExportCompositor(
 
     screenCtx.restore();
     finishScreenTilt(ctx,tiltPass);
-    transitions.draw(ctx,activeClip,video.currentTime,footageClips[footageClips.findIndex(clip=>clip.id===effectClipId)+1]);
+    transitions.draw(ctx,activeClip,videoTime,footageClips[footageClips.findIndex(clip=>clip.id===effectClipId)+1]);
 
     if (camera && cameraMedia) {
       const cameraTime = (ts - cameraMedia.startOffsetMs) / 1000;
@@ -503,7 +512,7 @@ export async function createExportCompositor(
         if (Math.abs(camera.currentTime - cameraTime) > 0.1 && !camera.seeking) camera.currentTime = cameraTime;
         if (video.paused) camera.pause();
         else if (camera.paused) void camera.play().catch(() => {});
-        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay, video.currentTime);
+        drawCameraBubble(ctx, camera, { x: offsetX, y: offsetY, w: videoW, h: videoH }, config.cameraOverlay, videoTime);
       } else if (!camera.paused) {
         camera.pause();
       }
@@ -511,7 +520,7 @@ export async function createExportCompositor(
 
     // Timed annotation and mask layers. Masks sample the fully composited
     // frame so their result matches Preview after pan/zoom and styling.
-    const videoTs = video.currentTime;
+    const videoTs = videoTime;
     const timedLayers = projectMediaLayers(config.layers,videoTs,sequenceTime(footageClips,videoTs,effectClipId));
     const cursor = getCursorAt(ts), point = cursor ? screenToVideo(cursor.x, cursor.y, vw, vh) : null;
     const activeLayers = timedLayers.filter((layer) => videoTs >= layer.start && videoTs < layer.end).map(layer => layer.type === "mask" ? maskPose(layer, videoTs, cover, vw, vh, point) : anchoredLayer(animatedLayer(layer, videoTs), cover, vw, vh));
@@ -590,9 +599,20 @@ export async function createExportCompositor(
       if (!clip) throw new Error("Export clip is missing");
       effectClipId = clipId;
       gapTime = sequence;
+      exportFrameTime = source;
       // FFmpeg timestamps are rounded to a timebase. Sample just inside the
       // requested frame rather than on its boundary (e.g. 43/60 vs .716667).
-      if (!clip.gap) await seekMediaFrame(video, Math.min(clip.end - .000001, source + .00005), signal);
+      if (!clip.gap) {
+        const time = Math.min(clip.end - .000001, source + .00005);
+        if (sourceDecoder) {
+          try { decodedFrame = await sourceDecoder.frameAt(time); }
+          catch (error) {
+            sourceDecoder.destroy(); sourceDecoder = null; decodedFrame = null;
+            if (signal?.aborted) throw error;
+          }
+        }
+        if (!sourceDecoder) await seekMediaFrame(video, time, signal);
+      }
       const timed = projectMediaLayers(sharedConfig.layers, source, sequence);
       await Promise.all(timed.filter((layer): layer is VideoLayer => layer.type === "video" && source >= layer.start && source < layer.end).map(layer =>
         seekOverlay(loadCachedVideo(layer.path, layerVideoCache, layer.id), (source - layer.start) * (layer.sourceSpeed ?? 1) + (layer.sourceOffset ?? 0), signal)));

@@ -21,6 +21,7 @@
 }
 
 .preview-proxy-status { position: absolute; bottom: 8px; left: 16px; z-index: 2; font-size: 10px; opacity: .65; pointer-events: none; }
+.preview-input-warning { position: absolute; bottom: 28px; left: 16px; right: 16px; z-index: 2; color: var(--text-secondary, #a1a1aa); font-size: 11px; pointer-events: none; }
 
 /* Keep the decoder inside the live compositor. WebView2 may cull an element
    that is display:none, fully transparent, or positioned outside the painted

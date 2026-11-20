@@ -19,7 +19,7 @@ import type { CaptionTrack, InputEvent, Keyframe, EditorConfig, Layer, MaskLayer
 import { generateKeyframes } from "../../../lib/autoZoom";
 import { getMovementDuration } from "../../../lib/types";
 import { getGradientPreset, getWallpaperPreset } from "../../../lib/wallpapers";
-import { loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared, hasClickNear } from "../../../lib/inputLog";
+import { INPUT_LOG_WARNING, loadInputLog, getCursorAt as getCursorAtShared, screenToVideo as screenToVideoShared, hasClickNear } from "../../../lib/inputLog";
 import { analyzeMobileVisualActivity } from "../../../lib/mobileAutoZoom";
 import { buildDisplayActions, drawActionOverlay, type DisplayAction } from "../../../lib/actionOverlay";
 import {
@@ -161,6 +161,7 @@ export default function Preview({
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
   const [loadError, setLoadError] = useState("");
+  const [inputWarning, setInputWarning] = useState("");
   const [videoReady, setVideoReady] = useState(false);
   const [playbackPath, setPlaybackPath] = useState(videoPath);
   const previewRepairAttemptedRef = useRef(false);
@@ -304,6 +305,7 @@ export default function Preview({
 
   useEffect(() => {
     setEventsReady(false);
+    setInputWarning("");
     kfGenerated.current = false;
     mouseMoveEvents.current = [];
     allEvents.current = [];
@@ -327,16 +329,16 @@ export default function Preview({
       clickEvents.current = [];
       regionRef.current = null;
       inputSourceRef.current = null;
-      setLoadError("");
       setEventsReady(true);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } =
-          applyCursorEdits(await loadInputLog(inputLogPath), config.cursorEdits);
+        const log = applyCursorEdits(await loadInputLog(inputLogPath), config.cursorEdits);
+        const { allEvents: aligned, mouseMoveEvents: moves, clickEvents: clicks, region, source } = log;
         if (cancelled) return;
+        setInputWarning(log.warning ?? "");
         allEvents.current = aligned;
         displayActions.current = buildDisplayActions(aligned);
         mouseMoveEvents.current = moves;
@@ -350,7 +352,11 @@ export default function Preview({
         setEventsReady(true);
       } catch (e) {
         if (cancelled) return;
-        setLoadError(`Failed to load log: ${userError(e)}`);
+        console.warn("[Snap] Optional cursor data could not be prepared:", e);
+        allEvents.current = []; displayActions.current = []; mouseMoveEvents.current = []; clickEvents.current = [];
+        regionRef.current = null; inputSourceRef.current = "imported";
+        setInputWarning(INPUT_LOG_WARNING);
+        setEventsReady(true);
       }
     })();
     return () => { cancelled = true; };
@@ -549,7 +555,7 @@ export default function Preview({
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || canvasSize.w === 0 || !readyToPaint) return;
-    if(gapTime===undefined&&(video.readyState<2||video.seeking||!eventsReady))return;
+    if(gapTime===undefined&&(video.readyState<2||video.seeking))return;
     const transitionClip=config.videoClips?.find(clip=>clip.id===activeClipId);
     if(transitionClip?.transition&&transitionPendingRef.current===activeClipId)return;
 
@@ -1469,6 +1475,7 @@ export default function Preview({
     >
       {!frameReady&&!loadError&&<span className="preview-loading" role="status">Loading recording…</span>}
       {proxyStatus && <small className="preview-proxy-status">{proxyStatus}</small>}
+      {inputWarning && <small className="preview-input-warning" role="status">{inputWarning}</small>}
       {loadError && <p className="preview-error">{loadError}</p>}
       {colorComparison?.enabled&&<button type="button" className="color-wipe-handle" aria-label="Drag color comparison divider" onPointerDown={e=>{e.preventDefault();e.stopPropagation();const move=(ev:PointerEvent)=>{const p=canvasToBacking(ev.clientX,ev.clientY),g=geomRef.current,view=sourceViewRef.current,vw=videoRef.current?.videoWidth??1;onColorComparisonChange?.({...colorComparison,split:Math.max(0,Math.min(1,(view.x+(p.x-g.offsetX)/Math.max(1,g.videoW)*view.w)/vw))});};const up=()=>{window.removeEventListener("pointermove",move);};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up,{once:true});}}>Original ↔ Graded</button>}
       <canvas

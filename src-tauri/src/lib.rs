@@ -1042,43 +1042,9 @@ async fn read_input_log(
     path: String,
 ) -> Result<Vec<serde_json::Value>, String> {
     access::require(&app, Path::new(&path))?;
-    tauri::async_runtime::spawn_blocking(move || read_input_log_blocking(path))
+    tauri::async_runtime::spawn_blocking(move || input_hook::log_reader::read(Path::new(&path)))
         .await
         .map_err(|error| format!("Input log worker failed: {error}"))?
-}
-
-fn read_input_log_blocking(path: String) -> Result<Vec<serde_json::Value>, String> {
-    use std::io::BufRead;
-    const MAX_BYTES: u64 = 512 * 1024 * 1024;
-    const MAX_EVENTS: usize = 5_000_000;
-    let file = match std::fs::File::open(&path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("Cannot read {path}: {error}")),
-    };
-    let metadata = file.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
-        return Err("Input log is not a regular file or exceeds 512 MiB".into());
-    }
-    let mut events = Vec::new();
-    let mut lines = std::io::BufReader::new(file).lines().peekable();
-    while let Some(line) = lines.next() {
-        let line = line.map_err(|error| format!("Cannot read input log: {error}"))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        // A recorder crash can leave only the final JSONL record incomplete.
-        // Corruption in the middle is still reported instead of hidden.
-        match serde_json::from_str(&line) {
-            Ok(value) => events.push(value),
-            Err(_) if lines.peek().is_none() => break,
-            Err(error) => return Err(format!("Input log contains invalid JSON: {error}")),
-        }
-        if events.len() > MAX_EVENTS {
-            return Err("Input log contains too many events".into());
-        }
-    }
-    Ok(events)
 }
 
 #[tauri::command]

@@ -507,6 +507,8 @@ pub fn discard_canvas_export(
 pub struct CanvasExportRequest {
     #[serde(rename = "tempWebmPath")]
     pub temp_webm_path: String,
+    #[serde(rename = "videoCopySafe", default)]
+    pub video_copy_safe: bool,
     /// Original recorded video — used only to locate the sidecar audio
     /// files (same directory convention as the legacy export path).
     #[serde(rename = "inputVideo")]
@@ -1341,7 +1343,22 @@ fn finalize_canvas_export_blocking(
             args.push("language=und".into());
         }
 
-        if settings.format == "webm" {
+        if request.video_copy_safe
+            && settings.format == "mp4"
+            && std::path::Path::new(&request.temp_webm_path)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("h264"))
+        {
+            // WebCodecs already encoded the composed frames at the chosen
+            // resolution, frame rate and quality. Remux AVC instead of paying
+            // for a second, lossy full-video libx264 pass.
+            args.extend_from_slice(&[
+                "-c:v".into(), "copy".into(),
+                "-avoid_negative_ts".into(), "make_zero".into(),
+                "-movflags".into(), "+faststart".into(),
+                "-shortest".into(),
+            ]);
+        } else if settings.format == "webm" {
             args.extend_from_slice(&[
                 "-c:v".into(),
                 "libvpx-vp9".into(),
@@ -1349,6 +1366,12 @@ fn finalize_canvas_export_blocking(
                 crf.into(),
                 "-b:v".into(),
                 "0".into(),
+                "-deadline".into(),
+                "good".into(),
+                "-cpu-used".into(),
+                "4".into(),
+                "-row-mt".into(),
+                "1".into(),
                 "-pix_fmt".into(),
                 "yuv420p".into(),
                 "-shortest".into(),
@@ -1358,7 +1381,7 @@ fn finalize_canvas_export_blocking(
                 "-c:v".into(),
                 "libx264".into(),
                 "-preset".into(),
-                "medium".into(),
+                "veryfast".into(),
                 "-crf".into(),
                 crf.into(),
                 "-pix_fmt".into(),

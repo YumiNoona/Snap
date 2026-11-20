@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { userError } from "./lib/userError";
+import { EDITOR_ONLY } from "./lib/edition";
 
 const rootEl = document.getElementById("root") as HTMLElement;
 
@@ -17,7 +18,7 @@ const rootEl = document.getElementById("root") as HTMLElement;
 // upstream bugs about this exact race). Calling it this early can throw.
 // The URL query param is available synchronously, immediately, with zero
 // dependency on Tauri's IPC bridge being ready — it can never race.
-const windowLabel = new URLSearchParams(window.location.search).get("window") ?? "main";
+const windowLabel = new URLSearchParams(window.location.search).get("window") ?? (EDITOR_ONLY ? "editor" : "main");
 document.body.classList.add(`window-${windowLabel}`);
 if(windowLabel==="editor")document.body.dataset.editorTheme=localStorage.getItem("snap.editorTheme.v1")==="light"?"light":"dark";
 

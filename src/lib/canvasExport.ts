@@ -39,6 +39,24 @@ async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> 
   } finally { clearTimeout(timer); }
 }
 
+/** Drain just the pending queue. flush() on every small batch stalls pipelining. */
+async function waitForEncoder(encoder: VideoEncoder, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
+  if (encoder.encodeQueueSize <= 8) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => { clearTimeout(timer); encoder.removeEventListener("dequeue", ready); signal?.removeEventListener("abort", aborted); };
+    const ready = () => {
+      if (encoder.state === "closed") { cleanup(); reject(new Error("The video encoder closed unexpectedly")); }
+      else if (encoder.encodeQueueSize <= 8) { cleanup(); resolve(); }
+    };
+    const aborted = () => { cleanup(); reject(new DOMException("Export cancelled", "AbortError")); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("The video encoder stopped responding")); }, 30_000);
+    encoder.addEventListener("dequeue", ready);
+    signal?.addEventListener("abort", aborted, { once: true });
+    ready();
+  });
+}
+
 /**
  * Decodes and composes each output timestamp before encoding it, so slow
  * rendering cannot skip source frames. WebCodecs (or JPEG staging) streams
@@ -127,7 +145,7 @@ export async function runCanvasExport(
       ? "avc1.640034"
       : "avc1.64002A";
     const candidates: EncoderChoice[] = [
-      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" }, hardwareAcceleration: "prefer-hardware", latencyMode: "quality" }, format: "annexb" },
+      { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" }, hardwareAcceleration: "prefer-hardware", latencyMode: "realtime" }, format: "annexb" },
       { config: { ...baseConfig, codec: h264Codec, avc: { format: "annexb" } }, format: "annexb" },
       { config: { ...baseConfig, codec: "avc1.42002A", avc: { format: "annexb" } }, format: "annexb" },
       { config: { ...baseConfig, codec: "vp8" }, format: "ivf", fourCc: "VP80" },
@@ -197,9 +215,13 @@ export async function runCanvasExport(
 
     let encoderError: Error | null = null;
     let encodedFrames = 0;
+    let videoCopySafe = exportMode.format === "annexb";
     if (exportMode.format !== "mjpeg") {
       encoder = new VideoEncoder({
         output: (chunk) => {
+          // Raw AVC has no container timestamps. Only copy it directly when
+          // decode order equals presentation order at the requested cadence.
+          if (Math.abs(chunk.timestamp - Math.round(encodedFrames * 1_000_000 / fps)) > 1) videoCopySafe = false;
           const payload = new Uint8Array(chunk.byteLength);
           chunk.copyTo(payload);
           if (exportMode.format === "ivf") {
@@ -249,7 +271,7 @@ export async function runCanvasExport(
         try { encoder!.encode(frame, { keyFrame: index % Math.max(1, fps * 2) === 0 }); }
         finally { frame.close(); }
       }
-      if (encoder && encoder.encodeQueueSize > 12) await withTimeout(encoder.flush(), "The video encoder stopped responding");
+      if (encoder && encoder.encodeQueueSize > 12) await waitForEncoder(encoder, signal);
       if (writeBudget.shouldPause) { flushPendingBytes(); await writeQueue; }
       if (writeBudget.bytes > 0 && performance.now() - lastWriteAdvance > 30_000) throw new Error("The export destination stopped responding");
       const progress = Math.floor((index + 1) / totalFrames * 96);
@@ -269,12 +291,13 @@ export async function runCanvasExport(
     await invoke("close_export_sink");
     sinkOpen = false;
 
-    onProgress({ phase: "finalizing", progress: 0.98, message: "Muxing audio & encoding final video…" });
+    onProgress({ phase: "finalizing", progress: 0.98, message: videoCopySafe && exportSettings.format === "mp4" ? "Saving video and mixing audio." : "Encoding final video and mixing audio." });
     throwIfAborted();
 
     const result = await invoke<string>("finalize_canvas_export", {
       request: {
         tempWebmPath,
+        videoCopySafe,
         inputVideo: videoPath,
         exportSettings,
         captionSrt: exportSettings.captions === "embedded" ? captionsToSrt(outputCaptions, 0, editedDuration, playbackRate) : null,

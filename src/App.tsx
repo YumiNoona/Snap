@@ -58,7 +58,7 @@ class ErrorBoundary extends React.Component<
               this.props.onReset();
             }}
           >
-            {EDITOR_ONLY ? "Back to media" : "Back to Recorder"}
+            {EDITOR_ONLY ? "Back to Editor" : "Back to Recorder"}
           </button>
         </div>
       );
@@ -83,7 +83,7 @@ function App() {
   // an error for. Reading the label from the URL is synchronous, available
   // immediately on first paint, and has zero dependency on Tauri's IPC state.
   const windowParams = new URLSearchParams(window.location.search);
-  const windowLabel = windowParams.get("window") ?? "main";
+  const windowLabel = windowParams.get("window") ?? (EDITOR_ONLY ? "editor" : "main");
   const isEditorPreview = import.meta.env.DEV && windowParams.get("preview") === "1";
   const editorPreviewVideo = windowParams.get("previewVideo") || "/__snap-editor-preview__.mp4";
   const isEditorWindow = windowLabel === "editor";
@@ -105,7 +105,7 @@ function App() {
     if(current)setClipWorkspace(workspace=>workspace?{original:workspace.original.projectPath===current.projectPath?{...workspace.original,position:current.position}:workspace.original,clips:workspace.clips.map(c=>c.projectPath===current.projectPath?{...c,position:current.position}:c)}:null);
     setEditorProjectPath(route.projectPath);setEditorVideo(route.videoPath);setEditorLog(route.inputLogPath);setEditorPosition(route.position??0);
   };
-  const [editorReady, setEditorReady] = useState(!isEditorWindow);
+  const [editorReady, setEditorReady] = useState(!isEditorWindow || isEditorPreview);
   const [editorSuspended, setEditorSuspended] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
 
@@ -149,7 +149,7 @@ function App() {
     window.addEventListener("snap-suspend-editor", suspend);
     const unlisten = listen("recording-resuming", () => setEditorSuspended(false));
     const idle = listen<string>("recording-starting", ({ payload }) => {
-      if (!editorVideo || editorSuspended) void emit("editor-suspended", { requestId: payload, ready: true });
+      if (editorSuspended) void emit("editor-suspended", { requestId: payload, ready: true });
     });
     return () => { window.removeEventListener("snap-suspend-editor", suspend); void unlisten.then((stop) => stop()); void idle.then((stop) => stop()); };
   }, [editorSuspended, editorVideo, isEditorWindow]);
@@ -173,7 +173,7 @@ function App() {
   // Tauri's IPC bridge is guaranteed to be ready. It's only unsafe to call
   // synchronously during the component's first render (see note above).
   const closeEditorWindow = useCallback(() => {
-    if (EDITOR_ONLY) { setEditorVideo(""); setEditorProjectPath(""); setClipWorkspace(null); setEditorPosition(0); }
+    if (EDITOR_ONLY) { setEditorVideo(""); setEditorLog(""); setEditorProjectPath(""); setClipWorkspace(null); setEditorPosition(0); }
     else getCurrentWindow().close();
   }, []);
 
@@ -263,13 +263,13 @@ function App() {
 
   if (isEditorWindow) {
     if (editorSuspended) return null;
-    if (editorVideo) {
+    if (editorReady) {
       return (
         <ErrorBoundary onReset={closeEditorWindow}>
           <Editor
             key={`${editorVideo}|${editorProjectPath}`}
             videoPath={editorVideo}
-            inputLogPath={editorLog || recordingDataPaths(editorVideo).logPath}
+            inputLogPath={editorLog || (editorVideo ? recordingDataPaths(editorVideo).logPath : "")}
             initialProjectPath={editorProjectPath}
             initialPosition={editorPosition}
             clipWorkspace={clipWorkspace}
@@ -294,33 +294,7 @@ function App() {
         </div>
       );
     }
-    if (EDITOR_ONLY) return <ErrorBoundary onReset={closeEditorWindow}><LibraryWindow onOpen={openInEditorWindow} /></ErrorBoundary>;
-    return (
-      <div className="app-layout" style={{ alignItems: "center", justifyContent: "center", gap: "16px" }}>
-        <span className="launcher-status-text" style={{ fontSize: "16px", color: "var(--text-secondary)" }}>
-          No recording active. Record something or select a file to edit.
-        </span>
-        <button
-          className="open-last-btn"
-          onClick={async () => {
-            try {
-              const mp4s = await invoke<Array<{ name: string; path: string; is_dir: boolean }>>("list_recordings");
-              if (mp4s.length > 0) {
-                const latest = mp4s[0];
-                const jsonPath = await invoke<string>("resolve_recording_log_path", { videoPath: latest.path }).catch(() => recordingDataPaths(latest.path).logPath);
-                setEditorVideo(latest.path);
-                setEditorLog(jsonPath);
-                setEditorProjectPath("");
-              }
-            } catch (e) {
-              console.error("Failed to find recordings:", e);
-            }
-          }}
-        >
-          Load Latest Recording
-        </button>
-      </div>
-    );
+    return null;
   }
 
   return (

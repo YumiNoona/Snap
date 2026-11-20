@@ -9,7 +9,7 @@ vi.mock("./exportCompositor", () => ({ createExportCompositor: mocks.compositor 
 const cleanups=new Set<()=>void>();
 afterEach(() => {for(const cleanup of cleanups)cleanup();cleanups.clear();vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
-async function exerciseExport(rate: number, cancelAtCut = false, supplied?: VideoClip[], opticalFlow = false) {
+async function exerciseExport(rate: number, cancelAtCut = false, supplied?: VideoClip[], opticalFlow = false, backpressure = false, reordered = false) {
   const controller = new AbortController();
   const clips = supplied ?? [{ id: "a", start: 0, end: 1 }, { id: "b", start: 3, end: 4 }];
   const length=clips.reduce((sum,clip)=>sum+clipDuration(clip),0);
@@ -44,16 +44,22 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
     constructor(source: typeof canvas, options: { timestamp: number }) { this.source = source.sourceTime;this.clipId=source.clipId;this.gap=source.gap;this.timestamp = options.timestamp; }
     close() {}
   });
-  vi.stubGlobal("VideoEncoder", class {
+  let flushCount = 0, peakQueue = 0;
+  vi.stubGlobal("VideoEncoder", class extends EventTarget {
     static async isConfigSupported() { return { supported: true }; }
     encodeQueueSize = 0; state = "configured";
-    constructor(private callbacks: { output: (chunk: unknown) => void }) {}
+    constructor(private callbacks: { output: (chunk: unknown) => void }) { super(); }
     configure() {}
     encode(frame: { source: number; timestamp: number;clipId:string;gap:boolean }) {
+      if (backpressure) {
+        this.encodeQueueSize++;
+        peakQueue = Math.max(peakQueue, this.encodeQueueSize);
+        if (this.encodeQueueSize === 1) setTimeout(() => { this.encodeQueueSize = 0; this.dispatchEvent(new Event("dequeue")); }, 0);
+      }
       frames.push({ ...frame });
-      this.callbacks.output({ byteLength: 1, timestamp: frame.timestamp, copyTo: (bytes: Uint8Array) => { bytes[0] = 1; } });
+      this.callbacks.output({ byteLength: 1, timestamp: reordered && frames.length === 2 ? 0 : frame.timestamp, copyTo: (bytes: Uint8Array) => { bytes[0] = 1; } });
     }
-    async flush() {} close() { this.state = "closed"; }
+    async flush() { flushCount++; } close() { this.state = "closed"; }
   });
   const settings = { format: "mp4", fps: 30, width: 640, height: 360, quality: "medium", outputPath: "done.mp4", captions: "none", motionInterpolation: opticalFlow ? "optical-flow" : "none" } as ExportSettings;
   const config = { ...DEFAULT_EDITOR_CONFIG, videoClips: clips, playbackRate: rate, cursorStyle: { ...DEFAULT_EDITOR_CONFIG.cursorStyle, clickSound: true } };
@@ -71,11 +77,13 @@ async function exerciseExport(rate: number, cancelAtCut = false, supplied?: Vide
   expect(frames.some(f => f.source >= 3)).toBe(true);
   expect(frames.map(f => f.timestamp)).toEqual(frames.map((_, index) => Math.round(index * 1_000_000 / 30)));
   const request = mocks.invoke.mock.calls.find(call => call[0] === "finalize_canvas_export")![1].request;
+  expect(request.videoCopySafe).toBe(!reordered);
   expect(request.sourceSegments).toEqual(clips.map(clip => ({start:clip.start,end:clip.end,speed:clipSpeed(clip),gap:!!clip.gap})));
   expect(request.exportDurationSeconds).toBe(length / rate);
   expect(request.clickTimesMs).toEqual(clips.filter(clip=>!clip.gap).flatMap(clip=>[500,2000,3500].filter(time=>time>=clip.start*1000&&time<clip.end*1000).map(time=>(sequenceTime(clips,clip.start,clip.id)*1000+(time-clip.start*1000)/clipSpeed(clip))/rate)));
   frames.forEach((frame,index)=>{const position=sequenceClip(clips,Math.min(length-1e-6,index/30*rate));if(!position)return;expect(frame.clipId).toBe(position.clip.id);if(!position.clip.gap){expect(frame.source).toBeCloseTo(position.source, 6);expect(frame.source).toBeGreaterThanOrEqual(position.clip.start);expect(frame.source).toBeLessThan(position.clip.end);}});
   expect(destroy).toHaveBeenCalledOnce();
+  if (backpressure) { expect(flushCount).toBe(1); expect(peakQueue).toBeLessThanOrEqual(13); }
   expect(setClip.mock.calls.map(call=>call[0])).toEqual(clips.map(clip=>clip.id));
   expect(mocks.compositor.mock.calls[0][9]).toBe(false);
   if (opticalFlow) {
@@ -93,3 +101,5 @@ it("exports reordered and duplicated source ranges in the chosen order", async()
 it("exports clip speed changes and leading/internal/trailing gaps with continuous frame timestamps",async()=>{await exerciseExport(1,false,[{id:"lead",start:0,end:.1,gap:true},{id:"a",start:0,end:1,speed:2},{id:"space",start:0,end:.2,gap:true},{id:"b",start:3,end:4,speed:.5},{id:"tail",start:0,end:.1,gap:true}]);},15000);
 it("prepares motion once, composes source frames and keeps original audio media", async () => { await exerciseExport(.5, false, undefined, true); }, 15000);
 it("cleans optical flow media after cancellation at a cut", async () => { await exerciseExport(1, true, undefined, true); expect(mocks.invoke.mock.calls.some(call => call[0] === "discard_export_motion")).toBe(true); }, 15000);
+it("bounds the encoder queue without repeatedly flushing the video pipeline", async () => { await exerciseExport(1, false, undefined, false, true); });
+it("retimes staging video instead of copying raw AVC if the encoder reorders presentation timestamps", async () => { await exerciseExport(1, false, undefined, false, false, true); });

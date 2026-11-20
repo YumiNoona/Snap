@@ -46,6 +46,7 @@ import type { MediaDragDetail } from "../../lib/mediaDrag";
 import { mediaDropPosition } from "../../lib/mediaDrop";
 import ClipWorkspaceBar from "./ClipWorkspaceBar";
 import type {ClipWorkspace,EditorRoute} from "../../lib/clipWorkspace";
+import EmptyEditor from "./EmptyEditor";
 
 interface Props {
   videoPath: string;
@@ -74,7 +75,11 @@ function loadCursorHotspots(): Record<string, { x: number; y: number }> {
   }
 }
 
-export default function Editor({ videoPath, inputLogPath, initialProjectPath = "", initialPosition=0,clipWorkspace,onNavigateTimeline,onOpenClip,onOpenProject, onClose }: Props) {
+export default function Editor(props: Props) {
+  return props.videoPath ? <LoadedEditor {...props} /> : <EmptyEditor onOpenProject={props.onOpenProject} />;
+}
+
+function LoadedEditor({ videoPath, inputLogPath, initialProjectPath = "", initialPosition=0,clipWorkspace,onNavigateTimeline,onOpenClip,onOpenProject, onClose }: Props) {
   const isBrowserPreview =
     import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
   const [rootConfig, setRootConfig] = useState<EditorConfig>(() => ({
@@ -135,7 +140,7 @@ export default function Editor({ videoPath, inputLogPath, initialProjectPath = "
   const [showFileMenu, setShowFileMenu] = useState(false);
   const [showProjectHealth, setShowProjectHealth] = useState(false);
   const [inputHealth,setInputHealth]=useState<{state:"loading"|"loaded"|"missing"|"error";count:number}>({state:"loading",count:0});
-  useEffect(()=>{let cancelled=false;setInputHealth({state:"loading",count:0});void loadInputLog(inputLogPath).then(log=>{if(!cancelled)setInputHealth({state:log.allEvents.length?"loaded":"missing",count:log.allEvents.length});}).catch(()=>{if(!cancelled)setInputHealth({state:"error",count:0});});return()=>{cancelled=true;};},[inputLogPath]);
+  useEffect(()=>{let cancelled=false;setInputHealth({state:"loading",count:0});void loadInputLog(inputLogPath).then(log=>{if(!cancelled)setInputHealth({state:log.warning?"error":log.allEvents.length?"loaded":"missing",count:log.allEvents.length});}).catch(()=>{if(!cancelled)setInputHealth({state:"error",count:0});});return()=>{cancelled=true;};},[inputLogPath]);
   const [showFinishing, setShowFinishing] = useState(false);
   const [voiceBypass, setVoiceBypass] = useState(false);
   const healthRef = useModalFocus(showProjectHealth);

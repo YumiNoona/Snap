@@ -8,6 +8,7 @@ export interface LoadedInputLog {
   region: { x: number; y: number; w: number; h: number } | null;
   source: string | null;
   platform: string | null;
+  warning?: string;
 }
 
 type RawInputEvent = InputEvent & {
@@ -29,6 +30,11 @@ type RawInputEvent = InputEvent & {
  * exact same cursor data the exact same way.
  */
 const logCache = new Map<string, Promise<LoadedInputLog>>();
+export const INPUT_LOG_WARNING = "Cursor data is unavailable. You can still edit and export this video.";
+const emptyInputLog = (warning?: string): LoadedInputLog => ({
+  allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null,
+  ...(warning ? { warning } : {}),
+});
 
 export function clearInputLogCache(): void { logCache.clear(); }
 
@@ -40,19 +46,31 @@ export function loadInputLog(inputLogPath: string): Promise<LoadedInputLog> {
   if (logCache.size >= 2) logCache.delete(logCache.keys().next().value!);
   const promise = readInputLog(inputLogPath).catch((error) => {
     if (logCache.get(inputLogPath) === promise) logCache.delete(inputLogPath);
-    throw error;
+    console.warn("[Snap] Optional cursor data could not be loaded:", error);
+    return emptyInputLog(INPUT_LOG_WARNING);
   });
   logCache.set(inputLogPath, promise);
   return promise;
 }
 
 async function readInputLog(inputLogPath: string): Promise<LoadedInputLog> {
-  if (!inputLogPath) return { allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null };
-  const raw = await invoke<RawInputEvent[]>("read_input_log", { path: inputLogPath });
+  if (!inputLogPath) return emptyInputLog();
+  const response = await invoke<unknown>("read_input_log", { path: inputLogPath });
+  if (!Array.isArray(response)) throw new Error("Cursor data response is not an event array");
+  const values: unknown[] = response.flatMap(value => Array.isArray(value) ? value : [value]);
+  const raw = values.filter((value): value is RawInputEvent => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const event = value as RawInputEvent;
+    return typeof event.type === "string" && !!event.type &&
+      (event.type === "meta" || Number.isFinite(event.ts)) &&
+      (event.x == null || Number.isFinite(event.x)) && (event.y == null || Number.isFinite(event.y)) &&
+      (event.key == null || typeof event.key === "string") && (event.button == null || typeof event.button === "string");
+  });
+  const warning = raw.length < values.length ? INPUT_LOG_WARNING : undefined;
   if (raw.length === 0) {
     // Imported videos do not have Snap's input-event sidecar. The editor is
     // still fully usable for manual zooms, captions, styling, audio and export.
-    return { allEvents: [], mouseMoveEvents: [], clickEvents: [], region: null, source: "imported", platform: null };
+    return emptyInputLog(warning);
   }
   let captureStartMs = 0;
   let captureElapsedMs = 0;
@@ -95,7 +113,7 @@ async function readInputLog(inputLogPath: string): Promise<LoadedInputLog> {
     .filter((e) => e.type === "mousedown" && e.x != null && e.y != null)
     .sort((a, b) => a.ts - b.ts);
 
-  return { allEvents: aligned, mouseMoveEvents, clickEvents, region, source, platform };
+  return { allEvents: aligned, mouseMoveEvents, clickEvents, region, source, platform, ...(warning ? { warning } : {}) };
 }
 
 /** Binary-search interpolated cursor position (screen space) at a given video timestamp (ms). */

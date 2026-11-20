@@ -1,13 +1,14 @@
 {
   "name": "snap",
   "private": true,
-  "version": "9.8.0",
+  "version": "9.8.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs full",
     "build:recorder": "node scripts/build-frontend.mjs recorder",
     "build:editor": "node scripts/build-frontend.mjs editor",
+    "build:editions": "powershell -NoProfile -File scripts/Build-Snap-Editions.ps1",
     "test": "vitest run",
     "test:watch": "vitest",
     "check:source": "node scripts/check-source-graph.mjs",
