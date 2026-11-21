@@ -11,7 +11,9 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close: vi.
 
 it("selects a preview card directly without search or a confirmation footer", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.mocked(invoke).mockResolvedValue([{ id: "1", name: "Apex Legends", target_type: "window" }, { id: "2", name: "Browser", target_type: "window" }]);
+  vi.mocked(invoke).mockImplementation(async (command) => command === "enumerate_targets"
+    ? [{ id: "1", name: "Apex Legends", target_type: "window" }, { id: "2", name: "Browser", target_type: "window" }]
+    : null);
   vi.mocked(emitTo).mockResolvedValue();
   const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
   let renderer!: ReturnType<typeof create>;
